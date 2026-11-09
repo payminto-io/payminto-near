@@ -1,0 +1,19 @@
+<template>
+
+  <style>
+    #root { position: absolute; inset: 0; background: #0c121b; color: #e6eaf0; font-family: "Inter", sans-serif; overflow: hidden; }
+    #t12-glow { position: absolute; left: -300px; top: -300px; width: 1400px; height: 1400px; border-radius: 50%; background: radial-gradient(circle, rgba(142,162,245,0.20) 0%, rgba(142,162,245,0) 62%); }
+    #t12-kicker { font-size: 30px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea2f5; }
+    #t12-title { margin-top: 22px; font-size: 84px; line-height: 1.06; font-weight: 900; letter-spacing: -0.03em; max-width: 1560px; }
+    #t12-snap { position: absolute; inset: 0; background: #2443b8; }
+    #t12-ph { position: absolute; left: 96px; top: 54px; width: 1728px; height: 852px; border: 3px dashed #2a3648; border-radius: 28px; padding: 70px 100px; font-size: 48px; font-weight: 800; }
+  </style>
+  <div id="root" data-composition-id="t12" data-width="1920" data-height="1080">
+    <div id="t12-glow"></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#t12-glow", { x: 0, y: 0 }, { x: 420, y: 160, duration: 6.1, ease: "none" }, 0);
+    window.__timelines["t12"] = tl;
+  </script>
+</template>

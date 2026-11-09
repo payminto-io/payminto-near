@@ -1,0 +1,23 @@
+{
+  "name": "@payminto/models",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The neutral model layer: one ModelClient over Anthropic, OpenAI, Google Gemini, any OpenAI-compatible endpoint and Replicate",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mock-provider": "./test/mock-provider.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

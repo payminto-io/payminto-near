@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#15803d"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="640" rx="24" fill="#ffffff"/>
+  <text x="48" y="64" font-size="30" font-weight="700" fill="#0f172a">Get paid by people and AI agents, on HashKey Chain</text>
+  <text x="48" y="98" font-size="17" fill="#475569">Self-hosted and non-custodial: money moves wallet to wallet, Payminto never holds it.</text>
+
+  <!-- Payers -->
+  <rect x="48" y="150" width="260" height="140" rx="16" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="72" y="190" font-size="20" font-weight="700" fill="#1e3a8a">A customer</text>
+  <text x="72" y="220" font-size="15" fill="#334155">Opens a payment link and</text>
+  <text x="72" y="242" font-size="15" fill="#334155">signs once in their wallet.</text>
+  <text x="72" y="270" font-size="14" fill="#64748b">No gas for the payer</text>
+
+  <rect x="48" y="330" width="260" height="160" rx="16" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="2"/>
+  <text x="72" y="370" font-size="20" font-weight="700" fill="#4c1d95">An AI agent</text>
+  <text x="72" y="400" font-size="15" fill="#334155">Pays per call (x402) inside a</text>
+  <text x="72" y="422" font-size="15" fill="#334155">budget its owner signed:</text>
+  <text x="72" y="444" font-size="15" fill="#334155">cap, allowed payees, expiry.</text>
+  <text x="72" y="472" font-size="14" fill="#64748b">Refuses prompt-injected payees</text>
+
+  <!-- Node -->
+  <rect x="440" y="150" width="320" height="340" rx="18" fill="#f8fafc" stroke="#334155" stroke-width="2"/>
+  <text x="600" y="192" font-size="22" font-weight="700" fill="#0f172a" text-anchor="middle">Payminto server</text>
+  <text x="600" y="216" font-size="14" fill="#64748b" text-anchor="middle">run by the business, on its own machine</text>
+  <g font-size="15" fill="#334155">
+    <rect x="466" y="236" width="268" height="40" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="484" y="262">Checkout, links, refunds</text>
+    <rect x="466" y="286" width="268" height="40" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="484" y="312">Budgets and per-call vouchers</text>
+    <rect x="466" y="336" width="268" height="40" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="484" y="362">Netting: many calls, few transfers</text>
+    <rect x="466" y="386" width="268" height="40" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="484" y="412">AI agents on its own model key</text>
+    <rect x="466" y="436" width="268" height="40" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="484" y="462">Reconciliation report</text>
+  </g>
+
+  <!-- Business -->
+  <rect x="892" y="150" width="260" height="140" rx="16" fill="#f0fdf4" stroke="#86efac" stroke-width="2"/>
+  <text x="916" y="190" font-size="20" font-weight="700" fill="#14532d">The business</text>
+  <text x="916" y="220" font-size="15" fill="#334155">USDC lands in its own wallet,</text>
+  <text x="916" y="242" font-size="15" fill="#334155">platform fee split off in the</text>
+  <text x="916" y="264" font-size="15" fill="#334155">same transaction.</text>
+
+  <rect x="892" y="330" width="260" height="160" rx="16" fill="#fefce8" stroke="#fde047" stroke-width="2"/>
+  <text x="916" y="370" font-size="20" font-weight="700" fill="#713f12">Proof for finance</text>
+  <text x="916" y="400" font-size="15" fill="#334155">Every agent call has a receipt</text>
+  <text x="916" y="422" font-size="15" fill="#334155">provable on chain (Merkle</text>
+  <text x="916" y="444" font-size="15" fill="#334155">proof), and HSP settlement</text>
+  <text x="916" y="466" font-size="15" fill="#334155">status per transfer.</text>
+
+  <!-- Arrows payers to node -->
+  <line x1="308" y1="220" x2="436" y2="256" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="308" y1="410" x2="436" y2="306" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="318" y="210" font-size="13" fill="#475569">signed payment</text>
+  <text x="318" y="436" font-size="13" fill="#475569">signed vouchers</text>
+
+  <!-- Arrows node to business -->
+  <line x1="760" y1="250" x2="888" y2="222" stroke="#15803d" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+  <line x1="760" y1="400" x2="888" y2="410" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="770" y="226" font-size="13" fill="#15803d">net USDC</text>
+  <text x="770" y="390" font-size="13" fill="#475569">receipts</text>
+
+  <!-- Chain bar -->
+  <rect x="48" y="530" width="1104" height="70" rx="16" fill="#0f172a"/>
+  <text x="76" y="563" font-size="18" font-weight="700" fill="#ffffff">HashKey Chain</text>
+  <text x="76" y="586" font-size="14" fill="#cbd5e1">ClearingHub, DepositFactory and PaymentRouter: no owner, no admin key, hold zero funds</text>
+  <text x="1124" y="563" font-size="15" fill="#e2e8f0" text-anchor="end">One settlement batch nets</text>
+  <text x="1124" y="586" font-size="15" fill="#e2e8f0" text-anchor="end">60 calls into 3 transfers</text>
+  <line x1="600" y1="490" x2="600" y2="526" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+</svg>

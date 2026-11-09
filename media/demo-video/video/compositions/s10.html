@@ -1,0 +1,53 @@
+<template>
+
+  <style>
+    #root { position: absolute; inset: 0; background: #0c121b; color: #e6eaf0; font-family: "Inter", sans-serif; overflow: hidden; }
+    #s10-glow { position: absolute; left: -300px; top: -300px; width: 1400px; height: 1400px; border-radius: 50%; background: radial-gradient(circle, rgba(142,162,245,0.20) 0%, rgba(142,162,245,0) 62%); }
+    #s10-wrap { position: absolute; left: 160px; top: 140px; width: 1600px; }
+    #s10-kicker { font-size: 30px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea2f5; }
+    #s10-title { margin-top: 22px; font-size: 80px; line-height: 1.06; font-weight: 900; letter-spacing: -0.03em; max-width: 1500px; }
+    .s10-items { margin-top: 40px; display: flex; flex-direction: column; gap: 16px; }
+    .s10-item { font-size: 38px; line-height: 1.25; color: #c9d1dd; display: flex; gap: 22px; align-items: baseline; }
+    .s10-dot { flex: 0 0 14px; height: 14px; border-radius: 3px; background: #8ea2f5; }
+    .s10-stats { margin-top: 44px; display: flex; gap: 40px; }
+    .s10-stat { flex: 1 1 0; background: #121a26; border: 1px solid #222d3d; border-radius: 18px; padding: 28px 36px; }
+    .s10-stat b { display: block; font-size: 72px; font-weight: 900; letter-spacing: -0.02em; color: #ffffff; }
+    .s10-stat span { display: block; margin-top: 8px; font-size: 28px; color: #95a0b2; }
+    #s10-source { position: absolute; left: 160px; top: 820px; font-size: 28px; color: #8a93a3; }
+    #s10-act { position: absolute; left: 160px; top: 64px; font-size: 28px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #95a0b2; }
+    #s10-snap { position: absolute; inset: 0; background: #2443b8; }
+    .ph { color: #f2b45a; background: rgba(242,180,90,0.12); border: 1px dashed #f2b45a; border-radius: 8px; padding: 0 10px; font-family: "JetBrains Mono", monospace; font-size: 0.8em; }
+    .ph-big .ph, #s10-where .ph, #s10-foot .ph { font-size: 1em; }
+  </style>
+  <style>
+    #s10-slot { position: absolute; left: 96px; top: 54px; width: 1728px; height: 852px; border: 3px dashed #2a3648; border-radius: 28px; background: rgba(18,26,38,0.85); padding: 70px 100px; }
+    #s10-tag { font-size: 28px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #f2b45a; }
+    #s10-sid { margin-top: 20px; font-size: 112px; font-weight: 900; color: #8ea2f5; letter-spacing: -0.03em; }
+    #s10-stitle { margin-top: 6px; font-size: 58px; font-weight: 700; line-height: 1.1; max-width: 1500px; }
+    #s10-file { margin-top: 36px; font-family: "JetBrains Mono", monospace; font-size: 32px; color: #e6eaf0; }
+    #s10-where { margin-top: 14px; font-family: "JetBrains Mono", monospace; font-size: 28px; color: #95a0b2; max-width: 1500px; line-height: 1.4; }
+    #s10-len { margin-top: 14px; font-size: 28px; color: #8a93a3; }
+    #s10-bar { position: absolute; left: 100px; right: 100px; bottom: 60px; height: 8px; border-radius: 4px; background: #222d3d; overflow: hidden; }
+    #s10-fill { width: 100%; height: 100%; background: #8ea2f5; transform-origin: left center; }
+    #s10-chip { position: absolute; right: 150px; top: 170px; padding: 14px 28px; border-radius: 999px; background: #2443b8; color: #ffffff; font-size: 34px; font-weight: 800; }
+  </style>
+  <div id="root" data-composition-id="s10" data-width="1920" data-height="1080">
+    <div id="s10-glow"></div>
+    <div id="s10-slot">
+      <div id="s10-tag">Screen recording slot</div>
+      <div id="s10-sid">S10</div>
+      <div id="s10-stitle">Their own model key</div>
+      <div id="s10-file">clips/S10-ai-connection.mp4</div>
+      <div id="s10-where">localhost:3000/settings/ai: Replicate, deepseek-ai/deepseek-v3.1, own token</div>
+      <div id="s10-len">9.5 s in the cut; record 14 s with handles</div>
+      <div id="s10-bar"><div id="s10-fill"></div></div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#s10-glow", { x: 0, y: 0 }, { x: 420, y: 160, duration: 9.5, ease: "none" }, 0);
+    tl.fromTo("#s10-slot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.1);
+    tl.fromTo("#s10-fill", { scaleX: 0 }, { scaleX: 1, duration: 9.30, ease: "none" }, 0.1);
+    window.__timelines["s10"] = tl;
+  </script>
+</template>

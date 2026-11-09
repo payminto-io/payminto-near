@@ -1,0 +1,24 @@
+# Keep the build context small and free of local state and secrets.
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/data
+**/backups
+**/*.db
+**/*.db-*
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+research
+docs
+contracts/out
+contracts/cache
+contracts/broadcast
+# Local anvil deployments are produced inside the stack, never baked into an image.
+contracts/deployments/31337.json
+**/tsconfig.tsbuildinfo
+**/.DS_Store
+.claude

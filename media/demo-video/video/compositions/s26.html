@@ -1,0 +1,57 @@
+<template>
+
+  <style>
+    #root { position: absolute; inset: 0; background: #0c121b; color: #e6eaf0; font-family: "Inter", sans-serif; overflow: hidden; }
+    #s26-glow { position: absolute; left: -300px; top: -300px; width: 1400px; height: 1400px; border-radius: 50%; background: radial-gradient(circle, rgba(142,162,245,0.20) 0%, rgba(142,162,245,0) 62%); }
+    #s26-wrap { position: absolute; left: 160px; top: 140px; width: 1600px; }
+    #s26-kicker { font-size: 30px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea2f5; }
+    #s26-title { margin-top: 22px; font-size: 80px; line-height: 1.06; font-weight: 900; letter-spacing: -0.03em; max-width: 1500px; }
+    .s26-items { margin-top: 40px; display: flex; flex-direction: column; gap: 16px; }
+    .s26-item { font-size: 38px; line-height: 1.25; color: #c9d1dd; display: flex; gap: 22px; align-items: baseline; }
+    .s26-dot { flex: 0 0 14px; height: 14px; border-radius: 3px; background: #8ea2f5; }
+    .s26-stats { margin-top: 44px; display: flex; gap: 40px; }
+    .s26-stat { flex: 1 1 0; background: #121a26; border: 1px solid #222d3d; border-radius: 18px; padding: 28px 36px; }
+    .s26-stat b { display: block; font-size: 72px; font-weight: 900; letter-spacing: -0.02em; color: #ffffff; }
+    .s26-stat span { display: block; margin-top: 8px; font-size: 28px; color: #95a0b2; }
+    #s26-source { position: absolute; left: 160px; top: 820px; font-size: 28px; color: #8a93a3; }
+    #s26-act { position: absolute; left: 160px; top: 64px; font-size: 28px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #95a0b2; }
+    #s26-snap { position: absolute; inset: 0; background: #2443b8; }
+    .ph { color: #f2b45a; background: rgba(242,180,90,0.12); border: 1px dashed #f2b45a; border-radius: 8px; padding: 0 10px; font-family: "JetBrains Mono", monospace; font-size: 0.8em; }
+    .ph-big .ph, #s26-where .ph, #s26-foot .ph { font-size: 1em; }
+  </style>
+  <style>
+    #s26-slot { position: absolute; left: 96px; top: 54px; width: 1728px; height: 852px; border: 3px dashed #2a3648; border-radius: 28px; background: rgba(18,26,38,0.85); padding: 70px 100px; }
+    #s26-tag { font-size: 28px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #f2b45a; }
+    #s26-sid { margin-top: 20px; font-size: 112px; font-weight: 900; color: #8ea2f5; letter-spacing: -0.03em; }
+    #s26-stitle { margin-top: 6px; font-size: 58px; font-weight: 700; line-height: 1.1; max-width: 1500px; }
+    #s26-file { margin-top: 36px; font-family: "JetBrains Mono", monospace; font-size: 32px; color: #e6eaf0; }
+    #s26-where { margin-top: 14px; font-family: "JetBrains Mono", monospace; font-size: 28px; color: #95a0b2; max-width: 1500px; line-height: 1.4; }
+    #s26-len { margin-top: 14px; font-size: 28px; color: #8a93a3; }
+    #s26-bar { position: absolute; left: 100px; right: 100px; bottom: 60px; height: 8px; border-radius: 4px; background: #222d3d; overflow: hidden; }
+    #s26-fill { width: 100%; height: 100%; background: #8ea2f5; transform-origin: left center; }
+    #s26-chip { position: absolute; right: 150px; top: 170px; padding: 14px 28px; border-radius: 999px; background: #2443b8; color: #ffffff; font-size: 34px; font-weight: 800; }
+  </style>
+  <div id="root" data-composition-id="s26" data-width="1920" data-height="1080">
+    <div id="s26-glow"></div>
+    <div id="s26-slot">
+      <div id="s26-tag">Screen recording slot</div>
+      <div id="s26-sid">S26</div>
+      <div id="s26-stitle">On chain</div>
+      <div id="s26-file">clips/S26-explorer-tour.mp4</div>
+      <div id="s26-where">recorded: record/out/S26-explorer-tour.mp4</div>
+      <div id="s26-len">16.3 s in the cut; record 21 s with handles</div>
+      <div id="s26-bar"><div id="s26-fill"></div></div>
+    </div>
+    <div id="s26-act">7 HashKey on-chain proof</div>
+    <div id="s26-snap"></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#s26-glow", { x: 0, y: 0 }, { x: 420, y: 160, duration: 16.3, ease: "none" }, 0);
+    tl.fromTo("#s26-slot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.1);
+    tl.fromTo("#s26-fill", { scaleX: 0 }, { scaleX: 1, duration: 16.10, ease: "none" }, 0.1);
+    tl.fromTo("#s26-snap", { x: 0 }, { x: -1920, duration: 0.35, ease: "power4.in" }, 0);
+    tl.fromTo("#s26-act", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.3);
+    window.__timelines["s26"] = tl;
+  </script>
+</template>

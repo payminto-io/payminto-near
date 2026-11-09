@@ -1,0 +1,20 @@
+[
+  {
+    "text": "This",
+    "start": 0.17,
+    "end": 0.57,
+    "id": "w0"
+  },
+  {
+    "text": "is",
+    "start": 0.57,
+    "end": 0.85,
+    "id": "w1"
+  },
+  {
+    "text": "Paymento.",
+    "start": 0.85,
+    "end": 2,
+    "id": "w2"
+  }
+]

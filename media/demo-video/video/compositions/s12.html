@@ -1,0 +1,55 @@
+<template>
+
+  <style>
+    #root { position: absolute; inset: 0; background: #0c121b; color: #e6eaf0; font-family: "Inter", sans-serif; overflow: hidden; }
+    #s12-glow { position: absolute; left: -300px; top: -300px; width: 1400px; height: 1400px; border-radius: 50%; background: radial-gradient(circle, rgba(142,162,245,0.20) 0%, rgba(142,162,245,0) 62%); }
+    #s12-wrap { position: absolute; left: 160px; top: 140px; width: 1600px; }
+    #s12-kicker { font-size: 30px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea2f5; }
+    #s12-title { margin-top: 22px; font-size: 80px; line-height: 1.06; font-weight: 900; letter-spacing: -0.03em; max-width: 1500px; }
+    .s12-items { margin-top: 40px; display: flex; flex-direction: column; gap: 16px; }
+    .s12-item { font-size: 38px; line-height: 1.25; color: #c9d1dd; display: flex; gap: 22px; align-items: baseline; }
+    .s12-dot { flex: 0 0 14px; height: 14px; border-radius: 3px; background: #8ea2f5; }
+    .s12-stats { margin-top: 44px; display: flex; gap: 40px; }
+    .s12-stat { flex: 1 1 0; background: #121a26; border: 1px solid #222d3d; border-radius: 18px; padding: 28px 36px; }
+    .s12-stat b { display: block; font-size: 72px; font-weight: 900; letter-spacing: -0.02em; color: #ffffff; }
+    .s12-stat span { display: block; margin-top: 8px; font-size: 28px; color: #95a0b2; }
+    #s12-source { position: absolute; left: 160px; top: 820px; font-size: 28px; color: #8a93a3; }
+    #s12-act { position: absolute; left: 160px; top: 64px; font-size: 28px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #95a0b2; }
+    #s12-snap { position: absolute; inset: 0; background: #2443b8; }
+    .ph { color: #f2b45a; background: rgba(242,180,90,0.12); border: 1px dashed #f2b45a; border-radius: 8px; padding: 0 10px; font-family: "JetBrains Mono", monospace; font-size: 0.8em; }
+    .ph-big .ph, #s12-where .ph, #s12-foot .ph { font-size: 1em; }
+  </style>
+  <style>
+    #s12-slot { position: absolute; left: 96px; top: 54px; width: 1728px; height: 852px; border: 3px dashed #2a3648; border-radius: 28px; background: rgba(18,26,38,0.85); padding: 70px 100px; }
+    #s12-tag { font-size: 28px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #f2b45a; }
+    #s12-sid { margin-top: 20px; font-size: 112px; font-weight: 900; color: #8ea2f5; letter-spacing: -0.03em; }
+    #s12-stitle { margin-top: 6px; font-size: 58px; font-weight: 700; line-height: 1.1; max-width: 1500px; }
+    #s12-file { margin-top: 36px; font-family: "JetBrains Mono", monospace; font-size: 32px; color: #e6eaf0; }
+    #s12-where { margin-top: 14px; font-family: "JetBrains Mono", monospace; font-size: 28px; color: #95a0b2; max-width: 1500px; line-height: 1.4; }
+    #s12-len { margin-top: 14px; font-size: 28px; color: #8a93a3; }
+    #s12-bar { position: absolute; left: 100px; right: 100px; bottom: 60px; height: 8px; border-radius: 4px; background: #222d3d; overflow: hidden; }
+    #s12-fill { width: 100%; height: 100%; background: #8ea2f5; transform-origin: left center; }
+    #s12-chip { position: absolute; right: 150px; top: 170px; padding: 14px 28px; border-radius: 999px; background: #2443b8; color: #ffffff; font-size: 34px; font-weight: 800; }
+  </style>
+  <div id="root" data-composition-id="s12" data-width="1920" data-height="1080">
+    <div id="s12-glow"></div>
+    <div id="s12-slot">
+      <div id="s12-tag">Screen recording slot</div>
+      <div id="s12-sid">S12</div>
+      <div id="s12-stitle">The mandate</div>
+      <div id="s12-file">clips/S12-mandate-calls.mp4</div>
+      <div id="s12-where">localhost:3000/mandates/&lt;id&gt;, /receipts</div>
+      <div id="s12-len">12.8 s in the cut; record 17 s with handles</div>
+      <div id="s12-bar"><div id="s12-fill"></div></div>
+    </div>
+    <div id="s12-chip">Budget</div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#s12-glow", { x: 0, y: 0 }, { x: 420, y: 160, duration: 12.8, ease: "none" }, 0);
+    tl.fromTo("#s12-slot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.1);
+    tl.fromTo("#s12-fill", { scaleX: 0 }, { scaleX: 1, duration: 12.60, ease: "none" }, 0.1);
+    tl.fromTo("#s12-chip", { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(2)" }, 6.01);
+    window.__timelines["s12"] = tl;
+  </script>
+</template>

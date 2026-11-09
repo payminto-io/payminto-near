@@ -1,0 +1,37 @@
+{
+  "name": "@payminto/node",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "node": ">=22.18" },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "node scripts/check-runtime.mjs && node --env-file-if-exists=.env src/main.ts",
+    "start": "node scripts/check-runtime.mjs && node --env-file-if-exists=.env src/main.ts",
+    "backup": "node scripts/check-runtime.mjs && node --env-file-if-exists=.env scripts/backup.ts",
+    "account": "node scripts/check-runtime.mjs && node --env-file-if-exists=.env scripts/account.ts",
+    "agents:reencrypt": "node scripts/check-runtime.mjs && node --env-file-if-exists=.env scripts/agents-reencrypt.ts",
+    "db:reset": "node scripts/reset-db.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "gas": "node scripts/measure-gas.ts",
+    "test:fork": "FORK=1 vitest run -c vitest.fork.config.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@payminto/models": "workspace:*",
+    "@payminto/protocol": "workspace:*",
+    "@payminto/sdk": "workspace:*",
+    "hono": "^4.13.13",
+    "viem": "^2.57.10",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

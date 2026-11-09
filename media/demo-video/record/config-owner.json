@@ -1,0 +1,45 @@
+{
+  "BASE_URL": "http://localhost:3000",
+  "ids": {
+    "PAYMENT_ID": "pay_jw5if7ir6ac4ewf7yvaivjoo",
+    "LINK_SLUG": "ymxtdnr5",
+    "MANDATE_ID": "0x2115bcc65ff3960c584d1c35c18d33f6f95f547a82ad034211c34874f3b93e8f",
+    "BATCH_ID": "0xe273edd5c8356b9473e85e200e88f9374b60e6aad3056bcf71ff13ba544386c8",
+    "CALL_ID": "0xad381748c492b47db45171032bb394bd7e9853ecd7d0118083eb5233942c4f51",
+    "OPS_AGENT_ID": "agt_w4xyhe5ajhsmaapkdebbboqd",
+    "RUN_ID": "run_nfuehq4w4tap463awtd24wio",
+    "REFUND_REFERENCE": "pay_jw5if7ir6ac4ewf7yvaivjoo",
+    "TASK": "Get a live HSK quote and buy a market brief written only from it",
+    "SELLER_MERCHANT_ID": "mer_2xrvpb5goavcve4g4bpq6ohf",
+    "NORTHWIND_MERCHANT_ID": "mer_ogpm7ecl7t6iine7qtslqr4m"
+  },
+  "login": {
+    "email": "owner@demo.local",
+    "loginsFile": "auto",
+    "note": "The harness signs in with this demo account from the newest apps/demo/data/run-*/dashboard-logins.json (local test accounts) and keeps the session in out/.auth.json. Set email to empty to skip sign-in."
+  },
+  "explorer": {
+    "hashkey": "https://testnet-explorer.hskchain.net",
+    "sepolia": "https://eth-sepolia.blockscout.com",
+    "contracts": {
+      "ClearingHub": "0x53E4B5712fEeD40dd6597F0A50cC14C063186e81",
+      "DepositFactory": "0xcBAFd928dF0C40EDccEC7b82bCaee4a6Ae0E094b",
+      "PaymentRouter": "0x1e0f2223D61BF9831fa0b009AE741c3F5E898F0e",
+      "tUSDC_133": "0x35D0055cd3a9E674B0b14cCDAc030BF19c8DDb15"
+    },
+    "hashkeyTx": {
+      "clearingSettle": "0xebef334562fc83fb4403f55c7e588c08bb9dc60f1b78e1ffb0eeb80350bb51ad",
+      "walletPayment": "0x7a1fb3961cc99184f433c452934bd307d0108abfb75466af7de9d68894ab1493",
+      "x402": "0xab0057b48145d14e14ac2f2b2d306a4bd238fa89ec270590e25b9e604eeecd8f",
+      "mandateOpen": "0x0cf7b987e4bdc5ebb91ebad22144324c35d5fe7cd52f6e5913112ee131e63a63",
+      "voucherBatch": "0x349d3b32fb0f9eea972f5aa46c234926e2ae97cd9e26c7ea1847525b4527a281",
+      "gaslessRefund": "0x33d833ffa7153f7a10e201743e90daba13ae1b3745d67d39584969b4f5a78c76",
+      "aiSkillSettlement": "0x5b0733e7c2ca0a0613924197d6f64a2c451c8da869f504a6a945a6ca48df173f"
+    },
+    "sepoliaTx": {
+      "settle": "0xe9170a444bfa4f8164d051e5dc0deeff75238ffc56efd13bb3abf63e5e443c2b",
+      "aiSkillSettlement": "0x3c3c5c21609367dd261d800a1e5db49dba84a4a02c812adb2beaa216ab2bd88f",
+      "refund": "0x73cfb26ba441b06bda2f6f515598a253c460df154c274191036f038a1a26e722"
+    }
+  }
+}

@@ -1,0 +1,483 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; pointer-events: none; }
+    .cap { position: absolute; left: 0; right: 0; top: 900px; text-align: center; overflow: visible; }
+    .cap span { display: inline-block; padding: 8px 26px; border-radius: 14px; background: rgba(12,18,27,0.78); color: #ffffff; font-family: "Inter", sans-serif; font-size: 54px; font-weight: 700; letter-spacing: -0.01em; }
+  </style>
+  <div id="root" data-composition-id="captions" data-width="1920" data-height="1080">
+    <div id="cap-001" class="clip cap" data-start="0.36" data-duration="0.65" data-track-index="0"><span id="cap-001-t">Hi there</span></div>
+    <div id="cap-002" class="clip cap" data-start="1.24" data-duration="0.89" data-track-index="0"><span id="cap-002-t">and welcome</span></div>
+    <div id="cap-003" class="clip cap" data-start="2.2" data-duration="1.45" data-track-index="0"><span id="cap-003-t">This is Payminto</span></div>
+    <div id="cap-004" class="clip cap" data-start="4.66" data-duration="1.2" data-track-index="0"><span id="cap-004-t">Picture a two person</span></div>
+    <div id="cap-005" class="clip cap" data-start="5.86" data-duration="1.45" data-track-index="0"><span id="cap-005-t">API team in Pune</span></div>
+    <div id="cap-006" class="clip cap" data-start="7.54" data-duration="1.36" data-track-index="0"><span id="cap-006-t">They sell market data</span></div>
+    <div id="cap-007" class="clip cap" data-start="8.9" data-duration="1.05" data-track-index="0"><span id="cap-007-t">around the world</span></div>
+    <div id="cap-008" class="clip cap" data-start="10.02" data-duration="1.28" data-track-index="0"><span id="cap-008-t">Last month their newest</span></div>
+    <div id="cap-009" class="clip cap" data-start="11.3" data-duration="0.96" data-track-index="0"><span id="cap-009-t">customer was not a</span></div>
+    <div id="cap-010" class="clip cap" data-start="12.26" data-duration="0.65" data-track-index="0"><span id="cap-010-t">person</span></div>
+    <div id="cap-011" class="clip cap" data-start="12.98" data-duration="0.89" data-track-index="0"><span id="cap-011-t">It was an AI</span></div>
+    <div id="cap-012" class="clip cap" data-start="13.94" data-duration="0.57" data-track-index="0"><span id="cap-012-t">agent</span></div>
+    <div id="cap-013" class="clip cap" data-start="14.58" data-duration="0.72" data-track-index="0"><span id="cap-013-t">paying a fifth of</span></div>
+    <div id="cap-014" class="clip cap" data-start="15.3" data-duration="1.2" data-track-index="0"><span id="cap-014-t">a cent per call</span></div>
+    <div id="cap-015" class="clip cap" data-start="16.5" data-duration="0.8" data-track-index="0"><span id="cap-015-t">And they had no</span></div>
+    <div id="cap-016" class="clip cap" data-start="17.3" data-duration="0.8" data-track-index="0"><span id="cap-016-t">way to take that</span></div>
+    <div id="cap-017" class="clip cap" data-start="18.1" data-duration="0.49" data-track-index="0"><span id="cap-017-t">money</span></div>
+    <div id="cap-018" class="clip cap" data-start="19.38" data-duration="1.28" data-track-index="0"><span id="cap-018-t">Paying every call on</span></div>
+    <div id="cap-019" class="clip cap" data-start="20.66" data-duration="1.45" data-track-index="0"><span id="cap-019-t">chain does not work</span></div>
+    <div id="cap-020" class="clip cap" data-start="22.5" data-duration="1.92" data-track-index="0"><span id="cap-020-t">One stablecoin transfer costs</span></div>
+    <div id="cap-021" class="clip cap" data-start="24.42" data-duration="1.44" data-track-index="0"><span id="cap-021-t">about thirty four thousand</span></div>
+    <div id="cap-022" class="clip cap" data-start="25.86" data-duration="0.65" data-track-index="0"><span id="cap-022-t">gas</span></div>
+    <div id="cap-023" class="clip cap" data-start="26.82" data-duration="1.12" data-track-index="0"><span id="cap-023-t">That fee can rival</span></div>
+    <div id="cap-024" class="clip cap" data-start="27.94" data-duration="0.72" data-track-index="0"><span id="cap-024-t">the price of the</span></div>
+    <div id="cap-025" class="clip cap" data-start="28.66" data-duration="1.05" data-track-index="0"><span id="cap-025-t">call itself</span></div>
+    <div id="cap-026" class="clip cap" data-start="30.38" data-duration="1.04" data-track-index="0"><span id="cap-026-t">And nobody hands an</span></div>
+    <div id="cap-027" class="clip cap" data-start="31.42" data-duration="1.29" data-track-index="0"><span id="cap-027-t">agent an open wallet</span></div>
+    <div id="cap-028" class="clip cap" data-start="32.94" data-duration="1.21" data-track-index="0"><span id="cap-028-t">One bad prompt</span></div>
+    <div id="cap-029" class="clip cap" data-start="34.22" data-duration="0.56" data-track-index="0"><span id="cap-029-t">and it pays a</span></div>
+    <div id="cap-030" class="clip cap" data-start="34.78" data-duration="0.81" data-track-index="0"><span id="cap-030-t">stranger</span></div>
+    <div id="cap-031" class="clip cap" data-start="36.28" data-duration="1.04" data-track-index="0"><span id="cap-031-t">So we built</span></div>
+    <div id="cap-032" class="clip cap" data-start="37.32" data-duration="0.97" data-track-index="0"><span id="cap-032-t">Payminto</span></div>
+    <div id="cap-033" class="clip cap" data-start="38.44" data-duration="1.68" data-track-index="0"><span id="cap-033-t">A stablecoin payment gateway</span></div>
+    <div id="cap-034" class="clip cap" data-start="40.12" data-duration="0.88" data-track-index="0"><span id="cap-034-t">you run on your</span></div>
+    <div id="cap-035" class="clip cap" data-start="41" data-duration="0.88" data-track-index="0"><span id="cap-035-t">own server</span></div>
+    <div id="cap-036" class="clip cap" data-start="41.88" data-duration="0.88" data-track-index="0"><span id="cap-036-t">One link</span></div>
+    <div id="cap-037" class="clip cap" data-start="42.76" data-duration="1.2" data-track-index="0"><span id="cap-037-t">for people and AI</span></div>
+    <div id="cap-038" class="clip cap" data-start="43.96" data-duration="0.72" data-track-index="0"><span id="cap-038-t">agents</span></div>
+    <div id="cap-039" class="clip cap" data-start="44.68" data-duration="1.12" data-track-index="0"><span id="cap-039-t">The money goes straight</span></div>
+    <div id="cap-040" class="clip cap" data-start="45.8" data-duration="0.88" data-track-index="0"><span id="cap-040-t">to your wallet</span></div>
+    <div id="cap-041" class="clip cap" data-start="46.68" data-duration="0.8" data-track-index="0"><span id="cap-041-t">and nobody in the</span></div>
+    <div id="cap-042" class="clip cap" data-start="47.48" data-duration="1.05" data-track-index="0"><span id="cap-042-t">middle holds it</span></div>
+    <div id="cap-043" class="clip cap" data-start="49.28" data-duration="1.12" data-track-index="0"><span id="cap-043-t">Every agent gets a</span></div>
+    <div id="cap-044" class="clip cap" data-start="50.4" data-duration="0.73" data-track-index="0"><span id="cap-044-t">budget</span></div>
+    <div id="cap-045" class="clip cap" data-start="51.2" data-duration="1.52" data-track-index="0"><span id="cap-045-t">Every tiny charge gets</span></div>
+    <div id="cap-046" class="clip cap" data-start="52.72" data-duration="0.88" data-track-index="0"><span id="cap-046-t">netted into a few</span></div>
+    <div id="cap-047" class="clip cap" data-start="53.6" data-duration="1.04" data-track-index="0"><span id="cap-047-t">transfers</span></div>
+    <div id="cap-048" class="clip cap" data-start="54.64" data-duration="1.28" data-track-index="0"><span id="cap-048-t">Every single call</span></div>
+    <div id="cap-049" class="clip cap" data-start="55.92" data-duration="0.97" data-track-index="0"><span id="cap-049-t">gets a proof</span></div>
+    <div id="cap-050" class="clip cap" data-start="57.58" data-duration="1.61" data-track-index="0"><span id="cap-050-t">The rails are here</span></div>
+    <div id="cap-051" class="clip cap" data-start="59.34" data-duration="1.53" data-track-index="0"><span id="cap-051-t">x402</span></div>
+    <div id="cap-052" class="clip cap" data-start="60.94" data-duration="1.13" data-track-index="0"><span id="cap-052-t">asks for payment</span></div>
+    <div id="cap-053" class="clip cap" data-start="62.22" data-duration="2.09" data-track-index="0"><span id="cap-053-t">AP2 proves consent</span></div>
+    <div id="cap-054" class="clip cap" data-start="64.38" data-duration="0.97" data-track-index="0"><span id="cap-054-t">HSP</span></div>
+    <div id="cap-055" class="clip cap" data-start="65.42" data-duration="1.69" data-track-index="0"><span id="cap-055-t">settles on HashKey Chain</span></div>
+    <div id="cap-056" class="clip cap" data-start="67.18" data-duration="0.89" data-track-index="0"><span id="cap-056-t">Payminto</span></div>
+    <div id="cap-057" class="clip cap" data-start="68.14" data-duration="1.21" data-track-index="0"><span id="cap-057-t">is the missing middle</span></div>
+    <div id="cap-058" class="clip cap" data-start="70.08" data-duration="1.21" data-track-index="0"><span id="cap-058-t">Let me show you</span></div>
+    <div id="cap-059" class="clip cap" data-start="71.44" data-duration="0.89" data-track-index="0"><span id="cap-059-t">live</span></div>
+    <div id="cap-060" class="clip cap" data-start="72.98" data-duration="0.56" data-track-index="0"><span id="cap-060-t">Here</span></div>
+    <div id="cap-061" class="clip cap" data-start="73.54" data-duration="0.97" data-track-index="0"><span id="cap-061-t">is the merchant</span></div>
+    <div id="cap-062" class="clip cap" data-start="74.58" data-duration="0.81" data-track-index="0"><span id="cap-062-t">dashboard</span></div>
+    <div id="cap-063" class="clip cap" data-start="75.54" data-duration="1.04" data-track-index="0"><span id="cap-063-t">I create a payment</span></div>
+    <div id="cap-064" class="clip cap" data-start="76.58" data-duration="0.49" data-track-index="0"><span id="cap-064-t">link</span></div>
+    <div id="cap-065" class="clip cap" data-start="77.14" data-duration="0.64" data-track-index="0"><span id="cap-065-t">and pay it</span></div>
+    <div id="cap-066" class="clip cap" data-start="77.78" data-duration="1.12" data-track-index="0"><span id="cap-066-t">like a customer</span></div>
+    <div id="cap-067" class="clip cap" data-start="78.9" data-duration="1.2" data-track-index="0"><span id="cap-067-t">One signature</span></div>
+    <div id="cap-068" class="clip cap" data-start="80.1" data-duration="0.8" data-track-index="0"><span id="cap-068-t">and it is paid</span></div>
+    <div id="cap-069" class="clip cap" data-start="80.9" data-duration="1.77" data-track-index="0"><span id="cap-069-t">in test USDC</span></div>
+    <div id="cap-070" class="clip cap" data-start="82.74" data-duration="1.77" data-track-index="0"><span id="cap-070-t">on HashKey Chain Testnet</span></div>
+    <div id="cap-071" class="clip cap" data-start="84.58" data-duration="0.49" data-track-index="0"><span id="cap-071-t">Paid</span></div>
+    <div id="cap-072" class="clip cap" data-start="85.14" data-duration="1.04" data-track-index="0"><span id="cap-072-t">with the platform fee</span></div>
+    <div id="cap-073" class="clip cap" data-start="86.18" data-duration="0.96" data-track-index="0"><span id="cap-073-t">split off in the</span></div>
+    <div id="cap-074" class="clip cap" data-start="87.14" data-duration="1.21" data-track-index="0"><span id="cap-074-t">same transaction</span></div>
+    <div id="cap-075" class="clip cap" data-start="89.08" data-duration="0.88" data-track-index="0"><span id="cap-075-t">Agents run on the</span></div>
+    <div id="cap-076" class="clip cap" data-start="89.96" data-duration="1.61" data-track-index="0"><span id="cap-076-t">business's own model key</span></div>
+    <div id="cap-077" class="clip cap" data-start="91.88" data-duration="1.36" data-track-index="0"><span id="cap-077-t">This demo runs DeepSeek</span></div>
+    <div id="cap-078" class="clip cap" data-start="93.24" data-duration="2.09" data-track-index="0"><span id="cap-078-t">V3.1 through Replicate</span></div>
+    <div id="cap-079" class="clip cap" data-start="95.4" data-duration="1.28" data-track-index="0"><span id="cap-079-t">and other major providers</span></div>
+    <div id="cap-080" class="clip cap" data-start="96.68" data-duration="1.13" data-track-index="0"><span id="cap-080-t">work the same way</span></div>
+    <div id="cap-081" class="clip cap" data-start="98.58" data-duration="1.44" data-track-index="0"><span id="cap-081-t">Now a buyer agent</span></div>
+    <div id="cap-082" class="clip cap" data-start="100.02" data-duration="0.88" data-track-index="0"><span id="cap-082-t">gets a task in</span></div>
+    <div id="cap-083" class="clip cap" data-start="100.9" data-duration="0.97" data-track-index="0"><span id="cap-083-t">plain words</span></div>
+    <div id="cap-084" class="clip cap" data-start="102.1" data-duration="0.96" data-track-index="0"><span id="cap-084-t">This is a real</span></div>
+    <div id="cap-085" class="clip cap" data-start="103.06" data-duration="0.96" data-track-index="0"><span id="cap-085-t">AI model</span></div>
+    <div id="cap-086" class="clip cap" data-start="104.02" data-duration="1.05" data-track-index="0"><span id="cap-086-t">not a script</span></div>
+    <div id="cap-087" class="clip cap" data-start="105.62" data-duration="0.88" data-track-index="0"><span id="cap-087-t">It finds the paid</span></div>
+    <div id="cap-088" class="clip cap" data-start="106.5" data-duration="1.44" data-track-index="0"><span id="cap-088-t">services on this server</span></div>
+    <div id="cap-089" class="clip cap" data-start="107.94" data-duration="0.96" data-track-index="0"><span id="cap-089-t">and checks its budget</span></div>
+    <div id="cap-090" class="clip cap" data-start="108.9" data-duration="0.65" data-track-index="0"><span id="cap-090-t">first</span></div>
+    <div id="cap-091" class="clip cap" data-start="110.18" data-duration="0.8" data-track-index="0"><span id="cap-091-t">Its budget is a</span></div>
+    <div id="cap-092" class="clip cap" data-start="110.98" data-duration="0.81" data-track-index="0"><span id="cap-092-t">mandate</span></div>
+    <div id="cap-093" class="clip cap" data-start="111.86" data-duration="1.05" data-track-index="0"><span id="cap-093-t">a total cap</span></div>
+    <div id="cap-094" class="clip cap" data-start="112.98" data-duration="1.2" data-track-index="0"><span id="cap-094-t">a per call cap</span></div>
+    <div id="cap-095" class="clip cap" data-start="114.18" data-duration="0.97" data-track-index="0"><span id="cap-095-t">a daily cap</span></div>
+    <div id="cap-096" class="clip cap" data-start="115.22" data-duration="0.64" data-track-index="0"><span id="cap-096-t">and who it may</span></div>
+    <div id="cap-097" class="clip cap" data-start="115.86" data-duration="0.49" data-track-index="0"><span id="cap-097-t">pay</span></div>
+    <div id="cap-098" class="clip cap" data-start="116.5" data-duration="0.96" data-track-index="0"><span id="cap-098-t">Each call is one</span></div>
+    <div id="cap-099" class="clip cap" data-start="117.46" data-duration="1.44" data-track-index="0"><span id="cap-099-t">signed voucher with no</span></div>
+    <div id="cap-100" class="clip cap" data-start="118.9" data-duration="1.44" data-track-index="0"><span id="cap-100-t">gas Over the limit</span></div>
+    <div id="cap-101" class="clip cap" data-start="120.34" data-duration="0.96" data-track-index="0"><span id="cap-101-t">it is refused by</span></div>
+    <div id="cap-102" class="clip cap" data-start="121.3" data-duration="0.89" data-track-index="0"><span id="cap-102-t">rule name</span></div>
+    <div id="cap-103" class="clip cap" data-start="122.98" data-duration="0.96" data-track-index="0"><span id="cap-103-t">First it buys a</span></div>
+    <div id="cap-104" class="clip cap" data-start="123.94" data-duration="1.76" data-track-index="0"><span id="cap-104-t">live HSK price quote</span></div>
+    <div id="cap-105" class="clip cap" data-start="125.7" data-duration="0.88" data-track-index="0"><span id="cap-105-t">from a market data</span></div>
+    <div id="cap-106" class="clip cap" data-start="126.58" data-duration="0.8" data-track-index="0"><span id="cap-106-t">service</span></div>
+    <div id="cap-107" class="clip cap" data-start="127.38" data-duration="0.72" data-track-index="0"><span id="cap-107-t">Then it pays a</span></div>
+    <div id="cap-108" class="clip cap" data-start="128.1" data-duration="1.36" data-track-index="0"><span id="cap-108-t">seller agent's market brief</span></div>
+    <div id="cap-109" class="clip cap" data-start="129.46" data-duration="0.64" data-track-index="0"><span id="cap-109-t">skill</span></div>
+    <div id="cap-110" class="clip cap" data-start="130.1" data-duration="0.72" data-track-index="0"><span id="cap-110-t">and hands it that</span></div>
+    <div id="cap-111" class="clip cap" data-start="130.82" data-duration="0.49" data-track-index="0"><span id="cap-111-t">quote</span></div>
+    <div id="cap-112" class="clip cap" data-start="131.46" data-duration="0.96" data-track-index="0"><span id="cap-112-t">The brief is written</span></div>
+    <div id="cap-113" class="clip cap" data-start="132.42" data-duration="1.52" data-track-index="0"><span id="cap-113-t">only from those figures</span></div>
+    <div id="cap-114" class="clip cap" data-start="133.94" data-duration="1.52" data-track-index="0"><span id="cap-114-t">Three parties one chain</span></div>
+    <div id="cap-115" class="clip cap" data-start="135.46" data-duration="0.81" data-track-index="0"><span id="cap-115-t">of payments</span></div>
+    <div id="cap-116" class="clip cap" data-start="136.98" data-duration="0.65" data-track-index="0"><span id="cap-116-t">Then</span></div>
+    <div id="cap-117" class="clip cap" data-start="137.7" data-duration="1.21" data-track-index="0"><span id="cap-117-t">it all settles</span></div>
+    <div id="cap-118" class="clip cap" data-start="138.98" data-duration="2.08" data-track-index="0"><span id="cap-118-t">Payminto nets every agent</span></div>
+    <div id="cap-119" class="clip cap" data-start="141.06" data-duration="1.68" data-track-index="0"><span id="cap-119-t">against every other one</span></div>
+    <div id="cap-120" class="clip cap" data-start="142.74" data-duration="1.76" data-track-index="0"><span id="cap-120-t">Only net amounts move</span></div>
+    <div id="cap-121" class="clip cap" data-start="144.5" data-duration="1.44" data-track-index="0"><span id="cap-121-t">wallet to wallet in</span></div>
+    <div id="cap-122" class="clip cap" data-start="145.94" data-duration="1.68" data-track-index="0"><span id="cap-122-t">one HashKey Chain Testnet</span></div>
+    <div id="cap-123" class="clip cap" data-start="147.62" data-duration="0.96" data-track-index="0"><span id="cap-123-t">transaction</span></div>
+    <div id="cap-124" class="clip cap" data-start="148.58" data-duration="1.28" data-track-index="0"><span id="cap-124-t">Each transfer is wrapped</span></div>
+    <div id="cap-125" class="clip cap" data-start="149.86" data-duration="1.6" data-track-index="0"><span id="cap-125-t">as an HSP payment</span></div>
+    <div id="cap-126" class="clip cap" data-start="151.46" data-duration="2.24" data-track-index="0"><span id="cap-126-t">HashKey's live HSP server</span></div>
+    <div id="cap-127" class="clip cap" data-start="153.7" data-duration="1.36" data-track-index="0"><span id="cap-127-t">has not allowlisted us</span></div>
+    <div id="cap-128" class="clip cap" data-start="155.06" data-duration="0.48" data-track-index="0"><span id="cap-128-t">yet</span></div>
+    <div id="cap-129" class="clip cap" data-start="155.54" data-duration="1.52" data-track-index="0"><span id="cap-129-t">so our own HSP</span></div>
+    <div id="cap-130" class="clip cap" data-start="157.06" data-duration="1.61" data-track-index="0"><span id="cap-130-t">adapter checks it today</span></div>
+    <div id="cap-131" class="clip cap" data-start="159.28" data-duration="1.44" data-track-index="0"><span id="cap-131-t">Any single call</span></div>
+    <div id="cap-132" class="clip cap" data-start="160.72" data-duration="1.36" data-track-index="0"><span id="cap-132-t">can be proven against</span></div>
+    <div id="cap-133" class="clip cap" data-start="162.08" data-duration="0.88" data-track-index="0"><span id="cap-133-t">the batch root on</span></div>
+    <div id="cap-134" class="clip cap" data-start="162.96" data-duration="0.65" data-track-index="0"><span id="cap-134-t">chain</span></div>
+    <div id="cap-135" class="clip cap" data-start="163.68" data-duration="1.13" data-track-index="0"><span id="cap-135-t">Verified</span></div>
+    <div id="cap-136" class="clip cap" data-start="165.48" data-duration="1.6" data-track-index="0"><span id="cap-136-t">Now the back office</span></div>
+    <div id="cap-137" class="clip cap" data-start="167.08" data-duration="1.28" data-track-index="0"><span id="cap-137-t">The owner asks their</span></div>
+    <div id="cap-138" class="clip cap" data-start="168.36" data-duration="0.97" data-track-index="0"><span id="cap-138-t">ops agent</span></div>
+    <div id="cap-139" class="clip cap" data-start="169.4" data-duration="0.88" data-track-index="0"><span id="cap-139-t">what did we earn</span></div>
+    <div id="cap-140" class="clip cap" data-start="170.28" data-duration="0.73" data-track-index="0"><span id="cap-140-t">today</span></div>
+    <div id="cap-141" class="clip cap" data-start="171.08" data-duration="1.2" data-track-index="0"><span id="cap-141-t">It answers from real</span></div>
+    <div id="cap-142" class="clip cap" data-start="172.28" data-duration="0.73" data-track-index="0"><span id="cap-142-t">payments</span></div>
+    <div id="cap-143" class="clip cap" data-start="173.68" data-duration="0.56" data-track-index="0"><span id="cap-143-t">Ask</span></div>
+    <div id="cap-144" class="clip cap" data-start="174.24" data-duration="0.97" data-track-index="0"><span id="cap-144-t">for a refund</span></div>
+    <div id="cap-145" class="clip cap" data-start="175.28" data-duration="0.88" data-track-index="0"><span id="cap-145-t">and the agent can</span></div>
+    <div id="cap-146" class="clip cap" data-start="176.16" data-duration="1.13" data-track-index="0"><span id="cap-146-t">only request it</span></div>
+    <div id="cap-147" class="clip cap" data-start="177.36" data-duration="1.36" data-track-index="0"><span id="cap-147-t">A human approves and</span></div>
+    <div id="cap-148" class="clip cap" data-start="178.72" data-duration="1.45" data-track-index="0"><span id="cap-148-t">it goes out gasless</span></div>
+    <div id="cap-149" class="clip cap" data-start="180.88" data-duration="1.36" data-track-index="0"><span id="cap-149-t">And finance gets one</span></div>
+    <div id="cap-150" class="clip cap" data-start="182.24" data-duration="0.64" data-track-index="0"><span id="cap-150-t">report</span></div>
+    <div id="cap-151" class="clip cap" data-start="182.88" data-duration="1.92" data-track-index="0"><span id="cap-151-t">with every payment fee</span></div>
+    <div id="cap-152" class="clip cap" data-start="184.8" data-duration="1.45" data-track-index="0"><span id="cap-152-t">refund and proof</span></div>
+    <div id="cap-153" class="clip cap" data-start="186.98" data-duration="1.76" data-track-index="0"><span id="cap-153-t">Stablecoins already hold about</span></div>
+    <div id="cap-154" class="clip cap" data-start="188.74" data-duration="1.36" data-track-index="0"><span id="cap-154-t">three hundred and sixteen</span></div>
+    <div id="cap-155" class="clip cap" data-start="190.1" data-duration="1.84" data-track-index="0"><span id="cap-155-t">billion dollars McKinsey is</span></div>
+    <div id="cap-156" class="clip cap" data-start="191.94" data-duration="1.12" data-track-index="0"><span id="cap-156-t">reported to see three</span></div>
+    <div id="cap-157" class="clip cap" data-start="193.06" data-duration="1.2" data-track-index="0"><span id="cap-157-t">to five trillion dollars</span></div>
+    <div id="cap-158" class="clip cap" data-start="194.26" data-duration="1.28" data-track-index="0"><span id="cap-158-t">of agentic commerce by</span></div>
+    <div id="cap-159" class="clip cap" data-start="195.54" data-duration="0.89" data-track-index="0"><span id="cap-159-t">2030</span></div>
+    <div id="cap-160" class="clip cap" data-start="196.5" data-duration="1.12" data-track-index="0"><span id="cap-160-t">Agent volume is still</span></div>
+    <div id="cap-161" class="clip cap" data-start="197.62" data-duration="0.72" data-track-index="0"><span id="cap-161-t">small</span></div>
+    <div id="cap-162" class="clip cap" data-start="198.34" data-duration="0.96" data-track-index="0"><span id="cap-162-t">so this layer must</span></div>
+    <div id="cap-163" class="clip cap" data-start="199.3" data-duration="1.05" data-track-index="0"><span id="cap-163-t">exist first</span></div>
+    <div id="cap-164" class="clip cap" data-start="201.08" data-duration="0.88" data-track-index="0"><span id="cap-164-t">The core</span></div>
+    <div id="cap-165" class="clip cap" data-start="201.96" data-duration="1.29" data-track-index="0"><span id="cap-165-t">is open source</span></div>
+    <div id="cap-166" class="clip cap" data-start="203.32" data-duration="0.8" data-track-index="0"><span id="cap-166-t">We never take a</span></div>
+    <div id="cap-167" class="clip cap" data-start="204.12" data-duration="1.28" data-track-index="0"><span id="cap-167-t">cut of your payments</span></div>
+    <div id="cap-168" class="clip cap" data-start="205.4" data-duration="1.28" data-track-index="0"><span id="cap-168-t">We earn from enterprise</span></div>
+    <div id="cap-169" class="clip cap" data-start="206.68" data-duration="1.68" data-track-index="0"><span id="cap-169-t">licences and from running</span></div>
+    <div id="cap-170" class="clip cap" data-start="208.36" data-duration="1.05" data-track-index="0"><span id="cap-170-t">the node for you</span></div>
+    <div id="cap-171" class="clip cap" data-start="210.18" data-duration="1.6" data-track-index="0"><span id="cap-171-t">Hosted players hold the</span></div>
+    <div id="cap-172" class="clip cap" data-start="211.78" data-duration="0.64" data-track-index="0"><span id="cap-172-t">money</span></div>
+    <div id="cap-173" class="clip cap" data-start="212.42" data-duration="1.21" data-track-index="0"><span id="cap-173-t">or the wallets</span></div>
+    <div id="cap-174" class="clip cap" data-start="213.94" data-duration="0.8" data-track-index="0"><span id="cap-174-t">We run on your</span></div>
+    <div id="cap-175" class="clip cap" data-start="214.74" data-duration="1.92" data-track-index="0"><span id="cap-175-t">server net many agents</span></div>
+    <div id="cap-176" class="clip cap" data-start="216.66" data-duration="0.88" data-track-index="0"><span id="cap-176-t">at once</span></div>
+    <div id="cap-177" class="clip cap" data-start="217.54" data-duration="1.53" data-track-index="0"><span id="cap-177-t">and prove every call</span></div>
+    <div id="cap-178" class="clip cap" data-start="219.78" data-duration="1.37" data-track-index="0"><span id="cap-178-t">Honest status</span></div>
+    <div id="cap-179" class="clip cap" data-start="221.3" data-duration="1.68" data-track-index="0"><span id="cap-179-t">it works on testnet</span></div>
+    <div id="cap-180" class="clip cap" data-start="222.98" data-duration="1.68" data-track-index="0"><span id="cap-180-t">with no external users</span></div>
+    <div id="cap-181" class="clip cap" data-start="224.66" data-duration="0.49" data-track-index="0"><span id="cap-181-t">yet</span></div>
+    <div id="cap-182" class="clip cap" data-start="225.38" data-duration="1.2" data-track-index="0"><span id="cap-182-t">Next ten</span></div>
+    <div id="cap-183" class="clip cap" data-start="226.58" data-duration="1.53" data-track-index="0"><span id="cap-183-t">Indian design partners</span></div>
+    <div id="cap-184" class="clip cap" data-start="228.34" data-duration="0.65" data-track-index="0"><span id="cap-184-t">Our ask</span></div>
+    <div id="cap-185" class="clip cap" data-start="229.06" data-duration="1.2" data-track-index="0"><span id="cap-185-t">design partners</span></div>
+    <div id="cap-186" class="clip cap" data-start="230.26" data-duration="0.96" data-track-index="0"><span id="cap-186-t">and help to reach</span></div>
+    <div id="cap-187" class="clip cap" data-start="231.22" data-duration="0.73" data-track-index="0"><span id="cap-187-t">mainnet</span></div>
+    <div id="cap-188" class="clip cap" data-start="232.58" data-duration="1.61" data-track-index="0"><span id="cap-188-t">We start in India</span></div>
+    <div id="cap-189" class="clip cap" data-start="234.26" data-duration="1.6" data-track-index="0"><span id="cap-189-t">Nasscom found three quarters</span></div>
+    <div id="cap-190" class="clip cap" data-start="235.86" data-duration="1.44" data-track-index="0"><span id="cap-190-t">of Indian SaaS revenue</span></div>
+    <div id="cap-191" class="clip cap" data-start="237.3" data-duration="1.6" data-track-index="0"><span id="cap-191-t">came from global sales</span></div>
+    <div id="cap-192" class="clip cap" data-start="238.9" data-duration="1.05" data-track-index="0"><span id="cap-192-t">in 2020</span></div>
+    <div id="cap-193" class="clip cap" data-start="240.1" data-duration="1.04" data-track-index="0"><span id="cap-193-t">Those teams should meet</span></div>
+    <div id="cap-194" class="clip cap" data-start="241.14" data-duration="1.36" data-track-index="0"><span id="cap-194-t">foreign agents first</span></div>
+    <div id="cap-195" class="clip cap" data-start="242.5" data-duration="1.44" data-track-index="0"><span id="cap-195-t">Then agent builders</span></div>
+    <div id="cap-196" class="clip cap" data-start="243.94" data-duration="0.88" data-track-index="0"><span id="cap-196-t">who need budgets and</span></div>
+    <div id="cap-197" class="clip cap" data-start="244.82" data-duration="0.73" data-track-index="0"><span id="cap-197-t">receipts</span></div>
+    <div id="cap-198" class="clip cap" data-start="246.28" data-duration="1.44" data-track-index="0"><span id="cap-198-t">We grow through open</span></div>
+    <div id="cap-199" class="clip cap" data-start="247.72" data-duration="0.65" data-track-index="0"><span id="cap-199-t">source</span></div>
+    <div id="cap-200" class="clip cap" data-start="248.44" data-duration="1.6" data-track-index="0"><span id="cap-200-t">MCP directories</span></div>
+    <div id="cap-201" class="clip cap" data-start="250.04" data-duration="1.85" data-track-index="0"><span id="cap-201-t">and the HashKey ecosystem</span></div>
+    <div id="cap-202" class="clip cap" data-start="252.04" data-duration="1.29" data-track-index="0"><span id="cap-202-t">The node is free</span></div>
+    <div id="cap-203" class="clip cap" data-start="253.56" data-duration="1.36" data-track-index="0"><span id="cap-203-t">paid plans are priced</span></div>
+    <div id="cap-204" class="clip cap" data-start="254.92" data-duration="1.45" data-track-index="0"><span id="cap-204-t">with our first partners</span></div>
+    <div id="cap-205" class="clip cap" data-start="256.44" data-duration="1.21" data-track-index="0"><span id="cap-205-t">In ninety days</span></div>
+    <div id="cap-206" class="clip cap" data-start="257.72" data-duration="1.29" data-track-index="0"><span id="cap-206-t">escrow on delivery</span></div>
+    <div id="cap-207" class="clip cap" data-start="259.08" data-duration="0.8" data-track-index="0"><span id="cap-207-t">and an audit</span></div>
+    <div id="cap-208" class="clip cap" data-start="259.88" data-duration="1.13" data-track-index="0"><span id="cap-208-t">ahead of mainnet</span></div>
+    <div id="cap-209" class="clip cap" data-start="261.68" data-duration="1.61" data-track-index="0"><span id="cap-209-t">Agent volume is small</span></div>
+    <div id="cap-210" class="clip cap" data-start="263.36" data-duration="0.64" data-track-index="0"><span id="cap-210-t">and the rules are</span></div>
+    <div id="cap-211" class="clip cap" data-start="264" data-duration="0.72" data-track-index="0"><span id="cap-211-t">moving</span></div>
+    <div id="cap-212" class="clip cap" data-start="264.72" data-duration="1.84" data-track-index="0"><span id="cap-212-t">So everything fails closed</span></div>
+    <div id="cap-213" class="clip cap" data-start="266.56" data-duration="1.29" data-track-index="0"><span id="cap-213-t">and is labelled honestly</span></div>
+    <div id="cap-214" class="clip cap" data-start="268.68" data-duration="0.96" data-track-index="0"><span id="cap-214-t">Here it is</span></div>
+    <div id="cap-215" class="clip cap" data-start="269.64" data-duration="0.89" data-track-index="0"><span id="cap-215-t">on chain</span></div>
+    <div id="cap-216" class="clip cap" data-start="270.6" data-duration="1.21" data-track-index="0"><span id="cap-216-t">Our clearing hub</span></div>
+    <div id="cap-217" class="clip cap" data-start="271.88" data-duration="1.52" data-track-index="0"><span id="cap-217-t">deposit factory and payment</span></div>
+    <div id="cap-218" class="clip cap" data-start="273.4" data-duration="1.44" data-track-index="0"><span id="cap-218-t">router on HashKey Chain</span></div>
+    <div id="cap-219" class="clip cap" data-start="274.84" data-duration="0.64" data-track-index="0"><span id="cap-219-t">Testnet</span></div>
+    <div id="cap-220" class="clip cap" data-start="275.48" data-duration="1.68" data-track-index="0"><span id="cap-220-t">The mandate the payments</span></div>
+    <div id="cap-221" class="clip cap" data-start="277.16" data-duration="1.04" data-track-index="0"><span id="cap-221-t">the refund and the</span></div>
+    <div id="cap-222" class="clip cap" data-start="278.2" data-duration="1.36" data-track-index="0"><span id="cap-222-t">settlements And the same</span></div>
+    <div id="cap-223" class="clip cap" data-start="279.56" data-duration="2.08" data-track-index="0"><span id="cap-223-t">contracts on Ethereum Sepolia</span></div>
+    <div id="cap-224" class="clip cap" data-start="281.64" data-duration="2.57" data-track-index="0"><span id="cap-224-t">settling Circle's testnet USDC</span></div>
+    <div id="cap-225" class="clip cap" data-start="285.06" data-duration="1.21" data-track-index="0"><span id="cap-225-t">That team in Pune</span></div>
+    <div id="cap-226" class="clip cap" data-start="286.5" data-duration="1.12" data-track-index="0"><span id="cap-226-t">can finally take that</span></div>
+    <div id="cap-227" class="clip cap" data-start="287.62" data-duration="0.57" data-track-index="0"><span id="cap-227-t">money</span></div>
+    <div id="cap-228" class="clip cap" data-start="288.42" data-duration="0.8" data-track-index="0"><span id="cap-228-t">All of this ran</span></div>
+    <div id="cap-229" class="clip cap" data-start="289.22" data-duration="1.04" data-track-index="0"><span id="cap-229-t">on testnets</span></div>
+    <div id="cap-230" class="clip cap" data-start="290.26" data-duration="0.96" data-track-index="0"><span id="cap-230-t">with tokens that have</span></div>
+    <div id="cap-231" class="clip cap" data-start="291.22" data-duration="0.89" data-track-index="0"><span id="cap-231-t">no value</span></div>
+    <div id="cap-232" class="clip cap" data-start="292.34" data-duration="0.89" data-track-index="0"><span id="cap-232-t">Payminto</span></div>
+    <div id="cap-233" class="clip cap" data-start="293.38" data-duration="1.12" data-track-index="0"><span id="cap-233-t">get paid by people</span></div>
+    <div id="cap-234" class="clip cap" data-start="294.5" data-duration="1.28" data-track-index="0"><span id="cap-234-t">and AI agents</span></div>
+    <div id="cap-235" class="clip cap" data-start="295.78" data-duration="1.29" data-track-index="0"><span id="cap-235-t">on your own server</span></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#cap-001-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 0.36);
+    tl.fromTo("#cap-002-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 1.24);
+    tl.fromTo("#cap-003-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 2.2);
+    tl.fromTo("#cap-004-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 4.66);
+    tl.fromTo("#cap-005-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 5.86);
+    tl.fromTo("#cap-006-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 7.54);
+    tl.fromTo("#cap-007-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 8.9);
+    tl.fromTo("#cap-008-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 10.02);
+    tl.fromTo("#cap-009-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 11.3);
+    tl.fromTo("#cap-010-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 12.26);
+    tl.fromTo("#cap-011-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 12.98);
+    tl.fromTo("#cap-012-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 13.94);
+    tl.fromTo("#cap-013-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 14.58);
+    tl.fromTo("#cap-014-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 15.3);
+    tl.fromTo("#cap-015-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 16.5);
+    tl.fromTo("#cap-016-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 17.3);
+    tl.fromTo("#cap-017-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 18.1);
+    tl.fromTo("#cap-018-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 19.38);
+    tl.fromTo("#cap-019-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 20.66);
+    tl.fromTo("#cap-020-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 22.5);
+    tl.fromTo("#cap-021-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 24.42);
+    tl.fromTo("#cap-022-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 25.86);
+    tl.fromTo("#cap-023-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 26.82);
+    tl.fromTo("#cap-024-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 27.94);
+    tl.fromTo("#cap-025-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 28.66);
+    tl.fromTo("#cap-026-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 30.38);
+    tl.fromTo("#cap-027-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 31.42);
+    tl.fromTo("#cap-028-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 32.94);
+    tl.fromTo("#cap-029-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 34.22);
+    tl.fromTo("#cap-030-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 34.78);
+    tl.fromTo("#cap-031-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 36.28);
+    tl.fromTo("#cap-032-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 37.32);
+    tl.fromTo("#cap-033-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 38.44);
+    tl.fromTo("#cap-034-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 40.12);
+    tl.fromTo("#cap-035-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 41);
+    tl.fromTo("#cap-036-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 41.88);
+    tl.fromTo("#cap-037-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 42.76);
+    tl.fromTo("#cap-038-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 43.96);
+    tl.fromTo("#cap-039-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 44.68);
+    tl.fromTo("#cap-040-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 45.8);
+    tl.fromTo("#cap-041-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 46.68);
+    tl.fromTo("#cap-042-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 47.48);
+    tl.fromTo("#cap-043-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 49.28);
+    tl.fromTo("#cap-044-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 50.4);
+    tl.fromTo("#cap-045-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 51.2);
+    tl.fromTo("#cap-046-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 52.72);
+    tl.fromTo("#cap-047-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 53.6);
+    tl.fromTo("#cap-048-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 54.64);
+    tl.fromTo("#cap-049-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 55.92);
+    tl.fromTo("#cap-050-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 57.58);
+    tl.fromTo("#cap-051-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 59.34);
+    tl.fromTo("#cap-052-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 60.94);
+    tl.fromTo("#cap-053-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 62.22);
+    tl.fromTo("#cap-054-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 64.38);
+    tl.fromTo("#cap-055-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 65.42);
+    tl.fromTo("#cap-056-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 67.18);
+    tl.fromTo("#cap-057-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 68.14);
+    tl.fromTo("#cap-058-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 70.08);
+    tl.fromTo("#cap-059-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 71.44);
+    tl.fromTo("#cap-060-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 72.98);
+    tl.fromTo("#cap-061-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 73.54);
+    tl.fromTo("#cap-062-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 74.58);
+    tl.fromTo("#cap-063-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 75.54);
+    tl.fromTo("#cap-064-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 76.58);
+    tl.fromTo("#cap-065-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 77.14);
+    tl.fromTo("#cap-066-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 77.78);
+    tl.fromTo("#cap-067-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 78.9);
+    tl.fromTo("#cap-068-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 80.1);
+    tl.fromTo("#cap-069-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 80.9);
+    tl.fromTo("#cap-070-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 82.74);
+    tl.fromTo("#cap-071-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 84.58);
+    tl.fromTo("#cap-072-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 85.14);
+    tl.fromTo("#cap-073-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 86.18);
+    tl.fromTo("#cap-074-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 87.14);
+    tl.fromTo("#cap-075-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 89.08);
+    tl.fromTo("#cap-076-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 89.96);
+    tl.fromTo("#cap-077-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 91.88);
+    tl.fromTo("#cap-078-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 93.24);
+    tl.fromTo("#cap-079-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 95.4);
+    tl.fromTo("#cap-080-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 96.68);
+    tl.fromTo("#cap-081-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 98.58);
+    tl.fromTo("#cap-082-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 100.02);
+    tl.fromTo("#cap-083-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 100.9);
+    tl.fromTo("#cap-084-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 102.1);
+    tl.fromTo("#cap-085-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 103.06);
+    tl.fromTo("#cap-086-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 104.02);
+    tl.fromTo("#cap-087-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 105.62);
+    tl.fromTo("#cap-088-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 106.5);
+    tl.fromTo("#cap-089-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 107.94);
+    tl.fromTo("#cap-090-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 108.9);
+    tl.fromTo("#cap-091-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 110.18);
+    tl.fromTo("#cap-092-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 110.98);
+    tl.fromTo("#cap-093-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 111.86);
+    tl.fromTo("#cap-094-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 112.98);
+    tl.fromTo("#cap-095-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 114.18);
+    tl.fromTo("#cap-096-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 115.22);
+    tl.fromTo("#cap-097-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 115.86);
+    tl.fromTo("#cap-098-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 116.5);
+    tl.fromTo("#cap-099-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 117.46);
+    tl.fromTo("#cap-100-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 118.9);
+    tl.fromTo("#cap-101-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 120.34);
+    tl.fromTo("#cap-102-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 121.3);
+    tl.fromTo("#cap-103-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 122.98);
+    tl.fromTo("#cap-104-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 123.94);
+    tl.fromTo("#cap-105-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 125.7);
+    tl.fromTo("#cap-106-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 126.58);
+    tl.fromTo("#cap-107-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 127.38);
+    tl.fromTo("#cap-108-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 128.1);
+    tl.fromTo("#cap-109-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 129.46);
+    tl.fromTo("#cap-110-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 130.1);
+    tl.fromTo("#cap-111-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 130.82);
+    tl.fromTo("#cap-112-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 131.46);
+    tl.fromTo("#cap-113-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 132.42);
+    tl.fromTo("#cap-114-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 133.94);
+    tl.fromTo("#cap-115-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 135.46);
+    tl.fromTo("#cap-116-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 136.98);
+    tl.fromTo("#cap-117-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 137.7);
+    tl.fromTo("#cap-118-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 138.98);
+    tl.fromTo("#cap-119-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 141.06);
+    tl.fromTo("#cap-120-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 142.74);
+    tl.fromTo("#cap-121-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 144.5);
+    tl.fromTo("#cap-122-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 145.94);
+    tl.fromTo("#cap-123-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 147.62);
+    tl.fromTo("#cap-124-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 148.58);
+    tl.fromTo("#cap-125-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 149.86);
+    tl.fromTo("#cap-126-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 151.46);
+    tl.fromTo("#cap-127-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 153.7);
+    tl.fromTo("#cap-128-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 155.06);
+    tl.fromTo("#cap-129-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 155.54);
+    tl.fromTo("#cap-130-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 157.06);
+    tl.fromTo("#cap-131-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 159.28);
+    tl.fromTo("#cap-132-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 160.72);
+    tl.fromTo("#cap-133-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 162.08);
+    tl.fromTo("#cap-134-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 162.96);
+    tl.fromTo("#cap-135-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 163.68);
+    tl.fromTo("#cap-136-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 165.48);
+    tl.fromTo("#cap-137-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 167.08);
+    tl.fromTo("#cap-138-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 168.36);
+    tl.fromTo("#cap-139-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 169.4);
+    tl.fromTo("#cap-140-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 170.28);
+    tl.fromTo("#cap-141-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 171.08);
+    tl.fromTo("#cap-142-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 172.28);
+    tl.fromTo("#cap-143-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 173.68);
+    tl.fromTo("#cap-144-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 174.24);
+    tl.fromTo("#cap-145-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 175.28);
+    tl.fromTo("#cap-146-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 176.16);
+    tl.fromTo("#cap-147-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 177.36);
+    tl.fromTo("#cap-148-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 178.72);
+    tl.fromTo("#cap-149-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 180.88);
+    tl.fromTo("#cap-150-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 182.24);
+    tl.fromTo("#cap-151-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 182.88);
+    tl.fromTo("#cap-152-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 184.8);
+    tl.fromTo("#cap-153-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 186.98);
+    tl.fromTo("#cap-154-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 188.74);
+    tl.fromTo("#cap-155-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 190.1);
+    tl.fromTo("#cap-156-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 191.94);
+    tl.fromTo("#cap-157-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 193.06);
+    tl.fromTo("#cap-158-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 194.26);
+    tl.fromTo("#cap-159-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 195.54);
+    tl.fromTo("#cap-160-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 196.5);
+    tl.fromTo("#cap-161-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 197.62);
+    tl.fromTo("#cap-162-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 198.34);
+    tl.fromTo("#cap-163-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 199.3);
+    tl.fromTo("#cap-164-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 201.08);
+    tl.fromTo("#cap-165-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 201.96);
+    tl.fromTo("#cap-166-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 203.32);
+    tl.fromTo("#cap-167-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 204.12);
+    tl.fromTo("#cap-168-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 205.4);
+    tl.fromTo("#cap-169-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 206.68);
+    tl.fromTo("#cap-170-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 208.36);
+    tl.fromTo("#cap-171-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 210.18);
+    tl.fromTo("#cap-172-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 211.78);
+    tl.fromTo("#cap-173-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 212.42);
+    tl.fromTo("#cap-174-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 213.94);
+    tl.fromTo("#cap-175-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 214.74);
+    tl.fromTo("#cap-176-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 216.66);
+    tl.fromTo("#cap-177-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 217.54);
+    tl.fromTo("#cap-178-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 219.78);
+    tl.fromTo("#cap-179-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 221.3);
+    tl.fromTo("#cap-180-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 222.98);
+    tl.fromTo("#cap-181-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 224.66);
+    tl.fromTo("#cap-182-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 225.38);
+    tl.fromTo("#cap-183-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 226.58);
+    tl.fromTo("#cap-184-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 228.34);
+    tl.fromTo("#cap-185-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 229.06);
+    tl.fromTo("#cap-186-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 230.26);
+    tl.fromTo("#cap-187-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 231.22);
+    tl.fromTo("#cap-188-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 232.58);
+    tl.fromTo("#cap-189-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 234.26);
+    tl.fromTo("#cap-190-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 235.86);
+    tl.fromTo("#cap-191-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 237.3);
+    tl.fromTo("#cap-192-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 238.9);
+    tl.fromTo("#cap-193-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 240.1);
+    tl.fromTo("#cap-194-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 241.14);
+    tl.fromTo("#cap-195-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 242.5);
+    tl.fromTo("#cap-196-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 243.94);
+    tl.fromTo("#cap-197-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 244.82);
+    tl.fromTo("#cap-198-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 246.28);
+    tl.fromTo("#cap-199-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 247.72);
+    tl.fromTo("#cap-200-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 248.44);
+    tl.fromTo("#cap-201-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 250.04);
+    tl.fromTo("#cap-202-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 252.04);
+    tl.fromTo("#cap-203-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 253.56);
+    tl.fromTo("#cap-204-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 254.92);
+    tl.fromTo("#cap-205-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 256.44);
+    tl.fromTo("#cap-206-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 257.72);
+    tl.fromTo("#cap-207-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 259.08);
+    tl.fromTo("#cap-208-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 259.88);
+    tl.fromTo("#cap-209-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 261.68);
+    tl.fromTo("#cap-210-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 263.36);
+    tl.fromTo("#cap-211-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 264);
+    tl.fromTo("#cap-212-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 264.72);
+    tl.fromTo("#cap-213-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 266.56);
+    tl.fromTo("#cap-214-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 268.68);
+    tl.fromTo("#cap-215-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 269.64);
+    tl.fromTo("#cap-216-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 270.6);
+    tl.fromTo("#cap-217-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 271.88);
+    tl.fromTo("#cap-218-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 273.4);
+    tl.fromTo("#cap-219-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 274.84);
+    tl.fromTo("#cap-220-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 275.48);
+    tl.fromTo("#cap-221-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 277.16);
+    tl.fromTo("#cap-222-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 278.2);
+    tl.fromTo("#cap-223-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 279.56);
+    tl.fromTo("#cap-224-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 281.64);
+    tl.fromTo("#cap-225-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 285.06);
+    tl.fromTo("#cap-226-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 286.5);
+    tl.fromTo("#cap-227-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 287.62);
+    tl.fromTo("#cap-228-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 288.42);
+    tl.fromTo("#cap-229-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 289.22);
+    tl.fromTo("#cap-230-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 290.26);
+    tl.fromTo("#cap-231-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 291.22);
+    tl.fromTo("#cap-232-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 292.34);
+    tl.fromTo("#cap-233-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 293.38);
+    tl.fromTo("#cap-234-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 294.5);
+    tl.fromTo("#cap-235-t", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.1, ease: "power2.out" }, 295.78);
+    window.__timelines["captions"] = tl;
+  </script>
+</template>

@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_DISABLE_NIGHTLY_WARNING: "1"
+
+jobs:
+  test:
+    name: Contracts, typecheck, tests, dashboard build, demo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0 (version from packageManager)
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1.9.2
+        with:
+          version: v1.5.0
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Contracts (forge test)
+        working-directory: contracts
+        run: forge test
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Tests
+        run: pnpm -r test
+
+      - name: Dashboard build
+        run: pnpm --filter dashboard build
+
+      # The judge path from a clean checkout: local anvil, forge deploy, node, providers, agents, settlement, proof.
+      - name: Demo
+        run: pnpm demo
+
+  # Opt-in fork suite against HashKey Chain testnet state (read-only RPC; every transaction goes to the local fork).
+  # Non-blocking: it depends on the public testnet RPC being reachable.
+  fork:
+    name: HashKey Chain testnet fork (anvil --fork-url)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0 (version from packageManager)
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1.9.2
+        with:
+          version: v1.5.0
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Fork suite
+        run: pnpm test:fork
+
+  docker:
+    name: Docker images and local stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build images
+        run: docker compose --profile local build
+
+      - name: Local stack comes up healthy
+        run: |
+          docker compose --profile local up -d --wait --wait-timeout 180
+          curl -fsS http://127.0.0.1:8787/healthz
+          curl -fsS -o /dev/null http://127.0.0.1:3000/
+          curl -fsS -H "authorization: Bearer dev-admin-token" http://127.0.0.1:8787/metrics | grep '^payminto_node_info'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --profile local logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose --profile local down -v

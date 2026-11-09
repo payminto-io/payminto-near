@@ -1,0 +1,118 @@
+{
+  "voices": [
+    {
+      "frame": 4,
+      "path": "assets/voice/04.wav",
+      "duration_s": 2.534,
+      "words": [
+        {
+          "id": "w0",
+          "text": "This",
+          "start": 0.08,
+          "end": 0.56
+        },
+        {
+          "id": "w1",
+          "text": "is",
+          "start": 0.72,
+          "end": 1.04
+        },
+        {
+          "id": "w2",
+          "text": "Pay",
+          "start": 1.12,
+          "end": 1.44
+        },
+        {
+          "id": "w3",
+          "text": "minn",
+          "start": 1.44,
+          "end": 1.84
+        },
+        {
+          "id": "w4",
+          "text": "toe",
+          "start": 1.84,
+          "end": 2.24
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 5,
+      "path": "assets/voice/05.wav",
+      "duration_s": 2.22,
+      "words": [
+        {
+          "id": "w0",
+          "text": "This",
+          "start": 0.08,
+          "end": 0.64
+        },
+        {
+          "id": "w1",
+          "text": "is",
+          "start": 0.72,
+          "end": 1.04
+        },
+        {
+          "id": "w2",
+          "text": "Pay",
+          "start": 1.12,
+          "end": 1.36
+        },
+        {
+          "id": "w3",
+          "text": "Mint",
+          "start": 1.36,
+          "end": 1.76
+        },
+        {
+          "id": "w4",
+          "text": "oh",
+          "start": 1.76,
+          "end": 1.76
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 6,
+      "path": "assets/voice/06.wav",
+      "duration_s": 2.116,
+      "words": [
+        {
+          "id": "w0",
+          "text": "This",
+          "start": 0.08,
+          "end": 0.64
+        },
+        {
+          "id": "w1",
+          "text": "is",
+          "start": 0.72,
+          "end": 0.96
+        },
+        {
+          "id": "w2",
+          "text": "Paymin",
+          "start": 0.96,
+          "end": 1.44
+        },
+        {
+          "id": "w3",
+          "text": "toe",
+          "start": 1.44,
+          "end": 2
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    }
+  ]
+}

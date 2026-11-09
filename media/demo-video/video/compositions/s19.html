@@ -1,0 +1,47 @@
+<template>
+
+  <style>
+    #root { position: absolute; inset: 0; background: #0c121b; color: #e6eaf0; font-family: "Inter", sans-serif; overflow: hidden; }
+    #s19-glow { position: absolute; left: -300px; top: -300px; width: 1400px; height: 1400px; border-radius: 50%; background: radial-gradient(circle, rgba(142,162,245,0.20) 0%, rgba(142,162,245,0) 62%); }
+    #s19-wrap { position: absolute; left: 160px; top: 140px; width: 1600px; }
+    #s19-kicker { font-size: 30px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #8ea2f5; }
+    #s19-title { margin-top: 22px; font-size: 80px; line-height: 1.06; font-weight: 900; letter-spacing: -0.03em; max-width: 1500px; }
+    .s19-items { margin-top: 40px; display: flex; flex-direction: column; gap: 16px; }
+    .s19-item { font-size: 38px; line-height: 1.25; color: #c9d1dd; display: flex; gap: 22px; align-items: baseline; }
+    .s19-dot { flex: 0 0 14px; height: 14px; border-radius: 3px; background: #8ea2f5; }
+    .s19-stats { margin-top: 44px; display: flex; gap: 40px; }
+    .s19-stat { flex: 1 1 0; background: #121a26; border: 1px solid #222d3d; border-radius: 18px; padding: 28px 36px; }
+    .s19-stat b { display: block; font-size: 72px; font-weight: 900; letter-spacing: -0.02em; color: #ffffff; }
+    .s19-stat span { display: block; margin-top: 8px; font-size: 28px; color: #95a0b2; }
+    #s19-source { position: absolute; left: 160px; top: 820px; font-size: 28px; color: #8a93a3; }
+    #s19-act { position: absolute; left: 160px; top: 64px; font-size: 28px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #95a0b2; }
+    #s19-snap { position: absolute; inset: 0; background: #2443b8; }
+    .ph { color: #f2b45a; background: rgba(242,180,90,0.12); border: 1px dashed #f2b45a; border-radius: 8px; padding: 0 10px; font-family: "JetBrains Mono", monospace; font-size: 0.8em; }
+    .ph-big .ph, #s19-where .ph, #s19-foot .ph { font-size: 1em; }
+  </style>
+  <div id="root" data-composition-id="s19" data-width="1920" data-height="1080">
+    <div id="s19-glow"></div>
+    <div id="s19-wrap">
+      <div id="s19-kicker">The market</div>
+      <div id="s19-title">Big money, early agents.</div>
+      <div class="s19-stats"><div class="s19-stat" id="s19-stat0"><b>~$316B</b><span>stablecoins in circulation, 12 Jun 2026</span></div><div class="s19-stat" id="s19-stat1"><b>$3-5T</b><span>agentic commerce by 2030 (McKinsey, as reported)</span></div></div>
+      <div class="s19-items"><div class="s19-item" id="s19-item0"><span class="s19-dot"></span><span>Real agent volume is still small today</span></div></div>
+    </div>
+    <div id="s19-source">Source: DefiLlama via Transak; Stellagent; Glenbrook (Artemis)</div>
+    <div id="s19-act">5 investor pitch</div>
+    <div id="s19-snap"></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#s19-glow", { x: 0, y: 0 }, { x: 420, y: 160, duration: 14.1, ease: "none" }, 0);
+    tl.fromTo("#s19-kicker", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.15);
+    tl.fromTo("#s19-title", { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.3);
+    tl.fromTo("#s19-stat0", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 3.93);
+    tl.fromTo("#s19-stat1", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 6.81);
+    tl.fromTo("#s19-item0", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 10.57);
+    tl.fromTo("#s19-source", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 1.4);
+    tl.fromTo("#s19-snap", { x: 0 }, { x: -1920, duration: 0.35, ease: "power4.in" }, 0);
+    tl.fromTo("#s19-act", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.3);
+    window.__timelines["s19"] = tl;
+  </script>
+</template>

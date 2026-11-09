@@ -1,0 +1,100 @@
+{
+  "measuredAt": "2026-10-28T22:13:24.440Z",
+  "environment": "anvil (local), solc 0.8.24 optimizer 200 runs, MockStablecoin (OpenZeppelin ERC-20)",
+  "callsPerClaim": 10,
+  "l1FeeSource": {
+    "rpc": "https://mainnet.hsk.xyz",
+    "chainId": 177,
+    "block": "29439234",
+    "oracle": "0x420000000000000000000000000000000000000F"
+  },
+  "erc20Transfer": {
+    "cold": "51544",
+    "warm": "34444",
+    "l1FeeWei": "4764773258871"
+  },
+  "openMandate": "156326",
+  "openMandateWithPermit": "213190",
+  "settleBatch": [
+    {
+      "claims": 1,
+      "calls": 10,
+      "kind": "first",
+      "gasUsed": "232212",
+      "transfers": 1,
+      "calldataBytes": 516,
+      "gasPerClaim": "232212",
+      "l1FeeWei": "12718104193939"
+    },
+    {
+      "claims": 1,
+      "calls": 10,
+      "kind": "repeat",
+      "gasUsed": "180912",
+      "transfers": 1,
+      "calldataBytes": 516,
+      "gasPerClaim": "180912",
+      "l1FeeWei": "12718104193939"
+    },
+    {
+      "claims": 2,
+      "calls": 20,
+      "kind": "first",
+      "gasUsed": "321218",
+      "transfers": 2,
+      "calldataBytes": 868,
+      "gasPerClaim": "160609",
+      "l1FeeWei": "18975704738681"
+    },
+    {
+      "claims": 2,
+      "calls": 20,
+      "kind": "repeat",
+      "gasUsed": "233764",
+      "transfers": 2,
+      "calldataBytes": 868,
+      "gasPerClaim": "116882",
+      "l1FeeWei": "18856132753749"
+    },
+    {
+      "claims": 16,
+      "calls": 160,
+      "kind": "first",
+      "gasUsed": "1199449",
+      "transfers": 13,
+      "calldataBytes": 5796,
+      "gasPerClaim": "74965",
+      "l1FeeWei": "82348856752307"
+    },
+    {
+      "claims": 16,
+      "calls": 160,
+      "kind": "repeat",
+      "gasUsed": "772093",
+      "transfers": 13,
+      "calldataBytes": 5796,
+      "gasPerClaim": "48255",
+      "l1FeeWei": "82109712782444"
+    },
+    {
+      "claims": 64,
+      "calls": 640,
+      "kind": "first",
+      "gasUsed": "2847172",
+      "transfers": 15,
+      "calldataBytes": 22692,
+      "gasPerClaim": "44487",
+      "l1FeeWei": "274979324476746"
+    },
+    {
+      "claims": 64,
+      "calls": 640,
+      "kind": "repeat",
+      "gasUsed": "1907140",
+      "transfers": 15,
+      "calldataBytes": 22692,
+      "gasPerClaim": "29799",
+      "l1FeeWei": "271511736913736"
+    }
+  ]
+}

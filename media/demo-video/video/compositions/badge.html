@@ -1,0 +1,16 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; pointer-events: none; }
+    .badge { position: absolute; right: 120px; top: 70px; padding: 12px 22px; border-radius: 999px; background: rgba(12,18,27,0.9); border: 2px solid #f2b45a; color: #f2b45a; font-family: "Inter", sans-serif; font-size: 28px; font-weight: 700; letter-spacing: 0.04em; }
+  </style>
+  <div id="root" data-composition-id="badge" data-width="1920" data-height="1080">
+    <div id="badge-a" class="clip badge" data-start="0" data-duration="116.9" data-track-index="0"><span id="badge-a-t">Testnet - tokens have no value</span></div>
+    <div id="badge-b" class="clip badge" data-start="198.6" data-duration="16.3" data-track-index="1"><span id="badge-b-t">Testnet - tokens have no value</span></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#badge-a-t", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.4);
+    tl.fromTo("#badge-b-t", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 199);
+    window.__timelines["badge"] = tl;
+  </script>
+</template>

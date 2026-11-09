@@ -1,0 +1,12 @@
+{
+  "name": "payminto-demo-record",
+  "private": true,
+  "type": "module",
+  "description": "Recording harness for the Payminto demo video shots (see ../SHOTLIST.md).",
+  "scripts": {
+    "shot": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  }
+}

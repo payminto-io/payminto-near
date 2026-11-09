@@ -1,0 +1,273 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Payminto Clearing
+  A clearinghouse console: cool paper surfaces, one cobalt accent for action,
+  and three quiet semantic colours that only ever mean settled, waiting or refused.
+*/
+
+:root {
+  --radius: 0.5rem;
+
+  --background: #f3f4f6;
+  --foreground: #0e1726;
+  --card: #ffffff;
+  --card-foreground: #0e1726;
+  --popover: #ffffff;
+  --popover-foreground: #0e1726;
+  --primary: #2443b8;
+  --primary-foreground: #ffffff;
+  --secondary: #eceef2;
+  --secondary-foreground: #0e1726;
+  --muted: #eef0f3;
+  --muted-foreground: #586274;
+  --accent: #e9edf8;
+  --accent-foreground: #1b2f86;
+  --destructive: #b42318;
+  --border: #e1e4ea;
+  --input: #d6dae2;
+  --ring: #2443b8;
+
+  --subtle: #8a93a3;
+  --rail: #fafbfc;
+  --positive: #0b7a55;
+  --positive-soft: #e3f4ec;
+  --warning: #915400;
+  --warning-soft: #fbf0dc;
+  --negative: #b42318;
+  --negative-soft: #fbe9e7;
+  --info-soft: #e7ecfa;
+
+  --flow-1: #2443b8;
+  --flow-2: #008a7b;
+  --flow-3: #7a4fc2;
+  --flow-4: #b2601a;
+  --flow-5: #b23a78;
+  --flow-node: #0e1726;
+
+  --chart-bar: #2443b8;
+  --chart-line: #2443b8;
+  --chart-grid: #e1e4ea;
+  --chart-axis: #8a93a3;
+  --chart-cursor: #eef0f3;
+}
+
+.dark {
+  --background: #0c121b;
+  --foreground: #e6eaf0;
+  --card: #121a26;
+  --card-foreground: #e6eaf0;
+  --popover: #151e2c;
+  --popover-foreground: #e6eaf0;
+  --primary: #8ea2f5;
+  --primary-foreground: #0c121b;
+  --secondary: #1b2533;
+  --secondary-foreground: #e6eaf0;
+  --muted: #182231;
+  --muted-foreground: #95a0b2;
+  --accent: #1c2843;
+  --accent-foreground: #c9d3fb;
+  --destructive: #f07a6e;
+  --border: #222d3d;
+  --input: #2a3648;
+  --ring: #8ea2f5;
+
+  --subtle: #6d788b;
+  --rail: #0f1620;
+  --positive: #45c695;
+  --positive-soft: #10291f;
+  --warning: #e6ab48;
+  --warning-soft: #2b2112;
+  --negative: #f2857a;
+  --negative-soft: #2e1715;
+  --info-soft: #182446;
+
+  --flow-1: #7088ea;
+  --flow-2: #20a594;
+  --flow-3: #a07fe0;
+  --flow-4: #c97a36;
+  --flow-5: #d0609a;
+  --flow-node: #e6eaf0;
+
+  --chart-bar: #7088ea;
+  --chart-line: #8ea2f5;
+  --chart-grid: #222d3d;
+  --chart-axis: #6d788b;
+  --chart-cursor: #182231;
+}
+
+@theme inline {
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-subtle: var(--subtle);
+  --color-rail: var(--rail);
+  --color-positive: var(--positive);
+  --color-positive-soft: var(--positive-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-negative: var(--negative);
+  --color-negative-soft: var(--negative-soft);
+  --color-info-soft: var(--info-soft);
+  --color-flow-1: var(--flow-1);
+  --color-flow-2: var(--flow-2);
+  --color-flow-3: var(--flow-3);
+  --color-flow-4: var(--flow-4);
+  --color-flow-5: var(--flow-5);
+
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "ss02" 1;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Money and counts line up in columns. */
+  .num {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+  .hash {
+    font-family: var(--font-plex-mono), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+@keyframes row-in {
+  from {
+    background-color: color-mix(in oklab, var(--primary) 10%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.row-in {
+  animation: row-in 1.6s ease-out;
+}
+
+/*
+  Dashboard micro-interactions: 150 to 250 ms, ease-out, opacity and small shifts only.
+  The reduced-motion rule above shortens every one of them to nothing.
+*/
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.page-in {
+  animation: page-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* Children of a .stagger list fade up one after another. */
+.stagger > * {
+  animation: rise-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.stagger > :nth-child(2) { animation-delay: 30ms; }
+.stagger > :nth-child(3) { animation-delay: 60ms; }
+.stagger > :nth-child(4) { animation-delay: 90ms; }
+.stagger > :nth-child(5) { animation-delay: 120ms; }
+.stagger > :nth-child(n + 6) { animation-delay: 150ms; }
+@keyframes copied-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.copied-pop {
+  animation: copied-pop 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes shake-x {
+  0%, 100% { transform: none; }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+.shake-x {
+  animation: shake-x 240ms ease-out;
+}
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}

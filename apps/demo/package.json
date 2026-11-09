@@ -1,0 +1,34 @@
+{
+  "name": "@payminto/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Three paid provider services, agents and the scripted judge demo for Payminto Clearing",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "demo": "node src/cli.ts run",
+    "demo:stage": "node src/cli.ts stage",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "fund:testnet": "node --disable-warning=ExperimentalWarning scripts/fund-testnet.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@payminto/mcp": "workspace:*",
+    "@payminto/models": "workspace:*",
+    "@payminto/node": "workspace:*",
+    "@payminto/protocol": "workspace:*",
+    "@payminto/sdk": "workspace:*",
+    "hono": "^4.13.13",
+    "viem": "^2.57.10",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

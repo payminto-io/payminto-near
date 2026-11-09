@@ -1,0 +1,60 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; pointer-events: none; font-family: "Inter", sans-serif; }
+    .ov-badge { position: absolute; right: 120px; top: 70px; padding: 12px 22px; border-radius: 999px; background: rgba(12,18,27,0.9); border: 2px solid #f2b45a; color: #f2b45a; font-size: 28px; font-weight: 700; }
+    .ov-badge-low { top: 860px; }
+    .ov-snap { position: absolute; inset: 0; overflow: hidden; }
+    .ov-snapi { position: absolute; inset: 0; background: #2443b8; }
+    .ov-sec { position: absolute; left: 120px; top: 70px; padding: 12px 24px; border-radius: 14px; background: #2443b8; color: #ffffff; font-size: 30px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+    .ov-lab { position: absolute; left: 120px; top: 800px; padding: 12px 22px; border-radius: 14px; background: rgba(12,18,27,0.9); color: #ffffff; font-size: 30px; font-weight: 700; border: 2px solid #2443b8; }
+    .ov-spd { position: absolute; right: 120px; top: 150px; padding: 10px 18px; border-radius: 999px; background: rgba(12,18,27,0.9); color: #e6eaf0; font-size: 28px; font-weight: 700; }
+  </style>
+  <div id="root" data-composition-id="overlay" data-width="1920" data-height="1080">
+    <div id="ov-badge" class="clip ov-badge" data-start="25.5" data-duration="103" data-track-index="0"><span id="ov-badge-t">Testnet - tokens have no value</span></div>
+    <div id="ov-badge2" class="clip ov-badge ov-badge-low" data-start="128.5" data-duration="6.1" data-track-index="5"><span id="ov-badge2-t">Testnet - tokens have no value</span></div>
+    <div id="ov-t03-snap" class="clip ov-snap" data-start="25.5" data-duration="0.4" data-track-index="1"><div id="ov-t03-snapi" class="ov-snapi"></div></div>
+    <div id="ov-t03-sec" class="clip ov-sec" data-start="25.80" data-duration="2.6" data-track-index="2"><span id="ov-t03-sect">People pay</span></div>
+    <div id="ov-t03-lab" class="clip ov-lab" data-start="28.4" data-duration="10.9" data-track-index="3"><span id="ov-t03-labt">Paid in test USDC, fee split on chain</span></div>
+    <div id="ov-t04-snap" class="clip ov-snap" data-start="39.6" data-duration="0.4" data-track-index="1"><div id="ov-t04-snapi" class="ov-snapi"></div></div>
+    <div id="ov-t04-sec" class="clip ov-sec" data-start="39.90" data-duration="2.6" data-track-index="2"><span id="ov-t04-sect">AI agents</span></div>
+    <div id="ov-t04-lab" class="clip ov-lab" data-start="42.5" data-duration="6.3" data-track-index="3"><span id="ov-t04-labt">Your own model key: DeepSeek V3.1 via Replicate</span></div>
+    <div id="ov-t05-lab" class="clip ov-lab" data-start="49.5" data-duration="10.5" data-track-index="3"><span id="ov-t05-labt">Budget: caps, allowed services, refusals by rule</span></div>
+    <div id="ov-t06-spd0" class="clip ov-spd" data-start="60.3" data-duration="2.4" data-track-index="4"><span id="ov-t06-spd0t">Sped up 5.5x</span></div>
+    <div id="ov-t07-lab" class="clip ov-lab" data-start="70.3" data-duration="13.3" data-track-index="3"><span id="ov-t07-labt">Agent pays agent</span></div>
+    <div id="ov-t08-snap" class="clip ov-snap" data-start="83.9" data-duration="0.4" data-track-index="1"><div id="ov-t08-snapi" class="ov-snapi"></div></div>
+    <div id="ov-t08-sec" class="clip ov-sec" data-start="84.20" data-duration="2.6" data-track-index="2"><span id="ov-t08-sect">Settlement on HashKey Chain</span></div>
+    <div id="ov-t08-lab" class="clip ov-lab" data-start="86.8" data-duration="15.8" data-track-index="3"><span id="ov-t08-labt">60 charges, a few transfers, one transaction</span></div>
+    <div id="ov-t09-lab" class="clip ov-lab" data-start="107.3" data-duration="5.5" data-track-index="3"><span id="ov-t09-labt">One call, proven on chain</span></div>
+    <div id="ov-t10-snap" class="clip ov-snap" data-start="113.1" data-duration="0.4" data-track-index="1"><div id="ov-t10-snapi" class="ov-snapi"></div></div>
+    <div id="ov-t10-sec" class="clip ov-sec" data-start="113.40" data-duration="2.6" data-track-index="2"><span id="ov-t10-sect">Back office</span></div>
+    <div id="ov-t10-lab" class="clip ov-lab" data-start="116" data-duration="5" data-track-index="3"><span id="ov-t10-labt">Ops agent answers from real payments</span></div>
+    <div id="ov-t11-lab" class="clip ov-lab" data-start="121.7" data-duration="6.5" data-track-index="3"><span id="ov-t11-labt">Agent requests, a human approves</span></div>
+    <div id="ov-t12-lab" class="clip ov-lab" data-start="128.9" data-duration="5.4" data-track-index="3"><span id="ov-t12-labt">One reconciliation report</span></div>
+    <div id="ov-t14-lab" class="clip ov-lab" data-start="144.6" data-duration="13.1" data-track-index="3"><span id="ov-t14-labt">Clone, paste one line, run your own</span></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#ov-badge2-t", { opacity: 0.6 }, { opacity: 1, duration: 0.3 }, 128.5);
+    tl.fromTo("#ov-badge-t", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 25.9);
+    tl.fromTo("#ov-t03-snapi", { x: 0 }, { x: -1920, duration: 0.35, ease: "power4.in" }, 25.5);
+    tl.fromTo("#ov-t03-sect", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, 25.80);
+    tl.fromTo("#ov-t03-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 28.4);
+    tl.fromTo("#ov-t04-snapi", { x: 0 }, { x: -1920, duration: 0.35, ease: "power4.in" }, 39.6);
+    tl.fromTo("#ov-t04-sect", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, 39.90);
+    tl.fromTo("#ov-t04-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 42.5);
+    tl.fromTo("#ov-t05-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 49.5);
+    tl.fromTo("#ov-t06-spd0t", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 60.3);
+    tl.fromTo("#ov-t07-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 70.3);
+    tl.fromTo("#ov-t08-snapi", { x: 0 }, { x: -1920, duration: 0.35, ease: "power4.in" }, 83.9);
+    tl.fromTo("#ov-t08-sect", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, 84.20);
+    tl.fromTo("#ov-t08-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 86.8);
+    tl.fromTo("#ov-t09-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 107.3);
+    tl.fromTo("#ov-t10-snapi", { x: 0 }, { x: -1920, duration: 0.35, ease: "power4.in" }, 113.1);
+    tl.fromTo("#ov-t10-sect", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, 113.40);
+    tl.fromTo("#ov-t10-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 116);
+    tl.fromTo("#ov-t11-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 121.7);
+    tl.fromTo("#ov-t12-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 128.9);
+    tl.fromTo("#ov-t14-labt", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 144.6);
+    window.__timelines["overlay"] = tl;
+  </script>
+</template>

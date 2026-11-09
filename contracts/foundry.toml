@@ -1,0 +1,32 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.24"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+# Pinned so CREATE2 addresses and explorer verification are reproducible across machines.
+bytecode_hash = "ipfs"
+cbor_metadata = true
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
+
+[profile.default.fuzz]
+runs = 512
+
+[rpc_endpoints]
+hashkey = "https://mainnet.hsk.xyz"
+hashkey_testnet = "https://testnet.hsk.xyz"
+sepolia = "https://ethereum-sepolia-rpc.publicnode.com"
+
+[etherscan]
+hashkey = { key = "verify", chain = 177, url = "https://hsk.blockscout.com/api/" }
+hashkey_testnet = { key = "verify", chain = 133, url = "https://testnet-explorer.hskchain.net/api/" }
+
+[fmt]
+line_length = 120
+
+[lint]
+# Public immutables are ABI getters (implementation(), factory()), and keccak256(abi.encode(...)) stays readable where
+# the inline-assembly saving is a few gas.
+exclude_lints = ["screaming-snake-case-immutable", "asm-keccak256"]

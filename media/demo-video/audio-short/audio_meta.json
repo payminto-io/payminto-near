@@ -1,0 +1,1984 @@
+{
+  "voices": [
+    {
+      "frame": 1,
+      "path": "assets/voice/01.wav",
+      "duration_s": 11.102,
+      "words": [
+        {
+          "id": "w0",
+          "text": "Hi",
+          "start": 0.08,
+          "end": 0.32
+        },
+        {
+          "id": "w1",
+          "text": "there",
+          "start": 0.32,
+          "end": 0.8
+        },
+        {
+          "id": "w2",
+          "text": "this",
+          "start": 1.28,
+          "end": 1.52
+        },
+        {
+          "id": "w3",
+          "text": "is",
+          "start": 1.52,
+          "end": 1.76
+        },
+        {
+          "id": "w4",
+          "text": "Pay",
+          "start": 1.76,
+          "end": 1.92
+        },
+        {
+          "id": "w5",
+          "text": "Mint",
+          "start": 1.92,
+          "end": 2.24
+        },
+        {
+          "id": "w6",
+          "text": "oh",
+          "start": 2.24,
+          "end": 2.4
+        },
+        {
+          "id": "w7",
+          "text": "AI",
+          "start": 3.28,
+          "end": 3.52
+        },
+        {
+          "id": "w8",
+          "text": "agents",
+          "start": 3.68,
+          "end": 4.24
+        },
+        {
+          "id": "w9",
+          "text": "paying",
+          "start": 4.24,
+          "end": 4.56
+        },
+        {
+          "id": "w10",
+          "text": "each",
+          "start": 4.56,
+          "end": 4.8
+        },
+        {
+          "id": "w11",
+          "text": "other",
+          "start": 4.8,
+          "end": 5.2
+        },
+        {
+          "id": "w12",
+          "text": "and",
+          "start": 5.52,
+          "end": 5.68
+        },
+        {
+          "id": "w13",
+          "text": "people",
+          "start": 5.68,
+          "end": 6.08
+        },
+        {
+          "id": "w14",
+          "text": "paying",
+          "start": 6.08,
+          "end": 6.4
+        },
+        {
+          "id": "w15",
+          "text": "a",
+          "start": 6.4,
+          "end": 6.4
+        },
+        {
+          "id": "w16",
+          "text": "business",
+          "start": 6.4,
+          "end": 7.04
+        },
+        {
+          "id": "w17",
+          "text": "on",
+          "start": 7.36,
+          "end": 7.52
+        },
+        {
+          "id": "w18",
+          "text": "a",
+          "start": 7.52,
+          "end": 7.52
+        },
+        {
+          "id": "w19",
+          "text": "server",
+          "start": 7.52,
+          "end": 8
+        },
+        {
+          "id": "w20",
+          "text": "that",
+          "start": 8,
+          "end": 8.16
+        },
+        {
+          "id": "w21",
+          "text": "business",
+          "start": 8.16,
+          "end": 8.64
+        },
+        {
+          "id": "w22",
+          "text": "owns",
+          "start": 8.64,
+          "end": 9.2
+        },
+        {
+          "id": "w23",
+          "text": "settled",
+          "start": 9.36,
+          "end": 9.76
+        },
+        {
+          "id": "w24",
+          "text": "on",
+          "start": 9.76,
+          "end": 9.92
+        },
+        {
+          "id": "w25",
+          "text": "Hash",
+          "start": 9.92,
+          "end": 10.24
+        },
+        {
+          "id": "w26",
+          "text": "Key",
+          "start": 10.24,
+          "end": 10.48
+        },
+        {
+          "id": "w27",
+          "text": "Chain",
+          "start": 10.48,
+          "end": 10.88
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 2,
+      "path": "assets/voice/02.wav",
+      "duration_s": 13.061,
+      "words": [
+        {
+          "id": "w0",
+          "text": "Pay",
+          "start": 0.08,
+          "end": 0.32
+        },
+        {
+          "id": "w1",
+          "text": "Mint",
+          "start": 0.32,
+          "end": 0.64
+        },
+        {
+          "id": "w2",
+          "text": "oh",
+          "start": 0.64,
+          "end": 1.04
+        },
+        {
+          "id": "w3",
+          "text": "is",
+          "start": 1.2,
+          "end": 1.36
+        },
+        {
+          "id": "w4",
+          "text": "a",
+          "start": 1.36,
+          "end": 1.44
+        },
+        {
+          "id": "w5",
+          "text": "payment",
+          "start": 1.44,
+          "end": 1.84
+        },
+        {
+          "id": "w6",
+          "text": "gateway",
+          "start": 1.84,
+          "end": 2.32
+        },
+        {
+          "id": "w7",
+          "text": "you",
+          "start": 2.32,
+          "end": 2.48
+        },
+        {
+          "id": "w8",
+          "text": "run",
+          "start": 2.48,
+          "end": 2.72
+        },
+        {
+          "id": "w9",
+          "text": "on",
+          "start": 2.72,
+          "end": 2.8
+        },
+        {
+          "id": "w10",
+          "text": "your",
+          "start": 2.8,
+          "end": 3.04
+        },
+        {
+          "id": "w11",
+          "text": "own",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "id": "w12",
+          "text": "server",
+          "start": 3.2,
+          "end": 3.68
+        },
+        {
+          "id": "w13",
+          "text": "One",
+          "start": 3.92,
+          "end": 4.16
+        },
+        {
+          "id": "w14",
+          "text": "link",
+          "start": 4.16,
+          "end": 4.48
+        },
+        {
+          "id": "w15",
+          "text": "works",
+          "start": 4.48,
+          "end": 4.8
+        },
+        {
+          "id": "w16",
+          "text": "for",
+          "start": 4.8,
+          "end": 4.96
+        },
+        {
+          "id": "w17",
+          "text": "people",
+          "start": 4.96,
+          "end": 5.44
+        },
+        {
+          "id": "w18",
+          "text": "and",
+          "start": 5.6,
+          "end": 5.76
+        },
+        {
+          "id": "w19",
+          "text": "for",
+          "start": 5.76,
+          "end": 6
+        },
+        {
+          "id": "w20",
+          "text": "AI",
+          "start": 6,
+          "end": 6.16
+        },
+        {
+          "id": "w21",
+          "text": "agents",
+          "start": 6.4,
+          "end": 6.96
+        },
+        {
+          "id": "w22",
+          "text": "The",
+          "start": 7.2,
+          "end": 7.28
+        },
+        {
+          "id": "w23",
+          "text": "money",
+          "start": 7.28,
+          "end": 7.52
+        },
+        {
+          "id": "w24",
+          "text": "goes",
+          "start": 7.52,
+          "end": 7.84
+        },
+        {
+          "id": "w25",
+          "text": "straight",
+          "start": 7.84,
+          "end": 8.16
+        },
+        {
+          "id": "w26",
+          "text": "to",
+          "start": 8.16,
+          "end": 8.24
+        },
+        {
+          "id": "w27",
+          "text": "the",
+          "start": 8.24,
+          "end": 8.32
+        },
+        {
+          "id": "w28",
+          "text": "business's",
+          "start": 8.32,
+          "end": 8.8
+        },
+        {
+          "id": "w29",
+          "text": "wallet",
+          "start": 8.8,
+          "end": 9.28
+        },
+        {
+          "id": "w30",
+          "text": "with",
+          "start": 9.44,
+          "end": 9.68
+        },
+        {
+          "id": "w31",
+          "text": "the",
+          "start": 9.68,
+          "end": 9.76
+        },
+        {
+          "id": "w32",
+          "text": "fee",
+          "start": 9.76,
+          "end": 10.08
+        },
+        {
+          "id": "w33",
+          "text": "split",
+          "start": 10.08,
+          "end": 10.4
+        },
+        {
+          "id": "w34",
+          "text": "on",
+          "start": 10.4,
+          "end": 10.56
+        },
+        {
+          "id": "w35",
+          "text": "chain",
+          "start": 10.56,
+          "end": 11.04
+        },
+        {
+          "id": "w36",
+          "text": "and",
+          "start": 11.2,
+          "end": 11.44
+        },
+        {
+          "id": "w37",
+          "text": "nobody",
+          "start": 11.44,
+          "end": 11.84
+        },
+        {
+          "id": "w38",
+          "text": "in",
+          "start": 11.84,
+          "end": 12
+        },
+        {
+          "id": "w39",
+          "text": "the",
+          "start": 12,
+          "end": 12
+        },
+        {
+          "id": "w40",
+          "text": "middle",
+          "start": 12,
+          "end": 12.32
+        },
+        {
+          "id": "w41",
+          "text": "holds",
+          "start": 12.32,
+          "end": 12.72
+        },
+        {
+          "id": "w42",
+          "text": "it",
+          "start": 12.72,
+          "end": 12.88
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 3,
+      "path": "assets/voice/03.wav",
+      "duration_s": 13.453,
+      "words": [
+        {
+          "id": "w0",
+          "text": "Here",
+          "start": 0.08,
+          "end": 0.32
+        },
+        {
+          "id": "w1",
+          "text": "is",
+          "start": 0.4,
+          "end": 0.48
+        },
+        {
+          "id": "w2",
+          "text": "the",
+          "start": 0.48,
+          "end": 0.64
+        },
+        {
+          "id": "w3",
+          "text": "merchant",
+          "start": 0.64,
+          "end": 1.04
+        },
+        {
+          "id": "w4",
+          "text": "dashboard",
+          "start": 1.04,
+          "end": 1.68
+        },
+        {
+          "id": "w5",
+          "text": "I",
+          "start": 1.92,
+          "end": 2.08
+        },
+        {
+          "id": "w6",
+          "text": "create",
+          "start": 2.08,
+          "end": 2.48
+        },
+        {
+          "id": "w7",
+          "text": "a",
+          "start": 2.48,
+          "end": 2.56
+        },
+        {
+          "id": "w8",
+          "text": "payment",
+          "start": 2.56,
+          "end": 2.88
+        },
+        {
+          "id": "w9",
+          "text": "link",
+          "start": 2.88,
+          "end": 3.2
+        },
+        {
+          "id": "w10",
+          "text": "and",
+          "start": 3.36,
+          "end": 3.52
+        },
+        {
+          "id": "w11",
+          "text": "open",
+          "start": 3.52,
+          "end": 3.84
+        },
+        {
+          "id": "w12",
+          "text": "it",
+          "start": 3.84,
+          "end": 3.92
+        },
+        {
+          "id": "w13",
+          "text": "like",
+          "start": 3.92,
+          "end": 4.16
+        },
+        {
+          "id": "w14",
+          "text": "a",
+          "start": 4.16,
+          "end": 4.16
+        },
+        {
+          "id": "w15",
+          "text": "customer",
+          "start": 4.16,
+          "end": 4.64
+        },
+        {
+          "id": "w16",
+          "text": "would",
+          "start": 4.64,
+          "end": 4.96
+        },
+        {
+          "id": "w17",
+          "text": "One",
+          "start": 5.2,
+          "end": 5.52
+        },
+        {
+          "id": "w18",
+          "text": "wallet",
+          "start": 5.52,
+          "end": 5.84
+        },
+        {
+          "id": "w19",
+          "text": "signature",
+          "start": 5.84,
+          "end": 6.4
+        },
+        {
+          "id": "w20",
+          "text": "and",
+          "start": 6.64,
+          "end": 6.8
+        },
+        {
+          "id": "w21",
+          "text": "it",
+          "start": 6.8,
+          "end": 6.88
+        },
+        {
+          "id": "w22",
+          "text": "is",
+          "start": 6.88,
+          "end": 7.04
+        },
+        {
+          "id": "w23",
+          "text": "paid",
+          "start": 7.04,
+          "end": 7.28
+        },
+        {
+          "id": "w24",
+          "text": "in",
+          "start": 7.28,
+          "end": 7.44
+        },
+        {
+          "id": "w25",
+          "text": "test",
+          "start": 7.44,
+          "end": 7.76
+        },
+        {
+          "id": "w26",
+          "text": "USDC",
+          "start": 7.76,
+          "end": 8.64
+        },
+        {
+          "id": "w27",
+          "text": "on",
+          "start": 8.64,
+          "end": 8.8
+        },
+        {
+          "id": "w28",
+          "text": "Hash",
+          "start": 8.8,
+          "end": 9.12
+        },
+        {
+          "id": "w29",
+          "text": "Key",
+          "start": 9.12,
+          "end": 9.36
+        },
+        {
+          "id": "w30",
+          "text": "Chain",
+          "start": 9.36,
+          "end": 9.68
+        },
+        {
+          "id": "w31",
+          "text": "Testnet",
+          "start": 9.68,
+          "end": 10.32
+        },
+        {
+          "id": "w32",
+          "text": "The",
+          "start": 10.48,
+          "end": 10.64
+        },
+        {
+          "id": "w33",
+          "text": "platform",
+          "start": 10.64,
+          "end": 11.2
+        },
+        {
+          "id": "w34",
+          "text": "fee",
+          "start": 11.2,
+          "end": 11.44
+        },
+        {
+          "id": "w35",
+          "text": "is",
+          "start": 11.44,
+          "end": 11.6
+        },
+        {
+          "id": "w36",
+          "text": "split",
+          "start": 11.6,
+          "end": 11.84
+        },
+        {
+          "id": "w37",
+          "text": "off",
+          "start": 11.84,
+          "end": 12.08
+        },
+        {
+          "id": "w38",
+          "text": "in",
+          "start": 12.08,
+          "end": 12.16
+        },
+        {
+          "id": "w39",
+          "text": "the",
+          "start": 12.16,
+          "end": 12.24
+        },
+        {
+          "id": "w40",
+          "text": "same",
+          "start": 12.24,
+          "end": 12.56
+        },
+        {
+          "id": "w41",
+          "text": "transaction",
+          "start": 12.56,
+          "end": 13.28
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 5,
+      "path": "assets/voice/05.wav",
+      "duration_s": 10.58,
+      "words": [
+        {
+          "id": "w0",
+          "text": "The",
+          "start": 0.08,
+          "end": 0.24
+        },
+        {
+          "id": "w1",
+          "text": "buyer",
+          "start": 0.24,
+          "end": 0.64
+        },
+        {
+          "id": "w2",
+          "text": "agent",
+          "start": 0.72,
+          "end": 0.96
+        },
+        {
+          "id": "w3",
+          "text": "spends",
+          "start": 0.96,
+          "end": 1.44
+        },
+        {
+          "id": "w4",
+          "text": "through",
+          "start": 1.44,
+          "end": 1.6
+        },
+        {
+          "id": "w5",
+          "text": "a",
+          "start": 1.6,
+          "end": 1.6
+        },
+        {
+          "id": "w6",
+          "text": "budget",
+          "start": 1.6,
+          "end": 2.08
+        },
+        {
+          "id": "w7",
+          "text": "a",
+          "start": 2.08,
+          "end": 2.08
+        },
+        {
+          "id": "w8",
+          "text": "total",
+          "start": 2.4,
+          "end": 2.8
+        },
+        {
+          "id": "w9",
+          "text": "cap",
+          "start": 2.8,
+          "end": 3.2
+        },
+        {
+          "id": "w10",
+          "text": "a",
+          "start": 3.2,
+          "end": 3.52
+        },
+        {
+          "id": "w11",
+          "text": "daily",
+          "start": 3.52,
+          "end": 3.92
+        },
+        {
+          "id": "w12",
+          "text": "cap",
+          "start": 3.92,
+          "end": 4.32
+        },
+        {
+          "id": "w13",
+          "text": "and",
+          "start": 4.4,
+          "end": 4.56
+        },
+        {
+          "id": "w14",
+          "text": "the",
+          "start": 4.56,
+          "end": 4.72
+        },
+        {
+          "id": "w15",
+          "text": "only",
+          "start": 4.72,
+          "end": 4.96
+        },
+        {
+          "id": "w16",
+          "text": "services",
+          "start": 4.96,
+          "end": 5.52
+        },
+        {
+          "id": "w17",
+          "text": "it",
+          "start": 5.52,
+          "end": 5.6
+        },
+        {
+          "id": "w18",
+          "text": "may",
+          "start": 5.6,
+          "end": 5.76
+        },
+        {
+          "id": "w19",
+          "text": "pay",
+          "start": 5.76,
+          "end": 6.24
+        },
+        {
+          "id": "w20",
+          "text": "Anything",
+          "start": 6.48,
+          "end": 6.88
+        },
+        {
+          "id": "w21",
+          "text": "outside",
+          "start": 6.88,
+          "end": 7.36
+        },
+        {
+          "id": "w22",
+          "text": "those",
+          "start": 7.36,
+          "end": 7.6
+        },
+        {
+          "id": "w23",
+          "text": "rules",
+          "start": 7.6,
+          "end": 7.92
+        },
+        {
+          "id": "w24",
+          "text": "is",
+          "start": 7.92,
+          "end": 8.08
+        },
+        {
+          "id": "w25",
+          "text": "refused",
+          "start": 8.08,
+          "end": 8.72
+        },
+        {
+          "id": "w26",
+          "text": "and",
+          "start": 8.88,
+          "end": 8.96
+        },
+        {
+          "id": "w27",
+          "text": "the",
+          "start": 8.96,
+          "end": 9.04
+        },
+        {
+          "id": "w28",
+          "text": "refusal",
+          "start": 9.04,
+          "end": 9.52
+        },
+        {
+          "id": "w29",
+          "text": "names",
+          "start": 9.52,
+          "end": 9.84
+        },
+        {
+          "id": "w30",
+          "text": "the",
+          "start": 9.84,
+          "end": 9.92
+        },
+        {
+          "id": "w31",
+          "text": "rule",
+          "start": 9.92,
+          "end": 10.4
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 6,
+      "path": "assets/voice/06.wav",
+      "duration_s": 8.986,
+      "words": [
+        {
+          "id": "w0",
+          "text": "Now",
+          "start": 0.08,
+          "end": 0.48
+        },
+        {
+          "id": "w1",
+          "text": "the",
+          "start": 0.48,
+          "end": 0.56
+        },
+        {
+          "id": "w2",
+          "text": "real",
+          "start": 0.56,
+          "end": 0.8
+        },
+        {
+          "id": "w3",
+          "text": "buyer",
+          "start": 0.8,
+          "end": 1.2
+        },
+        {
+          "id": "w4",
+          "text": "agent",
+          "start": 1.2,
+          "end": 1.52
+        },
+        {
+          "id": "w5",
+          "text": "gets",
+          "start": 1.52,
+          "end": 1.76
+        },
+        {
+          "id": "w6",
+          "text": "a",
+          "start": 1.76,
+          "end": 1.84
+        },
+        {
+          "id": "w7",
+          "text": "task",
+          "start": 1.84,
+          "end": 2.24
+        },
+        {
+          "id": "w8",
+          "text": "in",
+          "start": 2.24,
+          "end": 2.4
+        },
+        {
+          "id": "w9",
+          "text": "plain",
+          "start": 2.4,
+          "end": 2.72
+        },
+        {
+          "id": "w10",
+          "text": "words",
+          "start": 2.72,
+          "end": 3.2
+        },
+        {
+          "id": "w11",
+          "text": "It",
+          "start": 3.36,
+          "end": 3.52
+        },
+        {
+          "id": "w12",
+          "text": "finds",
+          "start": 3.52,
+          "end": 3.84
+        },
+        {
+          "id": "w13",
+          "text": "the",
+          "start": 3.84,
+          "end": 4
+        },
+        {
+          "id": "w14",
+          "text": "paid",
+          "start": 4,
+          "end": 4.24
+        },
+        {
+          "id": "w15",
+          "text": "services",
+          "start": 4.24,
+          "end": 4.72
+        },
+        {
+          "id": "w16",
+          "text": "on",
+          "start": 4.72,
+          "end": 4.88
+        },
+        {
+          "id": "w17",
+          "text": "this",
+          "start": 4.88,
+          "end": 5.04
+        },
+        {
+          "id": "w18",
+          "text": "server",
+          "start": 5.04,
+          "end": 5.52
+        },
+        {
+          "id": "w19",
+          "text": "checks",
+          "start": 5.76,
+          "end": 6
+        },
+        {
+          "id": "w20",
+          "text": "its",
+          "start": 6,
+          "end": 6.16
+        },
+        {
+          "id": "w21",
+          "text": "budget",
+          "start": 6.16,
+          "end": 6.56
+        },
+        {
+          "id": "w22",
+          "text": "and",
+          "start": 6.72,
+          "end": 6.88
+        },
+        {
+          "id": "w23",
+          "text": "pays",
+          "start": 6.88,
+          "end": 7.2
+        },
+        {
+          "id": "w24",
+          "text": "per",
+          "start": 7.2,
+          "end": 7.36
+        },
+        {
+          "id": "w25",
+          "text": "call",
+          "start": 7.36,
+          "end": 7.84
+        },
+        {
+          "id": "w26",
+          "text": "with",
+          "start": 7.92,
+          "end": 8.08
+        },
+        {
+          "id": "w27",
+          "text": "no",
+          "start": 8.08,
+          "end": 8.4
+        },
+        {
+          "id": "w28",
+          "text": "gas",
+          "start": 8.4,
+          "end": 8.8
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 8,
+      "path": "assets/voice/08.wav",
+      "duration_s": 18.364,
+      "words": [
+        {
+          "id": "w0",
+          "text": "Then",
+          "start": 0.08,
+          "end": 0.48
+        },
+        {
+          "id": "w1",
+          "text": "it",
+          "start": 0.48,
+          "end": 0.56
+        },
+        {
+          "id": "w2",
+          "text": "all",
+          "start": 0.56,
+          "end": 0.8
+        },
+        {
+          "id": "w3",
+          "text": "settles",
+          "start": 0.8,
+          "end": 1.28
+        },
+        {
+          "id": "w4",
+          "text": "on",
+          "start": 1.28,
+          "end": 1.44
+        },
+        {
+          "id": "w5",
+          "text": "Hash",
+          "start": 1.44,
+          "end": 1.76
+        },
+        {
+          "id": "w6",
+          "text": "Key",
+          "start": 1.76,
+          "end": 2
+        },
+        {
+          "id": "w7",
+          "text": "Chain",
+          "start": 2,
+          "end": 2.48
+        },
+        {
+          "id": "w8",
+          "text": "Sixty",
+          "start": 2.72,
+          "end": 3.2
+        },
+        {
+          "id": "w9",
+          "text": "charges",
+          "start": 3.2,
+          "end": 3.76
+        },
+        {
+          "id": "w10",
+          "text": "are",
+          "start": 3.76,
+          "end": 3.84
+        },
+        {
+          "id": "w11",
+          "text": "netted",
+          "start": 3.84,
+          "end": 4.16
+        },
+        {
+          "id": "w12",
+          "text": "into",
+          "start": 4.16,
+          "end": 4.4
+        },
+        {
+          "id": "w13",
+          "text": "a",
+          "start": 4.4,
+          "end": 4.48
+        },
+        {
+          "id": "w14",
+          "text": "few",
+          "start": 4.48,
+          "end": 4.72
+        },
+        {
+          "id": "w15",
+          "text": "transfers",
+          "start": 4.72,
+          "end": 5.52
+        },
+        {
+          "id": "w16",
+          "text": "wallet",
+          "start": 5.6,
+          "end": 6
+        },
+        {
+          "id": "w17",
+          "text": "to",
+          "start": 6.08,
+          "end": 6.08
+        },
+        {
+          "id": "w18",
+          "text": "wallet",
+          "start": 6.08,
+          "end": 6.56
+        },
+        {
+          "id": "w19",
+          "text": "in",
+          "start": 6.72,
+          "end": 6.88
+        },
+        {
+          "id": "w20",
+          "text": "one",
+          "start": 6.88,
+          "end": 7.12
+        },
+        {
+          "id": "w21",
+          "text": "transaction",
+          "start": 7.12,
+          "end": 7.92
+        },
+        {
+          "id": "w22",
+          "text": "Each",
+          "start": 8.08,
+          "end": 8.32
+        },
+        {
+          "id": "w23",
+          "text": "transfer",
+          "start": 8.32,
+          "end": 8.88
+        },
+        {
+          "id": "w24",
+          "text": "is",
+          "start": 8.88,
+          "end": 8.96
+        },
+        {
+          "id": "w25",
+          "text": "matched",
+          "start": 8.96,
+          "end": 9.36
+        },
+        {
+          "id": "w26",
+          "text": "to",
+          "start": 9.36,
+          "end": 9.44
+        },
+        {
+          "id": "w27",
+          "text": "what",
+          "start": 9.44,
+          "end": 9.6
+        },
+        {
+          "id": "w28",
+          "text": "was",
+          "start": 9.6,
+          "end": 9.76
+        },
+        {
+          "id": "w29",
+          "text": "owed",
+          "start": 9.76,
+          "end": 10.16
+        },
+        {
+          "id": "w30",
+          "text": "and",
+          "start": 10.32,
+          "end": 10.48
+        },
+        {
+          "id": "w31",
+          "text": "carries",
+          "start": 10.48,
+          "end": 10.88
+        },
+        {
+          "id": "w32",
+          "text": "its",
+          "start": 10.88,
+          "end": 11.04
+        },
+        {
+          "id": "w33",
+          "text": "HSP",
+          "start": 11.04,
+          "end": 11.6
+        },
+        {
+          "id": "w34",
+          "text": "status",
+          "start": 11.68,
+          "end": 12.24
+        },
+        {
+          "id": "w35",
+          "text": "Hash",
+          "start": 12.32,
+          "end": 12.32
+        },
+        {
+          "id": "w36",
+          "text": "Key's",
+          "start": 12.64,
+          "end": 12.88
+        },
+        {
+          "id": "w37",
+          "text": "live",
+          "start": 12.88,
+          "end": 13.2
+        },
+        {
+          "id": "w38",
+          "text": "HSP",
+          "start": 13.2,
+          "end": 13.76
+        },
+        {
+          "id": "w39",
+          "text": "server",
+          "start": 13.76,
+          "end": 14.16
+        },
+        {
+          "id": "w40",
+          "text": "has",
+          "start": 14.24,
+          "end": 14.4
+        },
+        {
+          "id": "w41",
+          "text": "not",
+          "start": 14.4,
+          "end": 14.64
+        },
+        {
+          "id": "w42",
+          "text": "allowlisted",
+          "start": 14.64,
+          "end": 15.2
+        },
+        {
+          "id": "w43",
+          "text": "us",
+          "start": 15.2,
+          "end": 15.36
+        },
+        {
+          "id": "w44",
+          "text": "yet",
+          "start": 15.36,
+          "end": 15.68
+        },
+        {
+          "id": "w45",
+          "text": "so",
+          "start": 15.84,
+          "end": 16
+        },
+        {
+          "id": "w46",
+          "text": "our",
+          "start": 16,
+          "end": 16.16
+        },
+        {
+          "id": "w47",
+          "text": "own",
+          "start": 16.16,
+          "end": 16.32
+        },
+        {
+          "id": "w48",
+          "text": "HSP",
+          "start": 16.32,
+          "end": 16.88
+        },
+        {
+          "id": "w49",
+          "text": "adapter",
+          "start": 16.88,
+          "end": 17.28
+        },
+        {
+          "id": "w50",
+          "text": "checks",
+          "start": 17.28,
+          "end": 17.6
+        },
+        {
+          "id": "w51",
+          "text": "it",
+          "start": 17.6,
+          "end": 17.76
+        },
+        {
+          "id": "w52",
+          "text": "today",
+          "start": 17.76,
+          "end": 18.24
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 13,
+      "path": "assets/voice/13.wav",
+      "duration_s": 8.908,
+      "words": [
+        {
+          "id": "w0",
+          "text": "And",
+          "start": 0.16,
+          "end": 0.32
+        },
+        {
+          "id": "w1",
+          "text": "you",
+          "start": 0.32,
+          "end": 0.56
+        },
+        {
+          "id": "w2",
+          "text": "can",
+          "start": 0.56,
+          "end": 0.8
+        },
+        {
+          "id": "w3",
+          "text": "run",
+          "start": 0.8,
+          "end": 1.04
+        },
+        {
+          "id": "w4",
+          "text": "all",
+          "start": 1.04,
+          "end": 1.28
+        },
+        {
+          "id": "w5",
+          "text": "of",
+          "start": 1.28,
+          "end": 1.44
+        },
+        {
+          "id": "w6",
+          "text": "this",
+          "start": 1.44,
+          "end": 1.6
+        },
+        {
+          "id": "w7",
+          "text": "yourself",
+          "start": 1.6,
+          "end": 2.4
+        },
+        {
+          "id": "w8",
+          "text": "Clone",
+          "start": 2.64,
+          "end": 3.04
+        },
+        {
+          "id": "w9",
+          "text": "the",
+          "start": 3.04,
+          "end": 3.04
+        },
+        {
+          "id": "w10",
+          "text": "repository",
+          "start": 3.04,
+          "end": 3.92
+        },
+        {
+          "id": "w11",
+          "text": "open",
+          "start": 4.24,
+          "end": 4.56
+        },
+        {
+          "id": "w12",
+          "text": "Claude",
+          "start": 4.56,
+          "end": 4.96
+        },
+        {
+          "id": "w13",
+          "text": "Code",
+          "start": 4.96,
+          "end": 5.36
+        },
+        {
+          "id": "w14",
+          "text": "or",
+          "start": 5.52,
+          "end": 5.76
+        },
+        {
+          "id": "w15",
+          "text": "any",
+          "start": 5.84,
+          "end": 6.08
+        },
+        {
+          "id": "w16",
+          "text": "coding",
+          "start": 6.08,
+          "end": 6.48
+        },
+        {
+          "id": "w17",
+          "text": "agent",
+          "start": 6.48,
+          "end": 6.96
+        },
+        {
+          "id": "w18",
+          "text": "and",
+          "start": 7.12,
+          "end": 7.36
+        },
+        {
+          "id": "w19",
+          "text": "paste",
+          "start": 7.36,
+          "end": 7.76
+        },
+        {
+          "id": "w20",
+          "text": "this",
+          "start": 7.76,
+          "end": 8
+        },
+        {
+          "id": "w21",
+          "text": "one",
+          "start": 8,
+          "end": 8.24
+        },
+        {
+          "id": "w22",
+          "text": "line",
+          "start": 8.24,
+          "end": 8.72
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 14,
+      "path": "assets/voice/14.wav",
+      "duration_s": 13.192,
+      "words": [
+        {
+          "id": "w0",
+          "text": "It",
+          "start": 0.08,
+          "end": 0.24
+        },
+        {
+          "id": "w1",
+          "text": "follows",
+          "start": 0.24,
+          "end": 0.8
+        },
+        {
+          "id": "w2",
+          "text": "the",
+          "start": 0.8,
+          "end": 0.88
+        },
+        {
+          "id": "w3",
+          "text": "self",
+          "start": 0.88,
+          "end": 1.2
+        },
+        {
+          "id": "w4",
+          "text": "host",
+          "start": 1.2,
+          "end": 1.52
+        },
+        {
+          "id": "w5",
+          "text": "guide",
+          "start": 1.52,
+          "end": 1.92
+        },
+        {
+          "id": "w6",
+          "text": "installs",
+          "start": 2.24,
+          "end": 2.88
+        },
+        {
+          "id": "w7",
+          "text": "Pay",
+          "start": 2.88,
+          "end": 3.12
+        },
+        {
+          "id": "w8",
+          "text": "Mint",
+          "start": 3.12,
+          "end": 3.36
+        },
+        {
+          "id": "w9",
+          "text": "oh",
+          "start": 3.36,
+          "end": 3.68
+        },
+        {
+          "id": "w10",
+          "text": "and",
+          "start": 3.92,
+          "end": 4.08
+        },
+        {
+          "id": "w11",
+          "text": "runs",
+          "start": 4.08,
+          "end": 4.32
+        },
+        {
+          "id": "w12",
+          "text": "your",
+          "start": 4.32,
+          "end": 4.56
+        },
+        {
+          "id": "w13",
+          "text": "own",
+          "start": 4.56,
+          "end": 4.8
+        },
+        {
+          "id": "w14",
+          "text": "node",
+          "start": 4.8,
+          "end": 5.12
+        },
+        {
+          "id": "w15",
+          "text": "and",
+          "start": 5.12,
+          "end": 5.28
+        },
+        {
+          "id": "w16",
+          "text": "dashboard",
+          "start": 5.28,
+          "end": 5.84
+        },
+        {
+          "id": "w17",
+          "text": "locally",
+          "start": 5.84,
+          "end": 6.4
+        },
+        {
+          "id": "w18",
+          "text": "then",
+          "start": 6.64,
+          "end": 6.96
+        },
+        {
+          "id": "w19",
+          "text": "on",
+          "start": 6.96,
+          "end": 7.12
+        },
+        {
+          "id": "w20",
+          "text": "a",
+          "start": 7.12,
+          "end": 7.2
+        },
+        {
+          "id": "w21",
+          "text": "testnet",
+          "start": 7.2,
+          "end": 7.68
+        },
+        {
+          "id": "w22",
+          "text": "server",
+          "start": 7.68,
+          "end": 8.16
+        },
+        {
+          "id": "w23",
+          "text": "We",
+          "start": 8.48,
+          "end": 8.72
+        },
+        {
+          "id": "w24",
+          "text": "tested",
+          "start": 8.72,
+          "end": 9.12
+        },
+        {
+          "id": "w25",
+          "text": "it",
+          "start": 9.12,
+          "end": 9.28
+        },
+        {
+          "id": "w26",
+          "text": "a",
+          "start": 9.52,
+          "end": 9.6
+        },
+        {
+          "id": "w27",
+          "text": "fresh",
+          "start": 9.6,
+          "end": 10
+        },
+        {
+          "id": "w28",
+          "text": "agent",
+          "start": 10,
+          "end": 10.4
+        },
+        {
+          "id": "w29",
+          "text": "with",
+          "start": 10.4,
+          "end": 10.56
+        },
+        {
+          "id": "w30",
+          "text": "no",
+          "start": 10.56,
+          "end": 10.8
+        },
+        {
+          "id": "w31",
+          "text": "context",
+          "start": 10.8,
+          "end": 11.52
+        },
+        {
+          "id": "w32",
+          "text": "did",
+          "start": 11.68,
+          "end": 11.84
+        },
+        {
+          "id": "w33",
+          "text": "it",
+          "start": 11.84,
+          "end": 11.92
+        },
+        {
+          "id": "w34",
+          "text": "from",
+          "start": 11.92,
+          "end": 12.16
+        },
+        {
+          "id": "w35",
+          "text": "a",
+          "start": 12.16,
+          "end": 12.16
+        },
+        {
+          "id": "w36",
+          "text": "clean",
+          "start": 12.16,
+          "end": 12.56
+        },
+        {
+          "id": "w37",
+          "text": "clone",
+          "start": 12.56,
+          "end": 13.12
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    },
+    {
+      "frame": 15,
+      "path": "assets/voice/15.wav",
+      "duration_s": 10.109,
+      "words": [
+        {
+          "id": "w0",
+          "text": "Pay",
+          "start": 0.08,
+          "end": 0.32
+        },
+        {
+          "id": "w1",
+          "text": "Mint",
+          "start": 0.32,
+          "end": 0.72
+        },
+        {
+          "id": "w2",
+          "text": "oh",
+          "start": 0.72,
+          "end": 1.12
+        },
+        {
+          "id": "w3",
+          "text": "get",
+          "start": 1.28,
+          "end": 1.6
+        },
+        {
+          "id": "w4",
+          "text": "paid",
+          "start": 1.6,
+          "end": 1.92
+        },
+        {
+          "id": "w5",
+          "text": "by",
+          "start": 1.92,
+          "end": 2.16
+        },
+        {
+          "id": "w6",
+          "text": "people",
+          "start": 2.16,
+          "end": 2.56
+        },
+        {
+          "id": "w7",
+          "text": "and",
+          "start": 2.64,
+          "end": 2.8
+        },
+        {
+          "id": "w8",
+          "text": "AI",
+          "start": 3.12,
+          "end": 3.36
+        },
+        {
+          "id": "w9",
+          "text": "agents",
+          "start": 3.44,
+          "end": 4
+        },
+        {
+          "id": "w10",
+          "text": "on",
+          "start": 4.16,
+          "end": 4.32
+        },
+        {
+          "id": "w11",
+          "text": "your",
+          "start": 4.32,
+          "end": 4.56
+        },
+        {
+          "id": "w12",
+          "text": "own",
+          "start": 4.64,
+          "end": 4.88
+        },
+        {
+          "id": "w13",
+          "text": "server",
+          "start": 4.88,
+          "end": 5.44
+        },
+        {
+          "id": "w14",
+          "text": "Live",
+          "start": 5.68,
+          "end": 6
+        },
+        {
+          "id": "w15",
+          "text": "on",
+          "start": 6.08,
+          "end": 6.24
+        },
+        {
+          "id": "w16",
+          "text": "Hash",
+          "start": 6.24,
+          "end": 6.56
+        },
+        {
+          "id": "w17",
+          "text": "Key",
+          "start": 6.56,
+          "end": 6.72
+        },
+        {
+          "id": "w18",
+          "text": "Chain",
+          "start": 6.72,
+          "end": 7.04
+        },
+        {
+          "id": "w19",
+          "text": "Testnet",
+          "start": 7.04,
+          "end": 7.68
+        },
+        {
+          "id": "w20",
+          "text": "with",
+          "start": 7.84,
+          "end": 8.08
+        },
+        {
+          "id": "w21",
+          "text": "test",
+          "start": 8.08,
+          "end": 8.4
+        },
+        {
+          "id": "w22",
+          "text": "tokens",
+          "start": 8.4,
+          "end": 8.8
+        },
+        {
+          "id": "w23",
+          "text": "that",
+          "start": 8.8,
+          "end": 8.88
+        },
+        {
+          "id": "w24",
+          "text": "have",
+          "start": 8.88,
+          "end": 9.12
+        },
+        {
+          "id": "w25",
+          "text": "no",
+          "start": 9.12,
+          "end": 9.36
+        },
+        {
+          "id": "w26",
+          "text": "value",
+          "start": 9.36,
+          "end": 9.92
+        }
+      ],
+      "provider": "fish",
+      "voice": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
+      "model": "s2.1-pro-free"
+    }
+  ]
+}
