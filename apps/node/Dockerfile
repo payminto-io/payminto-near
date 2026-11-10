@@ -6,23 +6,24 @@
 
 ARG NODE_VERSION=22.23.4
 
+# Every workspace manifest, found rather than listed, so a new package can never be left out of the install.
+FROM node:${NODE_VERSION}-bookworm-slim AS manifests
+WORKDIR /src
+COPY . .
+RUN mkdir /manifests \
+ && find . -name package.json -not -path "*/node_modules/*" -print0 | tar --null -cf - -T - | tar -xf - -C /manifests
+
 FROM node:${NODE_VERSION}-bookworm-slim AS deps
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 WORKDIR /app
-# Every workspace manifest, so the lockfile matches; only the node and its dependencies are installed.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/protocol/package.json packages/protocol/
-COPY packages/chain/package.json packages/chain/
-COPY packages/sdk/package.json packages/sdk/
-COPY packages/models/package.json packages/models/
-COPY apps/node/package.json apps/node/
-COPY apps/dashboard/package.json apps/dashboard/
-COPY apps/mcp/package.json apps/mcp/
-COPY apps/demo/package.json apps/demo/
-COPY apps/agent/package.json apps/agent/
+COPY --from=manifests /manifests/ ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --prod --frozen-lockfile --filter "@payminto/node..."
+# The sources of every shared package (the node imports several of them) and of the node itself.
+COPY packages packages
+COPY apps/node apps/node
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 ENV NODE_ENV=production \
@@ -33,23 +34,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=deps /app/package.json /app/pnpm-workspace.yaml ./
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
-COPY --from=deps /app/packages/chain/node_modules ./packages/chain/node_modules
-COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
-COPY --from=deps /app/packages/models/node_modules ./packages/models/node_modules
-COPY --from=deps /app/apps/node/node_modules ./apps/node/node_modules
-COPY packages/protocol/package.json packages/protocol/
-COPY packages/chain/package.json packages/chain/
-COPY packages/protocol/src packages/protocol/src
-COPY packages/chain/src packages/chain/src
-COPY packages/sdk/package.json packages/sdk/
-COPY packages/sdk/src packages/sdk/src
-COPY packages/models/package.json packages/models/
-COPY packages/models/src packages/models/src
-COPY apps/node/package.json apps/node/
-COPY apps/node/src apps/node/src
-COPY apps/node/migrations apps/node/migrations
-COPY apps/node/scripts apps/node/scripts
+COPY --from=deps /app/packages ./packages
+COPY --from=deps /app/apps/node ./apps/node
 RUN mkdir -p /data \
  && chown -R node:node /data
 USER node

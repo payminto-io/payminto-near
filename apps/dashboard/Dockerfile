@@ -5,24 +5,23 @@
 
 ARG NODE_VERSION=22.23.4
 
+# Every workspace manifest, found rather than listed, so a new package can never be left out of the install.
+FROM node:${NODE_VERSION}-bookworm-slim AS manifests
+WORKDIR /src
+COPY . .
+RUN mkdir /manifests \
+ && find . -name package.json -not -path "*/node_modules/*" -print0 | tar --null -cf - -T - | tar -xf - -C /manifests
+
 FROM node:${NODE_VERSION}-bookworm-slim AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 NEXT_TELEMETRY_DISABLED=1
 RUN corepack enable
 WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/protocol/package.json packages/protocol/
-COPY packages/chain/package.json packages/chain/
-COPY packages/sdk/package.json packages/sdk/
-COPY packages/models/package.json packages/models/
-COPY apps/node/package.json apps/node/
-COPY apps/dashboard/package.json apps/dashboard/
-COPY apps/mcp/package.json apps/mcp/
-COPY apps/demo/package.json apps/demo/
-COPY apps/agent/package.json apps/agent/
+COPY --from=manifests /manifests/ ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --filter "dashboard..."
-COPY packages/protocol packages/protocol
-COPY packages/chain packages/chain
+# The sources of every shared package (the dashboard imports several of them) and of the dashboard itself.
+COPY packages packages
 COPY apps/dashboard apps/dashboard
 ARG NEXT_PUBLIC_NODE_URL=http://localhost:8787
 ENV NEXT_PUBLIC_NODE_URL=${NEXT_PUBLIC_NODE_URL} NEXT_OUTPUT=standalone
