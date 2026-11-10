@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-labelledby="t d">
+  <title id="t">Payminto architecture</title>
+  <desc id="d">The dashboard talks to the clearing node and to the hub contract through the owner's NEAR wallet. An AI agent pays a seller API per call with vouchers, the seller checks each voucher with the clearing node, and the node settles netted batches and payouts on the locked hub contract. A seller can settle on its own if the node is gone. A gas relayer pays for an owner's revoke.</desc>
+  <style>
+    .bg { fill: #ffffff; stroke: #e1e4ea; }
+    .box { fill: #ffffff; stroke: #2443b8; stroke-width: 1.5; }
+    .hub { fill: #2443b8; stroke: #2443b8; }
+    .opt { fill: #ffffff; stroke: #8b93a3; stroke-width: 1.3; stroke-dasharray: 6 4; }
+    .msg { stroke: #0e1726; stroke-width: 1.6; fill: none; }
+    .alt { stroke: #5b6475; stroke-width: 1.5; fill: none; stroke-dasharray: 6 4; }
+    .ah { fill: #0e1726; }
+    .ahr { fill: #5b6475; }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0e1726; }
+    .t { font-size: 16px; font-weight: 600; text-anchor: middle; }
+    .s { font-size: 12.5px; text-anchor: middle; fill: #4a5363; }
+    .tw { font-size: 16px; font-weight: 600; text-anchor: middle; fill: #ffffff; }
+    .sw { font-size: 12.5px; text-anchor: middle; fill: #dfe5fb; }
+    .l { font-size: 12.5px; text-anchor: middle; }
+    .lr { font-size: 12.5px; text-anchor: middle; fill: #4a5363; }
+    .cap { font-size: 12px; font-weight: 600; fill: #5b6475; letter-spacing: 0.04em; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #121a26; stroke: #263142; }
+      .box { fill: #121a26; stroke: #8ea2f5; }
+      .hub { fill: #8ea2f5; stroke: #8ea2f5; }
+      .opt { fill: #121a26; stroke: #6b7586; }
+      .msg { stroke: #e6eaf0; }
+      .alt { stroke: #9aa4b5; }
+      .ah { fill: #e6eaf0; }
+      .ahr { fill: #9aa4b5; }
+      text { fill: #e6eaf0; }
+      .s, .lr { fill: #aab3c2; }
+      .tw { fill: #0c121b; }
+      .sw { fill: #1f2a44; }
+      .cap { fill: #9aa4b5; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="959" height="539" rx="14"/>
+
+  <text class="cap" x="24" y="34">PEOPLE</text>
+  <text class="cap" x="24" y="200">EACH CALL, OFF CHAIN</text>
+  <text class="cap" x="24" y="386">ON NEAR</text>
+
+  <!-- Dashboard -->
+  <rect class="box" x="365" y="44" width="300" height="84" rx="10"/>
+  <text class="t" x="515" y="74">Dashboard + NEAR wallet</text>
+  <text class="s" x="515" y="95">owners: Budgets, payee approvals, revoke</text>
+  <text class="s" x="515" y="113">netting, proofs, checkout, payouts</text>
+
+  <!-- Agent -->
+  <rect class="box" x="20" y="212" width="230" height="92" rx="10"/>
+  <text class="t" x="135" y="242">AI agent</text>
+  <text class="s" x="135" y="263">SDK or MCP wallet</text>
+  <text class="s" x="135" y="281">checks its Budget, signs vouchers</text>
+
+  <!-- Seller -->
+  <rect class="box" x="365" y="212" width="230" height="92" rx="10"/>
+  <text class="t" x="480" y="242">Seller API</text>
+  <text class="s" x="480" y="263">paywall SDK, x402 v2</text>
+  <text class="s" x="480" y="281">answers 402, serves the data</text>
+
+  <!-- Node -->
+  <rect class="box" x="710" y="212" width="230" height="92" rx="10"/>
+  <text class="t" x="825" y="242">Clearing node</text>
+  <text class="s" x="825" y="263">policy engine, payee check</text>
+  <text class="s" x="825" y="281">ledger, netting, live events</text>
+
+  <!-- Relayer -->
+  <rect class="opt" x="20" y="400" width="230" height="92" rx="10"/>
+  <text class="t" x="135" y="430">Gas relayer</text>
+  <text class="s" x="135" y="451">NEP-366, hub calls only</text>
+  <text class="s" x="135" y="469">revoke without holding NEAR</text>
+
+  <!-- Hub -->
+  <rect class="hub" x="365" y="400" width="575" height="112" rx="10"/>
+  <text class="tw" x="652" y="432">Hub contract (Rust, locked: no access keys)</text>
+  <text class="sw" x="652" y="456">Budgets with USDC escrow · settle_batch re-checks every voucher signature</text>
+  <text class="sw" x="652" y="476">and the net amounts · a Merkle root per batch · settle_own · payout</text>
+
+  <!-- agent -> seller -->
+  <text class="l" x="314" y="248">pays</text>
+  <text class="l" x="314" y="264">per call</text>
+  <line class="msg" x1="252" y1="276" x2="361" y2="276" marker-end="url(#a)"/>
+
+  <!-- seller -> node -->
+  <text class="l" x="652" y="248">verify,</text>
+  <text class="l" x="652" y="264">accept</text>
+  <line class="msg" x1="597" y1="276" x2="706" y2="276" marker-end="url(#a)"/>
+
+  <!-- dashboard -> node -->
+  <path class="msg" d="M667,86 L825,86 L825,208" marker-end="url(#a)"/>
+  <text class="l" x="750" y="76">API, live events</text>
+
+  <!-- dashboard -> hub through the wallet -->
+  <path class="msg" d="M363,86 L262,86 L262,362 L400,362 L400,396" marker-end="url(#a)"/>
+  <text class="l" x="250" y="72" style="text-anchor:end">wallet: open, fund, revoke</text>
+  <text class="lr" x="250" y="90" style="text-anchor:end">proofs read from chain</text>
+
+  <!-- node -> hub -->
+  <path class="msg" d="M825,306 L825,396" marker-end="url(#a)"/>
+  <text class="l" x="835" y="340" style="text-anchor:start">settle_batch,</text>
+  <text class="l" x="835" y="356" style="text-anchor:start">payout</text>
+
+  <!-- seller -> hub (exit) -->
+  <path class="alt" d="M560,306 L560,396" marker-end="url(#r)"/>
+  <text class="lr" x="570" y="340" style="text-anchor:start">settle_own,</text>
+  <text class="lr" x="570" y="356" style="text-anchor:start">if the node is gone</text>
+
+  <!-- relayer -> hub -->
+  <line class="alt" x1="252" y1="446" x2="361" y2="446" marker-end="url(#r)"/>
+  <text class="lr" x="314" y="436">pays gas</text>
+</svg>

@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640" width="960" height="640" role="img" aria-labelledby="t d">
+  <title id="t">How one paid call works in Payminto</title>
+  <desc id="d">The owner opens a Budget with USDC escrow on the NEAR hub. Each call is paid off chain with a signed voucher that the clearing node checks. Many calls settle in one netted transaction on the hub, which stores a Merkle root so anyone can prove a single call.</desc>
+  <style>
+    .bg { fill: #ffffff; stroke: #e1e4ea; }
+    .band { fill: #f3f4f6; }
+    .band2 { fill: #eef1fc; }
+    .head { fill: #ffffff; stroke: #2443b8; stroke-width: 1.5; }
+    .hubhead { fill: #2443b8; stroke: #2443b8; }
+    .lane { stroke: #c4c9d4; stroke-width: 1.2; stroke-dasharray: 4 5; }
+    .msg { stroke: #0e1726; stroke-width: 1.6; fill: none; }
+    .ret { stroke: #5b6475; stroke-width: 1.4; fill: none; stroke-dasharray: 6 4; }
+    .chain { stroke: #2443b8; stroke-width: 2; fill: none; }
+    .ah { fill: #0e1726; }
+    .ahr { fill: #5b6475; }
+    .ahc { fill: #2443b8; }
+    .note { fill: #fff8e6; stroke: #e0b44c; }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0e1726; }
+    .h { font-size: 15px; font-weight: 600; text-anchor: middle; }
+    .hw { font-size: 15px; font-weight: 600; text-anchor: middle; fill: #ffffff; }
+    .l { font-size: 13px; text-anchor: middle; }
+    .lr { font-size: 13px; text-anchor: middle; fill: #4a5363; }
+    .lc { font-size: 13px; text-anchor: middle; fill: #2443b8; font-weight: 600; }
+    .n { font-size: 12.5px; text-anchor: middle; }
+    .bandlabel { font-size: 12px; font-weight: 600; fill: #5b6475; letter-spacing: 0.04em; }
+    .bandlabel2 { font-size: 12px; font-weight: 600; fill: #2443b8; letter-spacing: 0.04em; }
+    .num { font-weight: 700; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #121a26; stroke: #263142; }
+      .band { fill: #172131; }
+      .band2 { fill: #18213a; }
+      .head { fill: #121a26; stroke: #8ea2f5; }
+      .hubhead { fill: #8ea2f5; stroke: #8ea2f5; }
+      .lane { stroke: #3a4658; }
+      .msg { stroke: #e6eaf0; }
+      .ret { stroke: #9aa4b5; }
+      .chain { stroke: #8ea2f5; }
+      .ah { fill: #e6eaf0; }
+      .ahr { fill: #9aa4b5; }
+      .ahc { fill: #8ea2f5; }
+      .note { fill: #2a2414; stroke: #8a6d2a; }
+      text { fill: #e6eaf0; }
+      .hw { fill: #0c121b; }
+      .lr { fill: #aab3c2; }
+      .lc { fill: #8ea2f5; }
+      .bandlabel { fill: #9aa4b5; }
+      .bandlabel2 { fill: #8ea2f5; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ahc" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="959" height="639" rx="14"/>
+
+  <!-- bands -->
+  <rect class="band" x="16" y="146" width="928" height="306" rx="8"/>
+  <text class="bandlabel" x="28" y="166">EACH CALL: OFF CHAIN, IN MILLISECONDS</text>
+  <rect class="band2" x="16" y="462" width="928" height="118" rx="8"/>
+  <text class="bandlabel2" x="28" y="482">EACH BATCH: ONE TRANSACTION ON NEAR</text>
+
+  <!-- lanes -->
+  <line class="lane" x1="90" y1="76" x2="90" y2="584"/>
+  <line class="lane" x1="270" y1="76" x2="270" y2="584"/>
+  <line class="lane" x1="460" y1="76" x2="460" y2="584"/>
+  <line class="lane" x1="660" y1="76" x2="660" y2="584"/>
+  <line class="lane" x1="860" y1="76" x2="860" y2="584"/>
+
+  <!-- heads -->
+  <rect class="head" x="22" y="24" width="136" height="50" rx="9"/>
+  <text class="h" x="90" y="54">Owner</text>
+  <rect class="head" x="198" y="24" width="144" height="50" rx="9"/>
+  <text class="h" x="270" y="54">AI agent</text>
+  <rect class="head" x="388" y="24" width="144" height="50" rx="9"/>
+  <text class="h" x="460" y="54">Seller API</text>
+  <rect class="head" x="582" y="24" width="156" height="50" rx="9"/>
+  <text class="h" x="660" y="54">Clearing node</text>
+  <rect class="hubhead" x="782" y="24" width="156" height="50" rx="9"/>
+  <text class="hw" x="860" y="47">Hub contract</text>
+  <text class="hw" x="860" y="65" style="font-size:12px;font-weight:500">on NEAR</text>
+
+  <!-- 1 open budget -->
+  <text class="lc" x="475" y="110"><tspan class="num">1</tspan>  open a Budget: cap, allowed payees, expiry, USDC escrow</text>
+  <line class="chain" x1="92" y1="122" x2="856" y2="122" marker-end="url(#c)"/>
+
+  <!-- 2 request -->
+  <text class="l" x="365" y="196"><tspan class="num">2</tspan>  GET /quote</text>
+  <line class="msg" x1="272" y1="206" x2="456" y2="206" marker-end="url(#a)"/>
+  <text class="lr" x="365" y="228">402 Payment Required + price</text>
+  <line class="ret" x1="458" y1="238" x2="274" y2="238" marker-end="url(#r)"/>
+
+  <!-- 3 note on agent -->
+  <rect class="note" x="186" y="252" width="168" height="42" rx="6"/>
+  <text class="n" x="270" y="269"><tspan class="num">3</tspan>  checks its Budget,</text>
+  <text class="n" x="270" y="286">signs a voucher (no tx)</text>
+
+  <!-- 4 retry -->
+  <text class="l" x="365" y="314"><tspan class="num">4</tspan>  same call + voucher</text>
+  <line class="msg" x1="272" y1="324" x2="456" y2="324" marker-end="url(#a)"/>
+
+  <!-- 5 verify -->
+  <text class="l" x="560" y="314"><tspan class="num">5</tspan>  verify</text>
+  <line class="msg" x1="462" y1="324" x2="656" y2="324" marker-end="url(#a)"/>
+  <rect class="note" x="574" y="336" width="172" height="42" rx="6"/>
+  <text class="n" x="660" y="353">signature, payee check,</text>
+  <text class="n" x="660" y="370">caps, escrow left</text>
+  <text class="lr" x="560" y="398">accepted, signed by the node</text>
+  <line class="ret" x1="658" y1="408" x2="464" y2="408" marker-end="url(#r)"/>
+  <text class="lr" x="365" y="430">200 OK + data</text>
+  <line class="ret" x1="458" y1="440" x2="274" y2="440" marker-end="url(#r)"/>
+
+  <!-- 6 settle -->
+  <text class="lc" x="760" y="493"><tspan class="num">6</tspan>  settle_batch</text>
+  <text class="l" x="760" y="509">net amounts only</text>
+  <line class="chain" x1="662" y1="518" x2="856" y2="518" marker-end="url(#c)"/>
+  <text class="lr" x="760" y="538">hub re-checks every signature,</text>
+  <text class="lr" x="760" y="553">stores a Merkle root</text>
+
+  <!-- 7 payout -->
+  <text class="lc" x="560" y="556"><tspan class="num">7</tspan>  payout in USDC</text>
+  <line class="chain" x1="656" y1="566" x2="464" y2="566" marker-end="url(#c)"/>
+  <line class="chain" x1="858" y1="566" x2="664" y2="566"/>
+
+  <!-- 8 proof -->
+  <text class="l" x="480" y="614"><tspan class="num">8</tspan>  Anyone can prove one call against the root on NEAR, with no node and no keys: <tspan style="font-family:ui-monospace,Menlo,Consolas,monospace">pnpm verify:near</tspan></text>
+</svg>

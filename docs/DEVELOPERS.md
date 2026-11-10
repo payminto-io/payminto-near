@@ -1441,7 +1441,7 @@ Every command here was run for this page unless marked.
 |---|---|---|
 | `pnpm install` | Installs the workspace (Node 22.18 or newer, pnpm 9) | Done |
 | `pnpm -r typecheck` | Type-checks every package | Passes |
-| `pnpm -r test` | Unit tests on the simulated hub; sandbox suites are skipped | Passes: 2,054 tests in 15 packages, 15 sandbox tests skipped |
+| `pnpm -r test` | Unit tests on the simulated hub; sandbox suites are skipped | Passes: 2,053 tests in 15 packages, 15 sandbox tests skipped |
 | `cd contracts-near && cargo test --lib` | The contract's unit tests, with no sandbox | Passes: 87 tests |
 | `pnpm demo` | The whole story on the simulated hub | `25 of 25 checks passed in 4.1 s.` |
 | `pnpm demo --chain sandbox` | The same on a sandbox (a local NEAR node) | `26 of 26 checks passed in 97.2 s.` |
