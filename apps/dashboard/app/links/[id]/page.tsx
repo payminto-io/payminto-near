@@ -21,6 +21,7 @@ import { StatStrip } from "@/components/app/stat-strip";
 import { BlockSkeleton, EmptyState, ErrorState, RowsSkeleton } from "@/components/app/states";
 import { CopyAction } from "@/components/checkout/parts";
 import { ShareSheet } from "@/components/gateway/share-sheet";
+import { EmbedSnippet } from "@/components/gateway/embed-snippet";
 import { PaymentRow } from "@/components/gateway/payment-row";
 
 export default function LinkDetailPage() {
@@ -138,28 +139,33 @@ function LinkDetail() {
             </ul>
           )}
         </Panel>
-        <Panel title="Details">
-          <Fields>
-            <Field label="URL"><span className="hash text-[0.8125rem] break-all">{l.url}</span></Field>
-            <Field label="Link ID"><Hash value={l.id} /></Field>
-            <Field label="Price">{linkPrice(l, t)}</Field>
-            <Field label="Description">{l.description ?? <span className="text-muted-foreground">-</span>}</Field>
-            <Field label="Collects">{[l.collect_email && "Email", l.collect_name && "Name"].filter(Boolean).join(", ") || <span className="text-muted-foreground">Nothing</span>}</Field>
-            <Field label="Expires">
-              {l.expires_at ? (
-                <span className={l.expired ? "text-warning" : undefined}>
-                  {l.expired ? "Expired " : ""}
-                  {formatDateTime(String(l.expires_at))}
-                </span>
-              ) : (
-                <span className="text-muted-foreground">Never</span>
-              )}
-            </Field>
-            <Field label="After payment">{l.success_url ? <span className="break-all">{l.success_url}</span> : <span className="text-muted-foreground">Stays on the payment proof</span>}</Field>
-            <Field label="AI agents" hint="Listed links can be found by agents with their price automatically.">{l.listed ? "Listed for AI agents" : "Not listed"}</Field>
-            <Field label="Created">{formatDateTime(l.created_at)}</Field>
-          </Fields>
-        </Panel>
+        <div className="flex min-w-0 flex-col gap-5">
+          <Panel title="Details">
+            <Fields>
+              <Field label="URL"><span className="hash text-[0.8125rem] break-all">{l.url}</span></Field>
+              <Field label="Link ID"><Hash value={l.id} /></Field>
+              <Field label="Price">{linkPrice(l, t)}</Field>
+              <Field label="Description">{l.description ?? <span className="text-muted-foreground">-</span>}</Field>
+              <Field label="Collects">{[l.collect_email && "Email", l.collect_name && "Name"].filter(Boolean).join(", ") || <span className="text-muted-foreground">Nothing</span>}</Field>
+              <Field label="Expires">
+                {l.expires_at ? (
+                  <span className={l.expired ? "text-warning" : undefined}>
+                    {l.expired ? "Expired " : ""}
+                    {formatDateTime(String(l.expires_at))}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">Never</span>
+                )}
+              </Field>
+              <Field label="After payment">{l.success_url ? <span className="break-all">{l.success_url}</span> : <span className="text-muted-foreground">Stays on the payment proof</span>}</Field>
+              <Field label="AI agents" hint="Listed links can be found by agents with their price automatically.">{l.listed ? "Listed for AI agents" : "Not listed"}</Field>
+              <Field label="Created">{formatDateTime(l.created_at)}</Field>
+            </Fields>
+          </Panel>
+          <Panel title="Embed" description="A pay button for your own site, with this link filled in.">
+            <EmbedSnippet link={l} />
+          </Panel>
+        </div>
       </div>
       <ShareSheet link={l} open={share} onOpenChange={setShare} />
       {expiryOpen && <ExpiryDialog id={id} current={l.expires_at ?? null} onClose={() => setExpiryOpen(false)} />}

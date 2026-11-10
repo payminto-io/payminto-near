@@ -22,8 +22,29 @@ import { BlockSkeleton, EmptyState, ErrorState } from "@/components/app/states";
 import { TimeAgo } from "@/components/app/time-ago";
 import { LineItems, OrderHash } from "@/components/checkout/parts";
 import { RefundDialog, refundable } from "@/components/gateway/refund-dialog";
+import { IntentsCard } from "@/components/gateway/intents-card";
+import { anyChainMethodLabel, originPayer } from "@/lib/intents";
 
-const METHOD_LABEL: Record<string, string> = { wallet: "Pay with a NEAR wallet", voucher: "AI agent with budget" };
+const METHOD_LABEL: Record<string, string> = { wallet: "Pay with a NEAR wallet", voucher: "AI agent with budget", oneclick: "Any chain (NEAR Intents)" };
+
+/** How the payment was paid, naming the token and chain of an any-chain payment. */
+function methodText(p: PaymentDetail): string | undefined {
+  return p.method === "oneclick" ? anyChainMethodLabel(p, p.intents?.quotes) : p.method ? METHOD_LABEL[p.method] : undefined;
+}
+
+/** "from 0x5f2b...554f on Base" for an any-chain payer, "from alice.testnet" for a NEAR one. */
+function PayerText({ payer }: { payer: string }) {
+  const o = originPayer(payer);
+  return o ? (
+    <>
+      from <span className="hash">{shortAddress(o.address, 6, 4)}</span> on {o.chain}
+    </>
+  ) : (
+    <>
+      from <span className="hash">{shortAddress(payer)}</span>
+    </>
+  );
+}
 
 export default function PaymentDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -93,14 +114,15 @@ export default function PaymentDetailPage() {
         }
         description={
           <>
-            {p.payer ? <>Paid by <span className="hash">{shortAddress(p.payer)}</span></> : "Not paid yet"}
-            {p.payer && p.method && METHOD_LABEL[p.method] && <> - {METHOD_LABEL[p.method]}</>}
+            {p.payer ? (originPayer(p.payer) ? <>Paid <PayerText payer={p.payer} /></> : <>Paid by <span className="hash">{shortAddress(p.payer)}</span></>) : "Not paid yet"}
+            {p.payer && methodText(p) && <> - {methodText(p)}</>}
             {link ? <> via payment link <Link href={withBusiness(`/links/${link.id}`, p.merchant_id)} className="text-foreground hover:underline">{link.title}</Link></> : p.description ? <> - {p.description}</> : null}
           </>
         }
         actions={
           <>
-            {paidOut && (
+            {/* The proof page reads the hub's record of a wallet payment; an any-chain payment's proof is its NEAR delivery. */}
+            {paidOut && p.method !== "oneclick" && (
               <Button asChild variant="outline">
                 <a href={`/receipt/${p.id}`} target="_blank" rel="noreferrer">
                   <ShieldCheck /> Payment proof
@@ -151,7 +173,7 @@ export default function PaymentDetailPage() {
                     <span className="flex min-w-0 flex-col">
                       <Money atomic={c.amount} className="font-medium" />
                       <span className="text-xs text-muted-foreground">
-                        {METHOD_LABEL[c.method]} {c.payer && <>from <span className="hash">{shortAddress(c.payer)}</span></>}
+                        {METHOD_LABEL[c.method]} {c.payer && <PayerText payer={c.payer} />}
                         {c.late && " - arrived late"}
                       </span>
                     </span>
@@ -164,6 +186,7 @@ export default function PaymentDetailPage() {
               </ul>
             )}
           </Panel>
+          {p.intents && p.intents.quotes.length > 0 && <IntentsCard intents={p.intents} />}
           <Panel title="Refunds" bodyClassName="p-0 sm:p-0">
             {p.refunds.length === 0 ? (
               <EmptyState className="py-8" icon={<Undo2 className="size-4" />} title="No refunds" action={canRefund && can("refunds.request") ? <Button variant="outline" onClick={() => (setRetry(null), setRefundOpen(true))}>{can("refunds.issue") ? "Refund this payment" : "Request a refund"}</Button> : undefined} />
@@ -213,7 +236,7 @@ export default function PaymentDetailPage() {
               <Field label="Payment ID"><Hash value={p.id} /></Field>
               <Field label="Payment link">{link ? <Link href={withBusiness(`/links/${link.id}`, p.merchant_id)} className="hover:underline">{link.title}</Link> : <span className="text-muted-foreground">Created with the API</span>}</Field>
               <Field label="Reference">{p.reference ?? <span className="text-muted-foreground">-</span>}</Field>
-              <Field label="Method">{p.method ? METHOD_LABEL[p.method] : <span className="text-muted-foreground">Not chosen yet</span>}</Field>
+              <Field label="Method">{methodText(p) ?? <span className="text-muted-foreground">Not chosen yet</span>}</Field>
               <Field label="Currency" hint="The stablecoin contract this payment is in.">
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="shrink-0">{t.symbol}</span> <Address address={p.token} showName={false} className="min-w-0" />
@@ -287,6 +310,9 @@ const EVENT_LABEL: Record<string, string> = {
   "payment.underpaid": "Ended partly paid",
   "payment.expired": "Expired",
   "payment.canceled": "Canceled",
+  "payment.deposit_returned": "Deposit from another chain returned",
+  "payment.deposit_failed": "Swap from another chain failed",
+  "intents.quote_created": "Deposit address made (NEAR Intents)",
   "webhook.delivered": "Webhook delivered",
   "webhook.failed": "Webhook failed",
   "refund.created": "Refund created",
@@ -313,7 +339,7 @@ function Timeline({ events }: { events: TimelineEvent[] }) {
   return (
     <ol className="relative">
       {events.map((e, i) => {
-        const bad = /failed|expired|canceled|underpaid/.test(e.type);
+        const bad = /failed|expired|canceled|underpaid|returned/.test(e.type);
         const last = i === events.length - 1;
         const d = e.data ?? {};
         const extra = [

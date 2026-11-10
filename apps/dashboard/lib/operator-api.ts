@@ -29,6 +29,11 @@ export interface OperatorApi {
   changePayout(id: string, body: PayoutProof): Promise<Merchant>;
   methods(merchantId: string): Promise<MerchantMethod[]>;
   setMethods(merchantId: string, rows: Omit<MerchantMethod, "merchant_id">[]): Promise<MerchantMethod[]>;
+  /**
+   * Turns methods on or off and touches nothing else: a business may only send `method` and `enabled` (fees and limits
+   * are the platform's), and the rows it leaves out stay as they are.
+   */
+  setMethodsEnabled(merchantId: string, items: Pick<MerchantMethod, "method" | "enabled">[]): Promise<MerchantMethod[]>;
   feePlans(): Promise<FeePlan[]>;
   createFeePlan(body: FeePlanBody): Promise<FeePlan>;
   updateFeePlan(id: string, patch: Partial<FeePlanBody>): Promise<FeePlan>;
@@ -58,7 +63,7 @@ const merchantDetailSchema = merchantSchema.extend({
     .optional(),
 }) as unknown as z.ZodType<Merchant & { payout_history?: PayoutHistoryEntry[] }>;
 
-const METHOD_ORDER = ["wallet", "deposit", "x402", "voucher"];
+const METHOD_ORDER = ["wallet", "oneclick", "deposit", "x402", "voucher"];
 export function byMethodOrder<T extends { method: string }>(rows: T[]): T[] {
   return [...rows].sort((a, b) => METHOD_ORDER.indexOf(a.method) - METHOD_ORDER.indexOf(b.method));
 }
@@ -114,6 +119,13 @@ export class HttpOperatorApi implements OperatorApi {
     return this.req(`/v1/merchants/${encodeURIComponent(merchantId)}/methods`, listOf(merchantMethodSchema), {
       method: "PUT",
       body: JSON.stringify({ methods: rows }),
+      headers: { "Merchant-Id": merchantId },
+    }).then(byMethodOrder);
+  }
+  setMethodsEnabled(merchantId: string, items: Pick<MerchantMethod, "method" | "enabled">[]) {
+    return this.req(`/v1/merchants/${encodeURIComponent(merchantId)}/methods`, listOf(merchantMethodSchema), {
+      method: "PUT",
+      body: JSON.stringify({ methods: items.map(({ method, enabled }) => ({ method, enabled })) }),
       headers: { "Merchant-Id": merchantId },
     }).then(byMethodOrder);
   }

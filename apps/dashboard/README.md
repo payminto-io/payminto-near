@@ -26,6 +26,46 @@ A remote node never chooses the RPC its own claims are checked against; only on 
 Each read times out after 8 seconds and the page offers to read again; a read that did not finish is shown as not checked, never as verified.
 In mock mode the same reader talks to the demo hub inside the browser, and the page says "Demo, no network".
 
+## Any-chain checkout (NEAR Intents)
+
+When the node runs the any-chain checkout (`INTENTS_CHECKOUT=simulated` or `live`, docs/DEVELOPERS.md "Any-chain checkout") and the business turned it on, the hosted checkout shows two tabs: "NEAR wallet", first and unchanged, and "Any chain".
+The buyer's steps:
+
+1. Pick a token and chain from one list: USDC on Base, Ethereum, Arbitrum, Solana or Polygon, USDT on Ethereum, ETH on Base or Ethereum.
+   Each row shows the indicative amount and time from the node's signed dry quote; a route 1Click refuses is greyed with the reason.
+2. Enter a refund address on that chain; it is checked for the chain's format before the button enables.
+3. Press "Get deposit address" (`POST .../intents/quotes` with an `Idempotency-Key`, so a retry gets the same address).
+4. Send exactly the amount shown to the address or its QR code before the deadline; the fee lines and the warning come from the signed quote.
+   "I've sent it" takes the transaction hash, which only speeds up detection.
+5. Watch the steps (waiting, received, converting, delivered) live on the checkout's event stream, with polling when the stream is down.
+   The success screen says "Paid from Base through NEAR Intents" with the deposit and the NEAR delivery transactions; a returned, failed or expired deposit has its own screen and "Try again".
+
+Every screen with intents data carries "Simulated" or "Live - NEAR mainnet".
+In simulated mode the deposit screen has "Simulate deposit (local only)" and "Send too little", which shows a returned deposit.
+
+The business sets it up in Settings, Payment methods, "Accept any chain (NEAR Intents)": the NEAR account the USDC lands in, its three checks (it exists, it is registered with USDC, it signed a NEP-413 message for this server), the storage deposit when it is not registered, and the switch.
+The server refuses the switch until the checks pass, and the page says why.
+A payment paid this way has a "NEAR Intents" card with the origin, the amount sent, the addresses, both transactions, how the delivery was checked, returned deposits and the signed quote.
+
+In mock mode Acme Store takes any-chain payments, simulated, and one earlier payment was paid from USDC on Base; `?demo=intents-setup` starts with nothing set up.
+The mock waives Acme's platform fee on this rail so the flow can be clicked; a node offers it only for a payment that carries no platform fee.
+
+Captures from `pnpm local` are in `docs/screenshots`: `anychain-choose-1280-light.png`, `anychain-deposit-1280-light.png` and `-375-light.png`, `anychain-incomplete-1280-light.png`, `anychain-returned-1280-light.png` and `-375-light.png`, `anychain-paid-1280-light.png` and `-375-light.png`, `intents-card-1280-light.png`, `anychain-settings-1280-light.png` and `embed-demo-paid-1280-light.png`.
+
+## Drop-in pay button
+
+`public/embed.js` is served by the dashboard, has no dependencies and no build step:
+
+```html
+<script src="https://pay.example.com/embed.js" defer></script>
+<button data-payminto-link="coffee-5usd">Pay with crypto</button>
+```
+
+A click opens the hosted checkout (`/l/<slug>`, or `/pay/<id>` with `data-payminto-payment`) in a centered popup, or in the same tab on a phone or when the popup is blocked.
+The checkout posts `{ type: "payminto:payment", id, status }` to the page that opened it, at the origin the script put in the URL fragment and nowhere else, and the button receives `payminto:payment` and `payminto:paid` events.
+They are a convenience for the page; fulfil orders from the signed webhook.
+A payment link's page shows the two lines with its slug filled in, and `/embed-demo.html?link=<slug>` shows the button working.
+
 ## Revoke and reclaim without gas
 
 An owner with no NEAR for gas can still stop an agent.
@@ -106,6 +146,7 @@ Failure states are switched on in the address bar and stay for the tab until `?d
 | `relayer-unknown` | `502 RPC_FAILED` with an unknown outcome. |
 | `relayer-slow` | The relayer takes nine seconds, to see the waiting state. |
 | `dao-edge` | The DAO also holds a proposal whose voting period has ended and a call Payminto does not expect. |
+| `intents-setup` | Acme Store has not set up the any-chain checkout yet; read when the page loads. |
 
 Several can be combined with commas.
 
@@ -134,6 +175,8 @@ pnpm --filter dashboard build
 - `lib/relayer.ts` the relayer's two routes and its error codes in plain words; `lib/gasless.ts` one gasless action from review to the hub; `lib/use-gasless.ts` whether the option can be offered right now.
 - `lib/dao.ts` a Sputnik DAO's policy and proposals, parsed and decoded for one Budget; `lib/use-dao.ts` the reads; `lib/dao-drafts.ts` Budgets proposed to a DAO and not yet on the hub.
 - `lib/mock/dao.ts`, `lib/mock/relayer.ts` and `lib/mock/scenario.ts` the demo DAO, the demo relayer and the `?demo=` switches.
+- `lib/intents.ts` the any-chain checkout's screens and words, the refund address check and the business's checklist; `components/checkout/intents.tsx` the buyer's screens; `components/gateway/any-chain-settings.tsx` and `intents-card.tsx` the business's; `lib/mock/intents.ts` the simulated flow of the mock node.
+- `lib/embed.ts` the opener message of the drop-in button and its snippet; `public/embed.js` the script itself.
 - `lib/grace.ts` the revoke grace period, read from the chain package in one place and put into words for every screen.
 - `components/ds/` the design-system components (AccountId, Amount, StatusPill, BudgetMeter, RefusalReason, CallRow, BatchSummary, ProofPanel, TxFlow, PayeeVerdict).
 - `docs/screenshots/` captures from the mock server at 375px and 1280px, light and dark, named `<screen>-<width>-<theme>.png`.

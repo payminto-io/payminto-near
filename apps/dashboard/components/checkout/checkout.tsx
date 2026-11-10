@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore, t
 import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, Check, Clock3, ExternalLink, LoaderCircle, Mail, Printer, RotateCw, SearchX, ShieldCheck, Wallet, WifiOff, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, Clock3, ExternalLink, Globe, LoaderCircle, Mail, Printer, RotateCw, SearchX, ShieldCheck, Wallet, WifiOff, XCircle } from "lucide-react";
 import { checkoutPayTx, type CheckoutTerms, type WalletTx } from "@payminto/protocol";
 import { cn } from "@/lib/utils";
 import { useDocumentTitle } from "@/lib/use-title";
@@ -35,6 +35,8 @@ import {
   type WalletStep,
 } from "@/lib/checkout";
 import { useCheckout, type CheckoutLive } from "@/lib/use-checkout";
+import { captureOpenerOrigin, notifyOpener } from "@/lib/embed";
+import { activeQuote, amountText, anyChainOffered, initialTab, intentsAnnouncement, paidFromText, payTabs, showsDeposit, TAB_LABEL, type PayTab } from "@/lib/intents";
 import type { CheckoutApi } from "@/lib/gateway-api";
 import type { CheckoutView } from "@/lib/schemas";
 import { ApiError } from "@/lib/http";
@@ -64,6 +66,8 @@ import {
 } from "./parts";
 import { Bar, EASE_OUT, ProgressRing, RollingText, ShakeOn, Shimmer, Stagger, StaggerItem, SuccessMark, Swap, T, useCalm } from "./motion";
 import { AccountText } from "@/components/ds/account-id";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AnyChainPanel, IntentsLabel, TxValue, useIntentsOptions } from "./intents";
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -73,6 +77,12 @@ export function CheckoutScreen({ id }: { id: string }) {
   const { api, query, live, network } = useCheckout(id);
   const view = query.data;
   useCheckoutTitle(view ? `Pay ${view.merchant.name}` : null);
+  // Opened by embed.js on a business's page: remember that page's origin, and tell it whenever the payment's state changes.
+  useEffect(() => captureOpenerOrigin(), []);
+  const status = view?.status;
+  useEffect(() => {
+    if (status) notifyOpener({ id, status });
+  }, [id, status]);
 
   if (query.isError && !view) {
     const notFound = query.error instanceof ApiError && query.error.status === 404;
@@ -211,7 +221,7 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
   const qc = useQueryClient();
   const hasWallet = useHasWallet();
   const [step, setStep] = useState<WalletStep>("idle");
-  const [picked, setPicked] = useState<PayMethod | null>(null);
+  const [picked, setPicked] = useState<PayTab | null>(null);
   const [cache, setCache] = useState<QuoteCache>({});
   const [seen, setSeen] = useState({ view, status: view.status });
   // Celebrate and auto-return only when the payer watched it complete, never when reopening an old receipt.
@@ -229,8 +239,13 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
   const signing = step === "approving" || step === "submitting";
   const model = checkoutModel(view, { now, signing });
   const methods = availableMethods(view);
-  const active: PayMethod | null = picked && methods.includes(picked) ? picked : hasWallet === null ? null : initialMethod(view);
+  // "NEAR wallet" first and unchanged; "Any chain" beside it when the business takes payments from other chains.
+  const tabs = payTabs(view, initialMethod(view) === "wallet");
+  const tab: PayTab | null = picked && tabs.includes(picked) ? picked : hasWallet === null ? null : initialTab(view, initialMethod(view) === "wallet");
+  const active: PayMethod | null = tab === "wallet" ? "wallet" : null;
   const quote = active ? quoteFor(view, active, cache) : null;
+  const options = useIntentsOptions(api, view.id, tab === "oneclick" && anyChainOffered(view));
+  const anyChain = tab === "oneclick" && (model.panel === "pay" || model.panel === "signing" || (model.panel === "confirming" && showsDeposit(activeQuote(view))));
 
   // Fees depend on the method (GATEWAY.md section 14.3): re-quote an open, untouched payment for the method on screen.
   const requoteFor = view.status === "open" && view.amount_paid === "0" && active && view.method !== active ? active : null;
@@ -250,7 +265,16 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
   return (
     <CheckoutLayout
       merchant={view.merchant}
-      summary={<CheckoutSummary view={view} api={api} quote={model.panel === "pay" || model.panel === "signing" ? quote : null} method={model.panel === "pay" || model.panel === "signing" ? active : null} dim={ended} />}
+      summary={
+        <CheckoutSummary
+          view={view}
+          api={api}
+          quote={!anyChain && (model.panel === "pay" || model.panel === "signing") ? quote : null}
+          method={anyChain ? "oneclick" : model.panel === "pay" || model.panel === "signing" ? active : null}
+          anyChainTo={anyChain || (view.method === "oneclick" && model.panel === "success") ? (activeQuote(view)?.recipient ?? options.data?.recipient ?? null) : undefined}
+          dim={ended}
+        />
+      }
       panel={
         <CheckoutPanel
           view={view}
@@ -260,6 +284,10 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
           methods={methods}
           active={active}
           quote={quote}
+          tabs={tabs}
+          tab={tab}
+          anyChain={anyChain}
+          options={options}
           onPick={setPicked}
           step={step}
           setStep={setStep}
@@ -276,7 +304,22 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
 // Order column
 // ---------------------------------------------------------------------------
 
-export function CheckoutSummary({ view, api, quote = null, method = null, dim = false }: { view: CheckoutView; api?: CheckoutApi; quote?: MethodQuote | null; method?: PayMethod | null; dim?: boolean }) {
+export function CheckoutSummary({
+  view,
+  api,
+  quote = null,
+  method = null,
+  dim = false,
+  anyChainTo,
+}: {
+  view: CheckoutView;
+  api?: CheckoutApi;
+  quote?: MethodQuote | null;
+  method?: PayMethod | "oneclick" | null;
+  dim?: boolean;
+  /** Paying from another chain: the business's NEAR account the USDC is delivered to (null while it loads). */
+  anyChainTo?: string | null;
+}) {
   const network = useNetwork();
   const order = useQuery({ queryKey: ["order", view.id], queryFn: () => api!.order(view.id), enabled: Boolean(api), staleTime: Infinity, retry: 1 });
   const items = order.data?.order.line_items ?? [];
@@ -326,7 +369,16 @@ export function CheckoutSummary({ view, api, quote = null, method = null, dim = 
             </dl>
           </StaggerItem>
           <StaggerItem className="mt-7">
-            <PaidDirectly merchant={view.merchant.name} payout={view.payout} explorer={network.explorer} />
+            {anyChainTo === undefined ? (
+              <PaidDirectly merchant={view.merchant.name} payout={view.payout} explorer={network.explorer} />
+            ) : (
+              <PaidDirectly
+                merchant={view.merchant.name}
+                payout={anyChainTo}
+                explorer={view.intents?.mode === "live" ? "https://nearblocks.io" : null}
+                note={`Delivered as USDC to this ${view.intents?.mode === "live" ? "NEAR mainnet" : "NEAR (simulated)"} account through NEAR Intents.`}
+              />
+            )}
           </StaggerItem>
           <StaggerItem className="mt-6 flex items-center gap-1.5 text-xs text-subtle">
             Order fingerprint <OrderHash value={view.order_hash} />
@@ -353,7 +405,12 @@ type PanelProps = {
   methods: PayMethod[];
   active: PayMethod | null;
   quote: MethodQuote | null;
-  onPick: (m: PayMethod) => void;
+  tabs: PayTab[];
+  tab: PayTab | null;
+  /** The any-chain screens are on the panel (the tab is picked and the payment takes money or one is on its way). */
+  anyChain: boolean;
+  options: ReturnType<typeof useIntentsOptions>;
+  onPick: (t: PayTab) => void;
   step: WalletStep;
   setStep: (s: WalletStep) => void;
   refresh: () => void;
@@ -370,19 +427,28 @@ const CHIP_TONE: Record<CheckoutModel["chip"]["tone"], string> = {
 };
 
 export function CheckoutPanel(props: PanelProps) {
-  const { view, model, live } = props;
+  const { view, model, live, anyChain } = props;
   const network = useNetwork();
   const watching = model.panel === "pay" || model.panel === "signing" || model.panel === "confirming";
+  // While an any-chain deposit address is on screen, its own deadline counts down there instead of the payment's.
+  const iq = activeQuote(view);
+  const deposit = anyChain && showsDeposit(iq);
+  const panel = anyChain ? "pay" : model.panel;
+  // Every screen with any-chain data carries its label: the pay screens, and the receipt of a payment made that way.
+  const intentsHeader = Boolean(view.intents) && (anyChain || (panel === "success" && view.method === "oneclick"));
+  const announce = anyChain ? (iq ? intentsAnnouncement(iq) : "Pay from another chain.") : model.announce;
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <NetworkChip name={network.name} symbol={view.token.symbol} />
+        <Swap id={intentsHeader ? "intents" : "near"} mode="popLayout">
+          {intentsHeader && view.intents ? <IntentsLabel mode={view.intents.mode} label={view.intents.label} className="h-7" /> : <NetworkChip name={network.name} symbol={view.token.symbol} />}
+        </Swap>
         <Swap id={watching ? `live-${live}` : model.chip.label} mode="popLayout">
           {watching ? <LivePill live={live} /> : <span className={cn("inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium", CHIP_TONE[model.chip.tone])}>{model.chip.label}</span>}
         </Swap>
       </div>
       <AnimatePresence initial={false}>
-        {model.countdown && (
+        {model.countdown && !deposit && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="mt-3">
             <TimeBar {...model.countdown} />
           </motion.div>
@@ -390,15 +456,15 @@ export function CheckoutPanel(props: PanelProps) {
       </AnimatePresence>
       {/* One polite announcement per state change. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {model.announce}
+        {announce}
       </p>
       <div className="mt-5 flex-1 lg:min-h-[31rem]">
-        <Swap id={model.panel === "signing" ? "pay" : model.panel} shift={0}>
-          {model.panel === "pay" || model.panel === "signing" ? (
+        <Swap id={panel === "signing" ? "pay" : panel} shift={0}>
+          {panel === "pay" || panel === "signing" ? (
             <PayBody {...props} />
-          ) : model.panel === "confirming" ? (
+          ) : panel === "confirming" ? (
             <Confirming view={view} model={model} />
-          ) : model.panel === "success" ? (
+          ) : panel === "success" ? (
             <Success view={view} model={model} watched={props.watched} />
           ) : (
             <Ended view={view} model={model} />
@@ -409,7 +475,50 @@ export function CheckoutPanel(props: PanelProps) {
   );
 }
 
-function PayBody({ view, api, model, methods, active, quote, step, setStep, refresh, hasWallet }: PanelProps) {
+/**
+ * The pay panel: the NEAR wallet, exactly as before, and "Any chain" in a second tab when the business takes payments
+ * from other chains. With the wallet alone there are no tabs at all.
+ */
+function PayBody(props: PanelProps) {
+  const { view, api, tabs, tab, onPick, live, options, refresh } = props;
+  if (tabs.length === 0 || tab === null) return <WalletBody {...props} />;
+  const anyChain = (
+    <div className="flex flex-col gap-5">
+      <AnyChainPanel view={view} api={api} streaming={live === "live"} options={options} onRefresh={refresh} />
+      {view.status === "open" && <ReceiptEmail view={view} api={api} />}
+    </div>
+  );
+  if (tabs.length === 1 && tab === "wallet") return <WalletBody {...props} />;
+  // While a deposit from another chain is on its way the wallet is not offered, but its tab stays (disabled), so the
+  // panel keeps its shape from the first screen to the last.
+  const shown: PayTab[] = ["wallet", "oneclick"];
+  return (
+    <Tabs value={tab} onValueChange={(v) => onPick(v as PayTab)} className="gap-5">
+      <TabsList aria-label="How to pay" className="h-11 w-full shrink-0 md:h-10">
+        {shown.map((t) => (
+          <TabsTrigger
+            key={t}
+            value={t}
+            disabled={!tabs.includes(t)}
+            title={tabs.includes(t) ? undefined : "Not available while your deposit from another chain is on its way"}
+            className="h-full min-w-0 gap-2 px-3 text-sm focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 data-[state=active]:bg-card dark:data-[state=active]:bg-input/40"
+          >
+            {t === "wallet" ? <Wallet aria-hidden /> : <Globe aria-hidden />}
+            {TAB_LABEL[t]}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <TabsContent value="wallet" className="mt-0 focus-visible:outline-none">
+        <WalletBody {...props} />
+      </TabsContent>
+      <TabsContent value="oneclick" className="mt-0 focus-visible:outline-none">
+        {anyChain}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function WalletBody({ view, api, model, methods, active, quote, step, setStep, refresh, hasWallet }: PanelProps) {
   const partial = model.phase === "partially_paid";
   if (!active || !quote) {
     return methods.length === 0 ? (
@@ -801,15 +910,29 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
   const payer = view.payer ?? null;
   const payout = view.payout ?? null;
   const t = view.token;
-  const rows: [ReactNode, ReactNode][] = [
-    ["Amount", <TokenAmount key="a" atomic={view.amount_paid} token={t} />],
-    ["Paid with", view.method === "voucher" ? "AI agent with a Budget" : "NEAR wallet"],
-    ["Network", network.name],
-    ...(payer ? ([["From", <AddressValue key="f" address={payer} />]] as [ReactNode, ReactNode][]) : []),
-    ["To", payout ? <AddressValue key="to" address={payout} label={view.merchant.name} /> : view.merchant.name],
-    ...(view.tx_hash ? ([["Transaction", <TxLink key="tx" hash={view.tx_hash} href={explorerTx(network, view.tx_hash)} />]] as [ReactNode, ReactNode][]) : []),
-    ...(view.paid_at ? ([["Paid at", <span key="p" className="num">{formatDateTime(view.paid_at)}</span>]] as [ReactNode, ReactNode][]) : []),
-  ];
+  // Paid from another chain: the quote that delivered says from where, to which NEAR account, and with which transactions.
+  const iq = view.method === "oneclick" && view.intents?.active_quote?.status === "confirmed" ? view.intents.active_quote : null;
+  const at: [ReactNode, ReactNode][] = view.paid_at ? [["Paid at", <span key="p" className="num">{formatDateTime(view.paid_at)}</span>]] : [];
+  const rows: [ReactNode, ReactNode][] = iq
+    ? [
+        ["Amount", <TokenAmount key="a" atomic={view.amount_paid} token={t} />],
+        ["Paid with", "Any chain (NEAR Intents)"],
+        ["You sent", <span key="s" className="num font-medium whitespace-nowrap">{amountText(iq.deposited ?? iq.send_exactly)} on {iq.origin.chain_name}</span>],
+        ["From", <span key="f" className="hash text-[0.8125rem]">{iq.refund_to}</span>],
+        ["To", <AddressValue key="to" address={iq.recipient} label={view.merchant.name} />],
+        ...(iq.origin_txs[0] ? ([[`${iq.origin.chain_name} deposit`, <TxValue key="o" tx={iq.origin_txs[0]} />]] as [ReactNode, ReactNode][]) : []),
+        ...(iq.delivery_tx ? ([["NEAR delivery", <TxValue key="d" tx={iq.delivery_tx} />]] as [ReactNode, ReactNode][]) : []),
+        ...at,
+      ]
+    : [
+        ["Amount", <TokenAmount key="a" atomic={view.amount_paid} token={t} />],
+        ["Paid with", view.method === "voucher" ? "AI agent with a Budget" : "NEAR wallet"],
+        ["Network", network.name],
+        ...(payer ? ([["From", <AddressValue key="f" address={payer} />]] as [ReactNode, ReactNode][]) : []),
+        ["To", payout ? <AddressValue key="to" address={payout} label={view.merchant.name} /> : view.merchant.name],
+        ...(view.tx_hash ? ([["Transaction", <TxLink key="tx" hash={view.tx_hash} href={explorerTx(network, view.tx_hash)} />]] as [ReactNode, ReactNode][]) : []),
+        ...at,
+      ];
   return (
     <div className="relative flex flex-col gap-5">
       {!calm && watched && (
@@ -826,6 +949,8 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
         <motion.div initial={calm ? false : { opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ ...T.spring, delay: 0.55 }}>
           <h1 className="text-xl font-semibold tracking-[-0.01em]">{model.copy.headline}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{model.copy.body}</p>
+          {/* The panel's header carries the Simulated or Live label for this receipt. */}
+          {iq && <p className="mt-2 text-sm font-medium">{paidFromText(iq)}</p>}
         </motion.div>
       </div>
       {(view.status === "overpaid" || view.late) && <Notice tone="neutral">{model.copy.next}</Notice>}
@@ -840,14 +965,17 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
       <div className="relative flex flex-col gap-2 print:hidden">
         {back && <ReturnButton url={back} merchant={view.merchant.name} auto={watched} />}
         <div className="flex gap-2">
-          <Button asChild variant="outline" className="h-11 flex-1 rounded-xl">
-            <Link href={`/receipt/${view.id}`}>
-              <ShieldCheck /> Payment proof
-            </Link>
-          </Button>
-          <Button variant="outline" className="h-11 rounded-xl" onClick={() => window.print()} aria-label="Print receipt">
+          {/* The proof page checks the hub's record of a wallet payment; an any-chain payment's proof is its NEAR delivery above. */}
+          {!iq && (
+            <Button asChild variant="outline" className="h-11 flex-1 rounded-xl">
+              <Link href={`/receipt/${view.id}`}>
+                <ShieldCheck /> Payment proof
+              </Link>
+            </Button>
+          )}
+          <Button variant="outline" className={cn("h-11 rounded-xl", iq && "flex-1")} onClick={() => window.print()} aria-label="Print receipt">
             <Printer />
-            <span className="max-sm:sr-only">Print</span>
+            <span className={cn(!iq && "max-sm:sr-only")}>Print</span>
           </Button>
         </div>
         {!back && <p className="mt-1 text-center text-xs text-muted-foreground">You can close this page. This receipt stays at the same address.</p>}

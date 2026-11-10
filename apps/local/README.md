@@ -78,7 +78,8 @@ Nothing reaches the live 1Click API or NEAR mainnet:
 - When a simulated deposit arrives, the fake server's solver account `solver.test.near` sends a real `ft_transfer` of mock USDC to the business's any-chain account, so the node's delivery check reads a real transaction and its NEP-141 event on this chain.
 
 Setup proves `anychain.test.near` as the business's any-chain account with a NEP-413 message it signs, and the Admin turns the method on.
-The guide's any-chain step does through the node's API what the checkout's "Any chain" tab will do: get the options, get a deposit address for USDC on Base, simulate the deposit, and watch the quote reach `confirmed`.
+The guide's any-chain step uses the checkout's "Any chain" tab: pick USDC on Base, enter a refund address, get a deposit address, press "Simulate deposit (local only)", and watch the steps reach "Payment complete".
+The business sees the payment's "NEAR Intents" card in the dashboard, and its settings under Payment methods, "Accept any chain (NEAR Intents)".
 A second link, "Gift card, 2 USDC", is for sending too little: the deposit is returned and the payment is open again.
 The fake server's log is `apps/local/data/logs/oneclick-fake.log`.
 
