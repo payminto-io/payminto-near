@@ -14,11 +14,6 @@
 .github
 research
 docs
-contracts/out
-contracts/cache
-contracts/broadcast
-# Local anvil deployments are produced inside the stack, never baked into an image.
-contracts/deployments/31337.json
 **/tsconfig.tsbuildinfo
 **/.DS_Store
 .claude

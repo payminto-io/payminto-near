@@ -12,12 +12,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FOUNDRY_DISABLE_NIGHTLY_WARNING: "1"
-
 jobs:
   test:
-    name: Contracts, typecheck, tests, dashboard build, demo
+    name: Typecheck, tests, dashboard build, demo
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -30,16 +27,8 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1.9.2
-        with:
-          version: v1.5.0
-
       - name: Install
         run: pnpm install --frozen-lockfile
-
-      - name: Contracts (forge test)
-        working-directory: contracts
-        run: forge test
 
       - name: Typecheck
         run: pnpm -r typecheck
@@ -50,17 +39,38 @@ jobs:
       - name: Dashboard build
         run: pnpm --filter dashboard build
 
-      # The judge path from a clean checkout: local anvil, forge deploy, node, providers, agents, settlement, proof.
-      - name: Demo
+      # The judge path from a clean checkout, on the simulated hub.
+      - name: Demo (simulated hub)
         run: pnpm demo
 
-  # Opt-in fork suite against HashKey Chain testnet state (read-only RPC; every transaction goes to the local fork).
-  # Non-blocking: it depends on the public testnet RPC being reachable.
-  fork:
-    name: HashKey Chain testnet fork (anvil --fork-url)
+  contract:
+    name: Hub contract (fmt, clippy, unit and sandbox tests)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    continue-on-error: true
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: contracts-near
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # rust-toolchain.toml pins Rust 1.99.1 with rustfmt, clippy and wasm32; rustup installs it on first use.
+      - name: Toolchain
+        run: rustup show active-toolchain
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Sandbox tests deploy the committed out/hub.wasm and out/mock_ft.wasm on near-sandbox.
+      - name: Tests
+        run: cargo test
+
+  sandbox:
+    name: Demo, swarm, relayer, chain client and the local stack on near-sandbox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -71,37 +81,39 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1.9.2
-        with:
-          version: v1.5.0
-
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Fork suite
-        run: pnpm test:fork
+      - name: NearRpcChain against a deployed hub
+        run: pnpm --filter @payminto/chain test:sandbox
+
+      # The full story on a real NEAR runtime: every check reads the chain, and the hub is locked.
+      - name: Demo (near-sandbox)
+        run: pnpm demo --chain sandbox
+
+      - name: Swarm (near-sandbox)
+        run: pnpm swarm --chain sandbox
+
+      - name: Gas relayer against a deployed hub
+        run: pnpm --filter @payminto/relayer test:sandbox
+
+      # The product a person uses: contracts, node, dashboard, relayer and local signer on near-sandbox, with the
+      # browser's steps driven through the same HTTP calls and checked against the chain.
+      - name: Local stack (pnpm local --check)
+        run: pnpm local --check
 
   docker:
-    name: Docker images and local stack
+    name: Docker images
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # docker-compose.yml requires these at parse time; a build bakes none of them into an image.
       - name: Build images
-        run: docker compose --profile local build
-
-      - name: Local stack comes up healthy
-        run: |
-          docker compose --profile local up -d --wait --wait-timeout 180
-          curl -fsS http://127.0.0.1:8787/healthz
-          curl -fsS -o /dev/null http://127.0.0.1:3000/
-          curl -fsS -H "authorization: Bearer dev-admin-token" http://127.0.0.1:8787/metrics | grep '^payminto_node_info'
-
-      - name: Logs on failure
-        if: failure()
-        run: docker compose --profile local logs --no-color
-
-      - name: Tear down
-        if: always()
-        run: docker compose --profile local down -v
+        run: docker compose build
+        env:
+          HUB_ACCOUNT: hub.ci.testnet
+          OPERATOR_ACCOUNT: node.ci.testnet
+          OPERATOR_KEY: unused-at-build-time
+          NODE_SIGNING_SEED: unused-at-build-time

@@ -1,0 +1,30 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Cover</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+html,body{margin:0;padding:0;background:var(--background)}
+#root{position:relative;width:960px;height:288px;overflow:hidden;background:var(--background)}
+.primary{fill:var(--primary)}.ink{fill:var(--foreground)}.tint{fill:var(--accent)}.pos{fill:var(--positive)}.warn{fill:var(--warning)}.neg{fill:var(--negative)}
+.on{fill:var(--primary-foreground)}.tile{rx:var(--radius-sm)}
+#t{position:absolute;left:32px;bottom:32px;width:440px}
+h1{margin:0;font-family:var(--font-sans);font-weight:600;font-size:88px;line-height:.95;letter-spacing:-.03em;color:var(--foreground)}
+p{margin:12px 0 0;font-family:var(--font-sans);font-size:14px;line-height:20px;color:var(--muted-foreground)}
+</style></head>
+<body><div id="root"><svg viewBox="0 0 960 288" width="960" height="288" style="position:absolute;inset:0" aria-hidden="true">
+<!--
+blocks: primary 440x176, foreground 200x96, accent 144x96, positive 64x32, warning and negative 24x48, cut on space-4 steps
+arrangement: one wide slab bleeding top and right, with a staggered strip below it bleeding bottom and right, all right of x = 520
+pattern: geometric tiles row, because the product turns many Calls into few transfers, so 26 small tiles settle into 3 merged bars in the primary-foreground ink
+scales: gaps space-4 (16px), tile 16px on a space-6 (24px) pitch, tiles radius-sm, blocks square because the console is square at scale
+-->
+<rect class="primary" x="520" y="0" width="440" height="176"/>
+<rect class="ink" x="520" y="192" width="200" height="96"/>
+<rect class="tint" x="736" y="192" width="144" height="96"/>
+<rect class="pos" x="896" y="192" width="64" height="32"/>
+<rect class="warn" x="896" y="240" width="24" height="48"/>
+<rect class="neg" x="936" y="240" width="24" height="48"/>
+<rect class="on tile" x="552" y="36" width="16" height="16"/><rect class="on tile" x="576" y="36" width="16" height="16"/><rect class="on tile" x="600" y="36" width="16" height="16"/><rect class="on tile" x="624" y="36" width="16" height="16"/><rect class="on tile" x="648" y="36" width="16" height="16"/><rect class="on tile" x="672" y="36" width="16" height="16"/><rect class="on tile" x="696" y="36" width="16" height="16"/><rect class="on tile" x="720" y="36" width="16" height="16"/><rect class="on tile" x="744" y="36" width="16" height="16"/><rect class="on tile" x="552" y="76" width="16" height="16"/><rect class="on tile" x="576" y="76" width="16" height="16"/><rect class="on tile" x="600" y="76" width="16" height="16"/><rect class="on tile" x="624" y="76" width="16" height="16"/><rect class="on tile" x="648" y="76" width="16" height="16"/><rect class="on tile" x="672" y="76" width="16" height="16"/><rect class="on tile" x="552" y="116" width="16" height="16"/><rect class="on tile" x="576" y="116" width="16" height="16"/><rect class="on tile" x="600" y="116" width="16" height="16"/><rect class="on tile" x="624" y="116" width="16" height="16"/><rect class="on tile" x="648" y="116" width="16" height="16"/><rect class="on tile" x="672" y="116" width="16" height="16"/><rect class="on tile" x="696" y="116" width="16" height="16"/><rect class="on tile" x="720" y="116" width="16" height="16"/><rect class="on tile" x="744" y="116" width="16" height="16"/><rect class="on tile" x="768" y="116" width="16" height="16"/><rect class="on tile" x="792" y="116" width="16" height="16"/><rect class="on tile" x="824" y="36" width="104" height="16"/><rect class="on tile" x="824" y="76" width="104" height="16"/><rect class="on tile" x="824" y="116" width="104" height="16"/>
+</svg><div id="t"><h1>Payminto</h1><p>Bounded Budgets for AI agents, cleared on NEAR.</p></div></div></body>
+</html>

@@ -1,0 +1,25 @@
+{
+ "v": 3,
+ "layout": "files",
+ "createdOnFiles": {
+  "v": 1,
+  "at": "2026-11-09T19:47:55Z"
+ },
+ "title": "Payminto Design System",
+ "namespace": "Payminto",
+ "libraries": [],
+ "sections": {},
+ "groups": [],
+ "assetGroups": {},
+ "blobs": {},
+ "docs": {
+  "readme": "project/README.md",
+  "sections": []
+ },
+ "lastChange": {
+  "by": "Sagar Jethi",
+  "via": "Claude Code",
+  "at": "2026-11-09T19:47:55Z",
+  "note": "Built from apps/dashboard tokens and components with static previews."
+ }
+}

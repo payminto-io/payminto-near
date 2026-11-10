@@ -1,10 +1,8 @@
 # Payminto Clearing: self-hosted node + dashboard.
 #
-#   Local, zero real money:  docker compose --profile local up --build
-#   Live (133/177):          cp .env.docker.example .env, fill in, then: docker compose up -d --build
+#   NEAR testnet:  cp .env.docker.example .env, fill in, then: docker compose up -d --build
 #
 # Variables come from the shell or from .env next to this file (docs/DEPLOY.md, docs/OPERATIONS.md).
-# The defaults below are the local anvil stack; on 133/177 the node refuses the public dev key and dev token.
 
 name: payminto
 
@@ -19,10 +17,12 @@ services:
       - path: .env
         required: false
     environment:
-      CHAIN_ID: ${CHAIN_ID:-31337}
-      RPC_URL: ${RPC_URL:-http://anvil:8545}
-      # Public anvil key 9 and the dev token: local only, refused on live chains.
-      OPERATOR_KEY: ${OPERATOR_KEY:-0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6}
+      NETWORK: ${NETWORK:-near:testnet}
+      RPC_URL: ${RPC_URL:-https://rpc.testnet.near.org}
+      HUB_ACCOUNT: ${HUB_ACCOUNT:?set HUB_ACCOUNT}
+      OPERATOR_ACCOUNT: ${OPERATOR_ACCOUNT:?set OPERATOR_ACCOUNT}
+      OPERATOR_KEY: ${OPERATOR_KEY:?set OPERATOR_KEY}
+      NODE_SIGNING_SEED: ${NODE_SIGNING_SEED:?set NODE_SIGNING_SEED}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8787}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
@@ -36,14 +36,9 @@ services:
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
     volumes:
       - node-data:/data
-      - local-deployments:/app/deployments-local:ro
     ports:
       # Loopback only by default: put a TLS reverse proxy in front for remote access (docs/OPERATIONS.md).
       - "${NODE_PUBLISH:-127.0.0.1:8787}:8787"
-    depends_on:
-      deploy-local:
-        condition: service_completed_successfully
-        required: false
 
   dashboard:
     build:
@@ -63,42 +58,5 @@ services:
       node:
         condition: service_healthy
 
-  # ---- local profile: a private anvil chain and a one-shot deploy, no real money anywhere ----
-
-  anvil:
-    profiles: [local]
-    build:
-      context: .
-      dockerfile: docker/foundry.Dockerfile
-    image: payminto/foundry-local:local
-    restart: unless-stopped
-    # State survives restarts so the node database (which pins chain, hub and token) stays consistent with the chain.
-    command: ["anvil --host 0.0.0.0 --port 8545 --chain-id 31337 --state /state/anvil.json --state-interval 10"]
-    user: root
-    volumes:
-      - anvil-state:/state
-    ports:
-      - "${ANVIL_PUBLISH:-127.0.0.1:8545}:8545"
-    healthcheck:
-      test: ["CMD-SHELL", "cast chain-id --rpc-url http://127.0.0.1:8545"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
-  deploy-local:
-    profiles: [local]
-    image: payminto/foundry-local:local
-    user: root
-    command: ["deploy-local.sh"]
-    environment:
-      RPC_URL: http://anvil:8545
-    volumes:
-      - local-deployments:/home/foundry/contracts/deployments
-    depends_on:
-      anvil:
-        condition: service_healthy
-
 volumes:
   node-data:
-  local-deployments:
-  anvil-state:
