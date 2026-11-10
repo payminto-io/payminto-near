@@ -24,6 +24,7 @@ import { base58 } from "@scure/base";
 import { NearRpcChain } from "@payminto/chain/node";
 import { rpcReader } from "@payminto/payee-check";
 import {
+  acceptCheckoutTx,
   budgetIdOf,
   depositBudgetTx,
   formatAmount,
@@ -131,7 +132,8 @@ export async function sandboxHub(o: HubOptions): Promise<DemoHub> {
     });
     const report = JSON.parse(deploy.stdout.slice(deploy.stdout.lastIndexOf("\n{\n"))) as { steps: Record<string, string>; locked: boolean; codeHash: string };
     const signerOf: Record<string, AccountId> = { deploy_and_init: names.hub, register_hub_at_token: names.hub, set_settler: admin, set_checkout_key: admin, fund_settler_storage: admin, lock: names.hub };
-    // The script leaves the receipt key to the settler, which signs it below with its own key.
+    // The script leaves the receipt key and accepting the checkout role to the settler, which signs both below with its
+    // own key.
     for (const [step, hash] of Object.entries(report.steps)) if (signerOf[step]) tx(hash, signerOf[step], step);
     if (!report.locked) throw new Error("deploy-hub.ts did not lock the hub");
 
@@ -144,6 +146,7 @@ export async function sandboxHub(o: HubOptions): Promise<DemoHub> {
     };
     await wallet(names.operator, fundStorageTx(names.hub, names.operator, OPERATOR_STORAGE), `fund_storage: ${Number(OPERATOR_STORAGE / 10n ** 24n)} NEAR into its own storage balance, which every settle_batch draws on`);
     await wallet(names.operator, registerReceiptKeyTx(names.hub, o.checkoutKey), `register_receipt_key ${o.checkoutKey}: settle_own takes a voucher only with an acceptance signed by it`);
+    await wallet(names.operator, acceptCheckoutTx(names.hub, o.checkoutKey), `accept_checkout ${o.checkoutKey}: the node takes the checkout role the admin proposed, so checkout payments draw on its storage balance only with its consent`);
 
     // 5. The node's function-call key: it can call settle_batch and payout on the hub and nothing else.
     const operatorKey = newNearSecretKey();

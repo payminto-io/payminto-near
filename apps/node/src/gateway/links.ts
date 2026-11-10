@@ -1,4 +1,4 @@
-import { newLinkId, newLinkSlug } from "@payminto/protocol";
+import { DEFAULT_MIN_PAYMENT, newLinkId, newLinkSlug } from "@payminto/protocol";
 import type { Database } from "../db/database.ts";
 import { ApiError } from "../errors.ts";
 import { nowIso } from "../store.ts";
@@ -55,6 +55,11 @@ export class LinkService {
     return this.#db.get<{ n: number }>("SELECT COUNT(*) AS n FROM payments WHERE link_id = ? AND status NOT IN ('open', 'expired', 'canceled')", id)!.n;
   }
 
+  /** The smallest amount, in token base units, an open-amount link may let a payer choose. */
+  get minimum(): bigint {
+    return this.#ctx.minCheckoutAmount ?? DEFAULT_MIN_PAYMENT;
+  }
+
   json(r: LinkRow) {
     return linkJson(r, this.#ctx, this.counters(r.id));
   }
@@ -69,6 +74,7 @@ export class LinkService {
     } else {
       if (min === null || max === null) throw new ApiError(400, "VALIDATION_ERROR", "an open-amount link needs min_amount and max_amount");
       if (min <= 0n || max < min) throw new ApiError(400, "VALIDATION_ERROR", "need 0 < min_amount <= max_amount");
+      if (min < this.minimum) throw new ApiError(400, "AMOUNT_TOO_SMALL", `min_amount must be at least ${this.minimum} base units, the smallest checkout payment this node accepts`);
     }
     checkExpiry(b.expires_at);
     const id = newLinkId();
@@ -178,6 +184,7 @@ export class LinkService {
       return BigInt(l.amount);
     }
     if (requested === null) throw new ApiError(400, "AMOUNT_REQUIRED", `pass amount between ${l.min_amount} and ${l.max_amount} (base units)`);
+    if (requested < this.minimum) throw new ApiError(400, "AMOUNT_TOO_SMALL", `amount must be at least ${this.minimum} base units, the smallest checkout payment this node accepts`);
     if (requested < BigInt(l.min_amount!) || requested > BigInt(l.max_amount!)) {
       throw new ApiError(400, "AMOUNT_OUT_OF_RANGE", `amount must be between ${l.min_amount} and ${l.max_amount}`);
     }

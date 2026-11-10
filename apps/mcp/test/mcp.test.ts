@@ -317,8 +317,8 @@ describe("pay_link (gateway payment links over vouchers)", () => {
   });
 
   it("pays an open-amount link with the amount the caller names, held to maxAmountAtomic", async () => {
-    const link = await gateway.links.create({ title: "Tip jar", min_amount: 1_000n, max_amount: 30_000n });
-    expect((payload(await call("list_paid_services")) as Array<Record<string, unknown>>).find((s) => s.id === link.id)).toMatchObject({ priceAtomic: null, minAtomic: "1000", maxAtomic: "30000" });
+    const link = await gateway.links.create({ title: "Tip jar", min_amount: 10_000n, max_amount: 30_000n });
+    expect((payload(await call("list_paid_services")) as Array<Record<string, unknown>>).find((s) => s.id === link.id)).toMatchObject({ priceAtomic: null, minAtomic: "10000", maxAtomic: "30000" });
     const capped = await call("pay_link", { linkId: link.id, amountAtomic: "20000", maxAmountAtomic: "19999" });
     expect(capped.isError).toBe(true);
     expect(factsOf(capped)).toMatchObject({ refusal: { rule: "CLIENT_MAX_PRICE", enforcedBy: "agent", attemptedAmount: "20000" }, spend: { status: "none" } });

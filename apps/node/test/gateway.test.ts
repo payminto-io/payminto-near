@@ -176,12 +176,19 @@ describe("hosted checkout paid from a NEAR wallet", () => {
   });
 
   it("offers no wallet terms once a payment expired, and re-quotes for the wallet on request", async () => {
-    const p = (await call("POST", "/v1/payments", { amount: "1000", expires_in: 300 })).json;
+    const p = (await call("POST", "/v1/payments", { amount: "10000", expires_in: 300 })).json;
     node.services.db.run("UPDATE payments SET expires_unix = ? WHERE id = ?", Math.floor(Date.now() / 1000) - 1, p.id);
     expect((await call("GET", `/v1/checkout/${p.id}`, undefined, {}, null)).json).toMatchObject({ methods: [], wallet: null });
-    const q = (await call("POST", "/v1/payments", { amount: "1000", method: "voucher" })).json;
+    const q = (await call("POST", "/v1/payments", { amount: "10000", method: "voucher" })).json;
     expect((await call("GET", `/v1/checkout/${q.id}`, undefined, {}, null)).json.wallet).toBeNull();
-    expect((await call("POST", `/v1/checkout/${q.id}/method`, { method: "wallet" }, {}, null)).json).toMatchObject({ method: "wallet", wallet: { terms: { amount: "1000" } } });
+    expect((await call("POST", `/v1/checkout/${q.id}/method`, { method: "wallet" }, {}, null)).json).toMatchObject({ method: "wallet", wallet: { terms: { amount: "10000" } } });
+  });
+
+  it("signs no wallet terms below the node's minimum checkout amount, which the hub would refund", async () => {
+    const small = (await call("POST", "/v1/payments", { amount: "9999", expires_in: 300 })).json;
+    expect((await call("GET", `/v1/checkout/${small.id}`, undefined, {}, null)).json).toMatchObject({ wallet: null });
+    const ok = (await call("POST", "/v1/payments", { amount: "10000", expires_in: 300 })).json;
+    expect((await call("GET", `/v1/checkout/${ok.id}`, undefined, {}, null)).json.wallet.terms.amount).toBe("10000");
   });
 });
 

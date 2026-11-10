@@ -64,4 +64,11 @@ describe("config", () => {
       /GATEWAY_PAYOUT_ACCOUNT: must not be the operator account/,
     );
   });
+
+  it("reads the minimum checkout amount, which defaults to the hub's own minimum", () => {
+    expect(loadConfig({ ...base, GATEWAY_ENABLED: "true" }).gateway?.minCheckoutAmount).toBeUndefined();
+    expect(loadConfig({ ...base, GATEWAY_ENABLED: "true", MIN_CHECKOUT_AMOUNT: "25000" }).gateway?.minCheckoutAmount).toBe(25_000n);
+    expect(problems({ ...base, GATEWAY_ENABLED: "true", MIN_CHECKOUT_AMOUNT: "0" })).toMatch(/MIN_CHECKOUT_AMOUNT/);
+    expect(problems({ ...base, GATEWAY_ENABLED: "true", MIN_CHECKOUT_AMOUNT: "1.5" })).toMatch(/MIN_CHECKOUT_AMOUNT/);
+  });
 });

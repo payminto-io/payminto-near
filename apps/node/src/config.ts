@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_CHECKOUT_TTL_SECONDS, MAX_EXPIRES_IN_SECONDS, MIN_EXPIRES_IN_SECONDS, isAccountId, networks, type AccountId as Address, type Network } from "@payminto/protocol";
+import { DEFAULT_CHECKOUT_TTL_SECONDS, DEFAULT_MIN_PAYMENT, MAX_EXPIRES_IN_SECONDS, MIN_EXPIRES_IN_SECONDS, isAccountId, networks, type AccountId as Address, type Network } from "@payminto/protocol";
 import { smtpConfigFromEnv, type SmtpConfig } from "./auth/mailer.ts";
 import { DEV_AGENT_SECRETS_KEY, parseSecretsKey } from "./agents/secrets.ts";
 
@@ -124,6 +124,12 @@ const envSchema = z.object({
   PLATFORM_FEE_ACCOUNT: account.optional(),
   PUBLIC_CHECKOUT_URL: z.url().default("http://localhost:3000"),
   CHECKOUT_TTL_SECONDS: intFromEnv(DEFAULT_CHECKOUT_TTL_SECONDS, MIN_EXPIRES_IN_SECONDS),
+  // The smallest amount, in token base units, the node signs checkout terms for or accepts on an open-amount link.
+  // Default: the hub's own default minimum, 10000 (0.01 USDC); each payment writes a permanent record on chain.
+  MIN_CHECKOUT_AMOUNT: z
+    .string()
+    .regex(/^[1-9][0-9]{0,38}$/, "a positive whole number of token base units")
+    .optional(),
   WEBHOOK_ALLOW_PRIVATE: z.enum(["true", "false"]).optional(),
   GATEWAY_WATCH_INTERVAL_MS: intFromEnv(2_000, 250),
   // Accounts (docs/PRODUCT.md sections 4 and 10). The dashboard origin: links in emails, the CSRF Origin check and the
@@ -310,6 +316,11 @@ export type GatewayConfig = {
   /** Origin of the hosted checkout (the dashboard), no trailing slash. */
   checkoutBaseUrl: string;
   checkoutTtlSec: number;
+  /**
+   * The smallest checkout amount in token base units (MIN_CHECKOUT_AMOUNT): the node signs no terms below it and refuses
+   * open-amount links that allow less. Absent means the hub's default, `DEFAULT_MIN_PAYMENT`.
+   */
+  minCheckoutAmount?: bigint;
   /** false: webhook URLs must be https and resolve to public addresses only. */
   webhookAllowPrivate: boolean;
   watchIntervalMs: number;
@@ -474,6 +485,7 @@ function gatewayConfig(e: z.infer<typeof envSchema>, live: boolean, problems: st
     feeRecipient: e.PLATFORM_FEE_ACCOUNT ?? null,
     checkoutBaseUrl: e.PUBLIC_CHECKOUT_URL.replace(/\/+$/, ""),
     checkoutTtlSec: e.CHECKOUT_TTL_SECONDS,
+    ...(e.MIN_CHECKOUT_AMOUNT ? { minCheckoutAmount: BigInt(e.MIN_CHECKOUT_AMOUNT) } : {}),
     webhookAllowPrivate: allowPrivate,
     watchIntervalMs: e.GATEWAY_WATCH_INTERVAL_MS,
     ...(intents ? { intents } : {}),
@@ -622,6 +634,7 @@ export function redactedConfig(c: Config) {
           feeRecipient: c.gateway.feeRecipient,
           checkoutBaseUrl: c.gateway.checkoutBaseUrl,
           checkoutTtlSec: c.gateway.checkoutTtlSec,
+          minCheckoutAmount: (c.gateway.minCheckoutAmount ?? DEFAULT_MIN_PAYMENT).toString(),
           webhookAllowPrivate: c.gateway.webhookAllowPrivate,
           intents: c.gateway.intents
             ? {
