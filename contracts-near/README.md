@@ -16,7 +16,7 @@ Hub v2 keeps one invariant per file, and every file states its invariant at the 
 - `src/settlement.rs`: `settle_batch` and `settle_own`, with the voucher and acceptance checks.
 - `src/payouts.rs`: `payout`, its callback, and credit entries.
 - `src/storage.rs`: storage charging, `fund_storage` and `withdraw_storage`.
-- `src/checkout.rs`: checkout payments and `set_checkout_key`.
+- `src/checkout.rs`: checkout payments, `set_checkout_key`, `accept_checkout` and `set_min_payment`.
 - `src/admin.rs`: `set_settler`, `register_receipt_key`, `propose_admin` and `accept_admin`.
 - `src/views.rs`: every read-only method.
 - `src/events.rs`: the NEP-297 events.
@@ -48,7 +48,8 @@ cargo test --test gas_profile -- --nocapture --ignored --test-threads=1
 `cargo test` needs the files in `out/`, because the sandbox tests deploy them.
 The sandbox tests start their own `near-sandbox` 2.14.0; set `NEAR_SANDBOX_BIN_PATH` to reuse a binary instead of downloading one.
 
-The current `out/hub.wasm` is hub v2 (crate version 0.2.0): 337,826 bytes, sha256 `cf978c32ec76c2967c05384e1533b298c9cbe623274e9542bc07987d9babcd3f`, which is NEAR code hash `EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx`.
+The current `out/hub.wasm` is hub v2 (crate version 0.2.0) with the pre-audit fixes: 345,682 bytes, sha256 `ef9e1fcee61b4dbd89f9a2051c673c39a2eec480376128a93f23b107f552ea09`, which is NEAR code hash `H8NHZwWQPwgdYCku8kUR7AqcnbvY28BQGaRU5LhuARFN`.
+The hub v2 build before the pre-audit fixes was 337,826 bytes with code hash `EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx`; it was never deployed.
 `out/mock_ft.wasm` is 148,597 bytes with sha256 `4afb0fa6ec9c5d345687af8b374f69196a83ac129be739c97c076427f14d33e8`.
 They were built with `sh build.sh`, cargo-near 0.23.0 and Rust 1.99.1.
 `packages/chain/scripts/deploy-hub.ts` pins the code hash as `HUB_CODE_HASH` and refuses to deploy the default wasm when it differs.
@@ -82,21 +83,24 @@ The human runs it against testnet; no assistant run has used it outside the sand
 It runs these steps in order, and skips any step the chain already shows as done, so a run that stopped halfway can be repeated:
 
 0. It checks that the hub account holds enough NEAR for the wasm, its state and a margin of its own (`--min-hub-balance`, default 0.1 NEAR).
-   With the current wasm that is about 3.50 NEAR.
+   With the current wasm that is about 3.58 NEAR.
 1. The hub account signs `DeployContract` and `new({ admin, token, network })` in one transaction, because only the hub account itself may call `new` (`NOT_SELF`).
 2. The hub account signs `storage_deposit({ account_id: hub, registration_only: true })` at the token, so the first Budget deposit cannot fail for want of registration.
    The deposit is the larger of `--storage-deposit` (default 0.00125 NEAR) and the token's `storage_balance_bounds.min`.
 3. The admin signs `set_settler({ account: settler, allowed: true })`.
    The deposit pays for the allowlist entry, and the hub refunds what it does not use.
 4. The admin signs `set_checkout_key({ key, settler })`, with a deposit that pays for the entry.
-   Payments accepted under checkout terms draw on that settler's storage balance.
+   This is only a proposal: nothing draws on the settler's storage balance until the settler accepts in step 6b.
 5. Prefund: the admin signs `fund_storage({ account: settler })` with `--settler-storage` (default 1 NEAR), unless the settler already holds `--min-settler-storage`.
    The default minimum is 0.281 NEAR, which is the records of 100 batches by a 64-character settler: in hub v2 a settler pays only for its own batch records, receipt keys and checkout payments, and each Budget's owner prepays its payees' settlement storage.
    Anyone may fund a settler, and the settler can take the unused part back with `withdraw_storage`.
 6. The settler signs `register_receipt_key({ key })` with one yoctoNEAR, if `PAYMINTO_SETTLER_KEY` is set.
    Without that key the script prints the transaction for the node operator to sign and carries on.
    `--receipt-key` names the key, and it defaults to the checkout key, because a standard node signs both with one key.
-7. The script checks the on-chain code hash against the local wasm, the config, the settler, the checkout key and its settler, the token registration, the settler's storage balance and the hub's own NEAR balance, and refuses to continue on any mismatch.
+6b. The settler signs `accept_checkout({ key })` with one yoctoNEAR, which makes it the checkout settler, if `PAYMINTO_SETTLER_KEY` is set.
+   Without that key the script prints the transaction for the node operator to sign, as in step 6.
+7. The script checks the on-chain code hash against the local wasm, the config, the settler, the checkout key and its settler (or the pending proposal when step 6b was left to the operator), the token registration, the settler's storage balance and the hub's own NEAR balance, and refuses to continue on any mismatch.
+   It also refuses to lock while an admin transfer is pending (`config().pending_admin` is not null), because the proposed account could still accept after the lock.
 8. The hub account signs one transaction that deletes every access key on the hub account, and the script then checks that none is left.
 
 Step 8 removes function-call keys as well as full-access keys.
@@ -107,7 +111,7 @@ The hub's own balance is its NEAR, less what its storage locks, less the storage
 The hub pays for its own code and for nothing else, so that balance does not fall as the hub is used, apart from the one yoctoNEAR that NEP-141 requires on each token transfer.
 
 Keys come from `PAYMINTO_HUB_KEY` and `PAYMINTO_ADMIN_KEY` (`ed25519:...`) if they are set, and otherwise from near-cli credentials in `~/.near-credentials/testnet/<account>.json` (or `--credentials-dir`).
-`PAYMINTO_SETTLER_KEY` is optional and is used for step 6 only.
+`PAYMINTO_SETTLER_KEY` is optional and is used for steps 6 and 6b only.
 The hub, admin, settler and token accounts must already exist.
 The hub account needs NEAR for the wasm, and the admin needs the prefund.
 
@@ -124,7 +128,7 @@ node packages/chain/scripts/deploy-hub.ts --network testnet \
 
 Other flags are `--rpc-url`, `--wasm` (default `contracts-near/out/hub.wasm`), `--receipt-key`, and `--storage-deposit`, `--settler-storage`, `--min-settler-storage` and `--min-hub-balance` in yoctoNEAR.
 The dry run prints every step, including the balance check, the prefund and the receipt key, with their deposits.
-The script prints a JSON report with the wasm sha256, the code hash, each step's transaction hash, the settler's storage balance, whether its receipt key is registered and whether the hub is locked.
+The script prints a JSON report with the wasm sha256, the code hash, each step's transaction hash, the settler's storage balance, whether its receipt key is registered, whether it accepted the checkout role and whether the hub is locked.
 If a step fails after its transaction was sent, the error names the transaction hash; check it before running again.
 
 ## Deployment notes
@@ -132,27 +136,41 @@ If a step fails after its transaction was sent, the error names the transaction 
 The hub needs a NEP-145 `storage_deposit` at the token before its first deposit, and it never pays token registration for anyone else.
 The hub account needs NEAR for its own code only.
 The node settles with a function-call key on its own account, limited to `settle_batch` and `payout` on the hub.
-The node's account itself, with a full-access key, registers the receipt key and withdraws storage balance, because both need one yoctoNEAR.
+The node's account itself, with a full-access key, registers the receipt key, accepts the checkout role and withdraws storage balance, because all three need one yoctoNEAR.
 A node should alert when `storage_of(settler)` runs low: `settle_batch` is refused with `INSUFFICIENT_STORAGE` once the balance cannot pay for a batch record.
 
 ## Rules enforced on chain
 
 - `open_budget` sets `cap`, and the predecessor is the owner, so a DAO contract works with no key assumptions.
+- `open_budget` refuses, with `INVALID_BUDGET`, a settler that is the hub or the token account, which could never settle.
+  It also refuses a `valid_until` above `MAX_VALID_UNTIL_MS` = 10^13 ms (the year 2286), so a client that sends microseconds or nanoseconds is refused instead of opening a Budget that never expires.
 - `ft_on_transfer` accepts `{"budget":{"budget_id"}}` from the owner only, and it raises only `escrow`.
 - `settle_batch` is one atomic receipt, and all checks run before any write.
   The settler is the caller, and the batch needs nothing but the claims.
 - The `cap` limits gross spending, and each owner's net debit must fit within escrow.
 - `expected_net` must match the recomputed netting exactly, sorted by account and omitting zero entries.
+- Netting is by account, so an owner's earnings that offset its own spending in the same batch are booked as escrow, not as withdrawable credit.
+  That escrow is spendable by the owner's agent and returned to the owner at `reclaim`, after the settlement deadline.
+  How much is booked this way depends on how the settler groups claims into batches.
+  If A's agent spends 10 and A earns 15, one batch leaves A with escrow 100 and credit 5, and two batches leave escrow 90 and credit 15 (pre-audit P3, pinned by `p3_netting_turns_an_owners_earnings_into_locked_escrow`).
+  No funds are lost either way.
 - Settlement closes at `min(valid_until + 3 days, revoked_at + 24 hours)`, and `reclaim` and `prune` open strictly after that.
 - `revoke_budget` is refused with `BUDGET_NOT_OPEN` once `valid_until` has passed, so a revoke can never shorten the 3-day expiry grace sellers rely on.
 - A Budget either lists 1 to 16 payees, sorted and unique, or sets `allow_any_payee` with an empty list and declares in `max_payees` (1 to 256) how many distinct payees it can ever pay.
   An empty list without the flag, the flag with a list, or `max_payees` on a listed Budget is `INVALID_BUDGET`.
   Neither field is part of the Budget id: the hub only accepts the flag with an empty list, so the list fixes it.
+- `max_payees` is a count: the Budget records `max_payees` (the list's length for a listed Budget) and `payees_paid`, and each payee it has never paid before counts once.
+  One payee more than `max_payees` is refused with `TOO_MANY_PAYEES`, in `settle_batch` and in `settle_own` (pre-audit P4).
 - The agent key must be canonical and not of small order, or `open_budget` is refused with `INVALID_BUDGET`; receipt keys and the checkout key with `INVALID_KEY`.
   With a small-order key anyone could forge signatures without a secret (audit finding F3).
 - A claim's signed `amount` must not exceed its cumulative step, `cumulative - settled`, or the claim is refused with `AMOUNT_ABOVE_STEP`.
   `cumulative` stays the authority, and a lower `amount` is allowed, because a payee may settle only its latest voucher and skip earlier ones.
 - Batch ids belong to their settler: the hub keys batches by `(settler, batch_id)`, so `batch({ settler, batch_id })` and `verify_receipt({ settler, batch_id, fields, proof })` name the settler, and one settler can never take another's id.
+- The checkout settler opts in: the admin's `set_checkout_key({ key, settler })` only proposes, and the named settler takes the role with `accept_checkout({ key })` and exactly one yoctoNEAR.
+  Anyone else, or another key, is refused with `NOT_PENDING_CHECKOUT`, so the admin can never spend a settler's storage balance on checkout payments without its consent (pre-audit P2).
+  A payment is refunded once the checkout settler is no longer allowlisted, and `pending_checkout()` shows an open proposal.
+- A checkout payment below `min_payment` is refunded.
+  It is 10,000 base units (0.01 USDC) on a new hub, the admin can change it with `set_min_payment({ amount })`, and `config()` shows it.
 - The hub's own account and the token account are never payees or merchants.
   A claim that names one is refused with `RESERVED_ACCOUNT`, a Budget that lists one with `INVALID_BUDGET`, and a checkout payment to one is returned.
   Credit in their name could never be paid out.
@@ -162,15 +180,19 @@ A node should alert when `storage_of(settler)` runs low: `settle_batch` is refus
 - Settlement never draws credit by itself, because `payout` is open to anyone, so a third party could empty an owner's credit and break a pending batch.
   An owner who wants to spend earned credit moves it into escrow first.
 - `settle_batch` and `payout` need no attached deposit, so a function-call key can call them.
-  `fund_from_credit`, `register_receipt_key`, `withdraw_storage` and `accept_admin` need exactly one yoctoNEAR (`ONE_YOCTO_REQUIRED`), and `set_settler`, `set_checkout_key` and `propose_admin` need at least one (`DEPOSIT_REQUIRED`).
+  `fund_from_credit`, `register_receipt_key`, `accept_checkout`, `withdraw_storage` and `accept_admin` need exactly one yoctoNEAR (`ONE_YOCTO_REQUIRED`), and `set_settler`, `set_checkout_key`, `set_min_payment` and `propose_admin` need at least one (`DEPOSIT_REQUIRED`).
   The yoctoNEAR on `fund_from_credit` means a function-call key cannot turn withdrawable credit into agent spending power.
   `revoke_budget` stays callable from a function-call key, for gasless and emergency revokes.
 - The admin moves in two steps: `propose_admin({ new_admin })` by the admin names the account (or withdraws the proposal with `null`), and `accept_admin()` by that account, with exactly one yoctoNEAR, makes it the admin.
   `config()` shows `pending_admin`.
 - Every panic the hub raises is a code from `src/errors.rs`, and `ALL` there equals `HUB_ERRORS` in `packages/chain`; both sides test against `packages/chain/vectors/errors.json`.
   Only near-sdk's own checks that run before the hub's code still panic with a library message: initializing twice, malformed JSON arguments, and a deposit on a method that takes none.
-- Every state change logs a NEP-297 event, `EVENT_JSON:{"standard":"payminto","version":"1.0.0","event":...,"data":[...]}`: `budget_opened`, `budget_funded`, `credit_moved_to_escrow`, `budget_revoked`, `reclaim_started`, `reclaim_finished`, `budget_pruned`, `batch_settled`, `claim_settled_by_payee`, `payout_started`, `payout_finished`, `payment_received`, `settler_set`, `checkout_key_set`, `receipt_key_registered`, `storage_funded`, `storage_withdrawn`, `admin_proposed` and `admin_transferred`.
+- Every state change logs a NEP-297 event, `EVENT_JSON:{"standard":"payminto","version":"1.0.0","event":...,"data":[...]}`: `budget_opened`, `budget_funded`, `credit_moved_to_escrow`, `budget_revoked`, `reclaim_started`, `reclaim_finished`, `budget_pruned`, `batch_settled`, `claim_settled_by_payee`, `payout_started`, `payout_finished`, `storage_reserve_returned`, `payment_received`, `settler_set`, `checkout_key_proposed`, `checkout_key_set`, `min_payment_set`, `receipt_key_registered`, `storage_funded`, `storage_withdrawn`, `admin_proposed` and `admin_transferred`.
   Amounts and times are decimal strings and ids hex, as in the views, and logging never panics.
+  A call that changes nothing logs nothing: `set_settler` for an account already in that state, `propose_admin` with the proposal already pending, and `set_min_payment` with the current amount.
+  `batch_settled` is a summary (settler, batch id, root, number of claims, gross, net).
+  The per-Budget and per-account amounts of a batch are its `claims` and `expected_net` arguments, which are public in the transaction, so an indexer reads them there or reads the views.
+  `claim_settled_by_payee` and `storage_reserve_returned` carry the Budget's `storage_reserve_bytes` after the change.
 
 ### Who may call what
 
@@ -179,13 +201,14 @@ A node should alert when `storage_of(settler)` runs low: `settle_batch` is refus
 | Role | Methods | Refused with |
 |---|---|---|
 | The hub itself | `new`, `on_payout`, `on_reclaim` | `NOT_SELF` |
-| Admin | `set_settler`, `set_checkout_key`, `propose_admin` | `NOT_ADMIN`, `DEPOSIT_REQUIRED` |
+| Admin | `set_settler`, `set_checkout_key`, `set_min_payment`, `propose_admin` | `NOT_ADMIN`, `DEPOSIT_REQUIRED` |
 | Pending admin | `accept_admin` | `NOT_PENDING_ADMIN`, `ONE_YOCTO_REQUIRED` |
 | Owner of the Budget | `revoke_budget`, `reclaim`, `prune`; `fund_from_credit` with exactly one yoctoNEAR | `NOT_OWNER`, `ONE_YOCTO_REQUIRED` |
 | Allowlisted settler | `settle_batch` (and the Budget must name it); `register_receipt_key` with exactly one yoctoNEAR | `NOT_SETTLER`, `NOT_BUDGET_SETTLER`, `ONE_YOCTO_REQUIRED` |
+| The settler `set_checkout_key` proposed | `accept_checkout` with exactly one yoctoNEAR | `NOT_PENDING_CHECKOUT`, `ONE_YOCTO_REQUIRED`, `NOT_SETTLER` |
 | The claim's payee, not the owner | `settle_own` | `NOT_PAYEE`, `PAYEE_IS_OWNER` |
 | The token | `ft_on_transfer` | none: any other caller gets the full amount back |
-| Anyone, by decision | `open_budget`, `payout`, `fund_storage`, `withdraw_storage` (own balance, exactly one yoctoNEAR), every view | none |
+| Anyone, by decision | `open_budget`, `payout`, `fund_storage`, `withdraw_storage` (own balance, exactly one yoctoNEAR), every view including `pending_checkout` | none |
 
 ## settle_own and the node's acceptance
 
@@ -232,16 +255,19 @@ A settler pays only for its own batch records, so an owner and a set of throwawa
 | `open_budget` | The owner's deposit: the record, 8 bytes for a later revoke, and 332 bytes for each payee slot. The excess is refunded. |
 | `revoke_budget` | Prepaid by the owner at `open_budget`. |
 | `settle_batch` | Each Budget's reserve: its own new `settled` entries, and the credit entries of payees whose first claim in the batch is that Budget's. A Budget whose reserve is short fails the whole batch with `INSUFFICIENT_RESERVE`. The settler's storage balance: the batch record only. |
-| `ft_on_transfer`, checkout payment | The storage balance of the settler named in `set_checkout_key`. |
+| `ft_on_transfer`, checkout payment | The storage balance of the checkout settler, which accepted the role itself with `accept_checkout`. A payment below `min_payment` is refunded and writes nothing. |
 | `register_receipt_key` | The calling settler's storage balance. |
-| `settle_own` | The Budget's reserve, then the caller's deposit. The excess is refunded. |
+| `settle_own` | The `settled` entry: the Budget's reserve first, then the caller's deposit. A new credit entry: the reserve when what is left of it covers the whole entry, otherwise the caller's deposit for all of it. The excess is refunded. |
 | `set_settler`, `set_checkout_key`, `propose_admin` | The admin's deposit. The excess is refunded. |
+| `accept_checkout`, `set_min_payment` | Nothing new: the proposal moves into place, and the minimum is a fixed-width field. |
 | `fund_storage` | The deposit itself pays for a new balance entry. |
 | `payout`, `reclaim`, `fund_from_credit`, `prune`, deposits | They write nothing new. |
 
 - `prune({ budget_id, payees })`, by the owner after the settlement deadline, removes the Budget's `settled` entries for up to 100 payees and refunds the owner the storage they freed plus whatever is left of the reserve.
   Nothing can settle against the Budget any more, so those entries are no longer needed.
   The Budget record stays, so its id can never be opened again and its old vouchers can never settle twice.
+  After a prune `settled_of` returns 0 for those payees.
+  What remains as evidence of what was settled is the `claim_settled_by_payee` events (with the final `cumulative`), the `batch_settled` events, the batch roots that `verify_receipt` reads, and the transactions themselves.
 - `fund_storage({ account })` adds the attached NEAR to an account's storage balance, and anyone may fund any account except the hub and the token, which could never withdraw it (`RESERVED_ACCOUNT`).
 - `withdraw_storage({ amount })` returns unused balance to the caller, with exactly one yoctoNEAR attached.
 - `storage_of({ account })` is the unused balance in yoctoNEAR.
@@ -250,12 +276,15 @@ A settler pays only for its own batch records, so an owner and a set of throwawa
 - A `credits` entry is removed once it holds no credit and nothing is in flight to its account.
   The storage that frees goes back to whoever paid for the entry, which the entry records: the Budget's reserve for an entry a settlement created, or the checkout settler's storage balance for a checkout payment.
   An entry that a `settle_own` caller's deposit paid for has no one to return to, so that storage stays with the hub.
+  No entry is ever paid for by a reserve and owned by nobody: `settle_own` marks a new credit entry as the Budget's exactly when the reserve pays for it (pre-audit P1).
+  So over any mix of batches, payouts and `settle_own`, every byte a reserve gives comes back, and `prune` returns the owner's prepayment in full once its payees are paid out (`p1_the_reserve_is_conserved_over_mixed_settlement_and_returned_in_full_at_prune`).
   `settled` entries are removed only by `prune`, and batch records are kept, because `verify_receipt` reads them.
 - Record sizes are in `packages/chain/src/storage.ts`, and `packages/chain/vectors/storage.json` pins them: the contract's tests write each record and measure it.
   A `settled` entry is 93 bytes plus the payee's length.
   A `credits` entry is 78 bytes plus the account's length with no funder, 111 bytes plus the account's length when a Budget paid, and 83 bytes plus the account's and the settler's lengths when a settler paid.
   A batch record is 153 bytes plus twice the settler's length, since the settler is in its key too.
-- Measured on sandbox: a batch of 100 one-unit claims to 100 new 64-character payees wrote 33,200 bytes from the Budget's reserve and one batch record from the settler's balance, the hub's own balance did not change, and a 101st new payee was refused with `INSUFFICIENT_RESERVE`.
+  A Budget record carries `max_payees` and `payees_paid`, 8 bytes more than before the pre-audit fixes.
+- Measured on sandbox: a batch of 100 one-unit claims to 100 new 64-character payees wrote 33,200 bytes from the Budget's reserve and one batch record from the settler's balance, the hub's own balance did not change, and a 101st new payee was refused with `TOO_MANY_PAYEES`.
 
 ## Async and callback review
 
@@ -277,7 +306,7 @@ Reviewed against the `docs.near.org` security pages on reentrancy, callbacks and
 
 ## Gas profile
 
-Measured with `tests/gas_profile.rs` on `near-sandbox` 2.14.0 on macOS ARM, using `out/hub.wasm`, for hub v1 and hub v2 on the same machine.
+Measured with `tests/gas_profile.rs` on `near-sandbox` 2.14.0 on macOS ARM, using `out/hub.wasm`, for hub v1 and the current hub v2, with the pre-audit fixes, on the same machine.
 Each figure is the total gas burnt by one `settle_batch` transaction, in Tgas.
 Every claim settles to a payee with no prior `settled` or `credits` entry, which is the storage-heavy case.
 
@@ -285,16 +314,18 @@ Every claim settles to a payee with no prior `settled` or `credits` entry, which
 |---|---|---|---|---|
 | 1 | 3.2 | 3.4 | 3.2 | 3.4 |
 | 10 | 9.1 | 9.3 | 11.0 | 11.2 |
-| 50 | 36.1 | 36.1 | 45.9 | 47.0 |
-| 100 | 71.2 | 71.0 | 90.2 | 93.7 |
+| 50 | 36.1 | 36.1 | 45.9 | 47.1 |
+| 100 | 71.2 | 71.0 | 90.2 | 93.9 |
 
 The worst case the hub allows in one batch, `profile_settle_batch_worst_case`: 100 owners with 64-character account names, each with its own Budget listing 16 payees of 64 characters, and one claim per Budget to a new 64-character payee.
-It burnt 114.3 Tgas on hub v1 and 119.6 Tgas on hub v2.
-Charging each Budget its own bytes costs hub v2 about 3.5 Tgas on 100 distinct Budgets, about 4 percent.
+It burnt 114.3 Tgas on hub v1 and 119.8 Tgas on hub v2.
+Charging each Budget its own bytes costs hub v2 about 3.7 Tgas on 100 distinct Budgets, about 4 percent.
+The pre-audit fixes (the payee count and the `settle_own` rule) moved the hub v2 figures by at most 0.2 Tgas: before them the distinct-Budget rows read 47.0 and 93.7 and the worst case 119.6.
 
 `NearRpcChain` attaches `30 + 2 * claims` Tgas to `settle_batch`, which is 230 Tgas for 100 claims.
 
-`payout` to 10 accounts burnt 52.4 Tgas in total on hub v2 (50.4 on v1), with 11.3 Tgas in the hub call and about 1.96 Tgas in each callback against a static 8 Tgas.
+`payout` to 10 accounts burnt 53.5 Tgas in total on hub v2, 52.4 before the pre-audit fixes and 50.4 on v1.
+Each callback burns about 2 Tgas against a static 8 Tgas, and now logs a `storage_reserve_returned` event when it removes an entry a Budget paid for.
 The gas a payout needs attached is far more than it burns, because every transfer and callback reserves its static gas up front.
 
 | `payout` to 10 accounts | Tgas |
@@ -341,9 +372,13 @@ The slope of about 0.9 Tgas per claim suggests that around 250 claims would stil
   The cost to the node is one failed transaction, and no funds move twice.
 - Storage freed from a `credits` entry that a `settle_own` caller's deposit paid for stays on the hub account and cannot be withdrawn by anyone.
   `prune` refunds to the owner every byte it frees, including a `settled` entry that a `settle_own` caller's deposit paid for.
-- A Budget with `allow_any_payee` cannot pay more distinct payees than its `max_payees`; the owner opens a new Budget for more.
+- A Budget cannot pay more distinct payees than its `max_payees`, its list's length or the declared count; the owner opens a new Budget for more.
 - Checkout payment records stay on the checkout settler's balance for good, and batch records on their settler's.
-  The node signs every checkout and chooses when to batch, so neither can be driven by an outsider.
+  The checkout settler accepted the role itself, and a payment below `min_payment` (10,000 base units by default) is refunded, so one-unit payments cannot burn the settler's balance.
+  The node also refuses open-amount links and payer amounts below its own `MIN_CHECKOUT_AMOUNT`, and signs no checkout terms below it.
+  Payment records cannot be pruned.
+- `open_budget` charges 8 bytes for a later revoke, and `prune` does not refund them when the Budget was never revoked (0.00008 NEAR).
+- After `prune`, `settled_of` returns 0 for the pruned payees; the events, the batch roots and the transactions remain.
 - `register_receipt_key` takes no proof that the settler holds the key's secret.
   The key check closes forgery; a settler that registers a key it does not hold only stops its own sellers from using `settle_own`.
 - Each `payout` and `reclaim` transfer attaches the one yoctoNEAR that NEP-141 requires, from the hub's own balance.

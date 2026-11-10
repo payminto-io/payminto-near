@@ -117,7 +117,7 @@ Through the dashboard of `pnpm local`, `GET /api/v1/events` answered `200` with 
 | Node account's full-access key | Everything the node account can do, including adding keys, registering a receipt key on the hub and withdrawing the storage balance | Offline; the running node never needs it. You use it from a wallet for those few transactions |
 | Signing seed (`NODE_SIGNING_SEED`) | Sign receipts (acceptances), refusal records and checkout terms | Generated with `openssl rand -hex 32`; the public development value is refused on testnet |
 | Admin token (`ADMIN_TOKEN`) | Everything, before setup or with break-glass on; `/metrics` always | `openssl rand -hex 32`; at least 32 characters on testnet |
-| Hub admin key | Add or remove settlers, set the checkout key | Offline; it has no path to funds, but it decides who may settle |
+| Hub admin key | Add or remove settlers, propose the checkout key, set the minimum checkout payment | Offline; it has no path to funds and cannot spend a settler's storage balance, but it decides who may settle |
 | Hub account key | Nothing after locking | The hub account has no keys once `deploy-hub.ts` locks it |
 | Agent secrets key (`AGENT_SECRETS_KEY`) | Open every business's stored model API key | With the other secrets, and never where the database backups are |
 
@@ -138,7 +138,7 @@ Notes on each:
   So one settler account can change its signing seed three times, and a leaked receipt key cannot be removed.
   If the seed leaks, the remedy is a new settler account, and owners opening new Budgets that name it.
 - The checkout key on the hub is the same public key.
-  Changing the seed also needs the hub admin to call `set_checkout_key({ key, settler })`, or the hub returns every wallet payment.
+  Changing the seed also needs the hub admin to propose it with `set_checkout_key({ key, settler })` and the settler account to accept it with `accept_checkout({ key })` and one yoctoNEAR, or the hub returns every wallet payment.
 
 Rotation:
 
@@ -146,7 +146,7 @@ Rotation:
 |---|---|
 | Admin token | Change it and restart. People sign in again only if they used it; sessions are separate |
 | Settler key | Add a new function-call key to the node account for `settle_batch` and `payout`, set `OPERATOR_KEY`, restart, then delete the old key. A shutdown waits for a settlement in flight |
-| Signing seed | Register the new key on the hub with `register_receipt_key` and have the admin set the checkout key (above), then set `NODE_SIGNING_SEED` and restart. Check the startup log for a `hub_readiness` error. Tell agents that pin the node key (`TRUSTED_NODE_KEY`) |
+| Signing seed | Register the new key on the hub with `register_receipt_key`, have the admin propose the checkout key and accept it from the settler account (above), then set `NODE_SIGNING_SEED` and restart. Check the startup log for a `hub_readiness` error. Tell agents that pin the node key (`TRUSTED_NODE_KEY`) |
 | Agent secrets key | See "Rotating `AGENT_SECRETS_KEY`" in section 8 |
 
 ## 4. Backups and restore
@@ -427,10 +427,13 @@ In hub v2 the settler's balance pays only for the settler's own batch records, r
 The `settled` and credit entries of a Budget's payees come from the storage reserve the Budget's owner prepaid at `open_budget`, 332 bytes per payee the Budget can pay.
 When the balance cannot pay for a batch record, the hub refuses the whole batch with `INSUFFICIENT_STORAGE` and changes nothing.
 Settlement stops until the balance is topped up, and the same batch then settles.
-When a Budget's reserve cannot pay for its new payees in a batch, the hub refuses the whole batch with `INSUFFICIENT_RESERVE`: that Budget already paid as many distinct payees as its owner prepaid for.
+When a Budget has already paid as many distinct payees as its `max_payees` (its list's length, or the declared count), the hub refuses a batch that pays it a new one with `TOO_MANY_PAYEES`.
+A Budget's reserve is sized for every payee it can pay and every byte it gives comes back, so `INSUFFICIENT_RESERVE` is a safety net that ordinary use does not reach.
+Checkout payments below the hub's `min_payment` (10,000 base units unless the admin changed it with `set_min_payment`) are returned to the payer, and the node refuses open-amount links and payer amounts below its own `MIN_CHECKOUT_AMOUNT` (default 10,000) with `AMOUNT_TOO_SMALL`, so one-unit payments cannot burn the checkout settler's balance.
 A batch record of a 64-character settler is 281 bytes (0.00281 NEAR), and the startup check asks for the records of 100 batches, 0.281 NEAR.
 Measured on a sandbox (a local NEAR node), a batch of 100 one-unit claims to 100 new 64-character payees took 33,200 bytes from the Budget's reserve and one batch record from the settler's balance, and the hub's own balance did not change.
 Storage that a `credits` entry frees when it is paid out goes back to whoever paid for it: the Budget's reserve for a settlement, or the checkout settler's balance for a checkout payment.
+The hub logs `storage_reserve_returned` when bytes go back to a Budget's reserve.
 
 ## 13. The payee check
 

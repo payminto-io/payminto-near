@@ -233,7 +233,8 @@ pnpm --filter @payminto/node account reset-owner --email <email>
 
 Set `GATEWAY_PAYOUT_ACCOUNT` to the NEAR account that should receive checkout payments, or `GATEWAY_ENABLED=true` to create businesses later.
 The gateway adds payment links, the hosted checkout, refunds, webhooks (including `budget.refused`), the service directory and the reconciliation report.
-The hub's checkout key must be the public key of `NODE_SIGNING_SEED`, or the hub returns every wallet payment.
+The hub's checkout key must be the public key of `NODE_SIGNING_SEED`, proposed by the admin and accepted by the node's own account with `accept_checkout`, or the hub returns every wallet payment.
+The hub also returns a payment below its minimum, 10,000 base units (0.01 USDC) unless the admin changes it with `set_min_payment`, and the node offers no payment below `MIN_CHECKOUT_AMOUNT`.
 A payout account must be registered with the token (NEP-145 `storage_deposit`) to receive payouts; the hub never pays that registration.
 
 ## 5. Configuration reference
@@ -280,6 +281,7 @@ Errors name the variable and never print its value.
 | `PAYOUT_INTERVAL_SEC` | `300` | Scheduled payouts of hub credit; `0` pays only on `POST /v1/payouts` |
 | `FUNDS_REFRESH_SEC` | `30` | How often escrow and credit are re-read for Budgets with unsettled spend |
 | `FUNDS_MAX_AGE_MS` | `10000` | The oldest hub snapshot (escrow, credit, revoked or not) a call may be decided on, from 500 to 60000. An older one is read again first, and if the hub cannot be read the call is refused with `NET_EXPOSURE` and a short retry |
+| `MIN_CHECKOUT_AMOUNT` | `10000` | The smallest checkout payment the node offers, in atomic token units (`10000` is 0.01 USDC, the hub's own default minimum): it signs no wallet terms below it, and refuses an open-amount link or a payer amount below it with `AMOUNT_TOO_SMALL`. Keep it at or above the hub's `min_payment`, or the hub returns the payment |
 | `NEW_PAYEE_MIN_AMOUNT` | `1000` | The least first payment from a Budget to a payee it has never paid, in atomic token units (`1000` is 0.001 USDC); a smaller one is refused with `NEW_PAYEE_MIN_AMOUNT`. The first settlement of each (Budget, payee) pair makes your settler pay permanent hub storage, about 3 milliNEAR, whatever the amount. `0` disables it |
 | `NEW_PAYEES_PER_HOUR` | `20` | How many payees one Budget may pay for the first time in a rolling hour; past it the call is refused with `NEW_PAYEE_RATE` and the seconds until a slot frees. A Budget with a payee list has at most 16 payees, so only a Budget open to any payee can reach it. `0` disables it |
 | `RATE_LIMIT_PROVIDER_RPS`, `RATE_LIMIT_PROVIDER_BURST` | `200`, `1000` | Token bucket per provider key on `POST /v1/vouchers`; `0` rps disables it |
@@ -369,9 +371,9 @@ Before you start, create and fund these testnet accounts yourself:
 
 | Account | Role | Needs |
 |---|---|---|
-| Hub | Holds the contract | About 3.02 NEAR: the wasm's storage and 0.1 NEAR of its own; this account ends with no keys |
-| Admin | Manages settlers and the checkout key | NEAR for gas, the small deposits of `set_settler` and `set_checkout_key`, and the settler's prefund (1 NEAR by default); must not be the hub account |
-| Settler | The node's `OPERATOR_ACCOUNT` | NEAR for gas; its storage balance and receipt key are described in section 3 |
+| Hub | Holds the contract | About 3.58 NEAR: the wasm's storage and 0.1 NEAR of its own; this account ends with no keys |
+| Admin | Manages settlers, proposes the checkout key and sets the minimum checkout payment | NEAR for gas, the small deposits of `set_settler` and `set_checkout_key`, and the settler's prefund (1 NEAR by default); must not be the hub account |
+| Settler | The node's `OPERATOR_ACCOUNT` | NEAR for gas; its storage balance and receipt key are described in section 3, and it accepts the checkout role itself with `accept_checkout` |
 | Token | The NEP-141 token | On testnet, Circle USDC: `3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af` |
 
 First print the plan.
@@ -391,28 +393,29 @@ Its first line and the wasm line, as printed:
 
 ```text
 DRY RUN: nothing is signed or sent on near:testnet
-wasm <repo>/contracts-near/out/hub.wasm: 337826 bytes, sha256 cf978c32ec76c2967c05384e1533b298c9cbe623274e9542bc07987d9babcd3f, code hash EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx
+wasm <repo>/contracts-near/out/hub.wasm: 345682 bytes, sha256 ef9e1fcee61b4dbd89f9a2051c673c39a2eec480376128a93f23b107f552ea09, code hash H8NHZwWQPwgdYCku8kUR7AqcnbvY28BQGaRU5LhuARFN
 ```
 
 The steps it plans, in order, with the names the report uses:
 
 | Step | Signer | Action |
 |---|---|---|
-| `check_hub_balance` | none | The hub account must hold enough NEAR for the wasm, its state and `--min-hub-balance` of its own: 3.0179 NEAR with the current wasm and the default margin |
+| `check_hub_balance` | none | The hub account must hold enough NEAR for the wasm, its state and `--min-hub-balance` of its own: 3.5768 NEAR with the current wasm and the default margin |
 | `deploy_and_init` | hub | `DeployContract` and `new({ admin, token, network })` in one transaction, because `new` is private |
 | `register_hub_at_token` | hub | `storage_deposit({ account_id: hub, registration_only: true })` at the token, so the first deposit cannot bounce; the deposit is the larger of `--storage-deposit` and the token's own minimum |
 | `set_settler` | admin | `set_settler({ account, allowed: true })`, with a deposit that pays for the entry; the hub refunds the excess |
-| `set_checkout_key` | admin | `set_checkout_key({ key, settler })`, with a deposit that pays for the entry; checkout payments draw on that settler's storage balance |
+| `set_checkout_key` | admin | `set_checkout_key({ key, settler })`, with a deposit that pays for the entry; this only proposes the settler, and no checkout payment draws on its storage balance until it accepts |
 | `check_settler_storage` | none | Reads the settler's storage balance and compares it with `--min-settler-storage` |
 | `fund_settler_storage` | admin | `fund_storage({ account: settler })` with `--settler-storage` attached; skipped when the settler already holds the minimum |
 | `register_receipt_key` | settler | `register_receipt_key({ key })` with one yoctoNEAR, if `PAYMINTO_SETTLER_KEY` is set; without it the script prints the transaction for the node operator to sign and carries on |
-| `verify` | none | The on-chain code hash, the config, the settler, the checkout key and its settler, the token registration, the settler's storage balance and the hub's own balance must match, or the script stops |
+| `accept_checkout` | settler | `accept_checkout({ key })` with one yoctoNEAR, which makes the settler the checkout settler, if `PAYMINTO_SETTLER_KEY` is set; without it the script prints the transaction for the node operator to sign and carries on |
+| `verify` | none | The on-chain code hash, the config, the settler, the checkout key and its settler (or the pending proposal when `accept_checkout` was left to the operator), the token registration, the settler's storage balance and the hub's own balance must match, and no admin transfer may be pending, or the script stops |
 | `lock` | hub | `DeleteKey` for every access key on the hub account, then a check that none is left |
 
 The live run is the same command without `--dry-run` and with `--confirm-lock`.
 It reads keys from `PAYMINTO_HUB_KEY` and `PAYMINTO_ADMIN_KEY`, or from near-cli credentials in `~/.near-credentials/testnet/<account>.json`.
-`PAYMINTO_SETTLER_KEY` is optional and is used for `register_receipt_key` only; it is the settler's full-access key, so the safer path is to leave it unset and sign that one transaction from the settler's own wallet.
-Until the receipt key is registered, sellers cannot use `settle_own` for calls this node accepts.
+`PAYMINTO_SETTLER_KEY` is optional and is used for `register_receipt_key` and `accept_checkout` only; it is the settler's full-access key, so the safer path is to leave it unset and sign those two transactions from the settler's own wallet.
+Until the receipt key is registered, sellers cannot use `settle_own` for calls this node accepts, and until the settler accepts the checkout role, the hub returns every wallet payment.
 The live run was not run for this guide, and no assistant should run it.
 
 | Flag | Meaning |

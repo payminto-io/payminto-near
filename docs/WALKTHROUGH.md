@@ -73,7 +73,7 @@ pnpm demo --chain sandbox
 
 Do `pnpm demo --chain sandbox`.
 See the label SANDBOX, and a transaction hash for every on-chain step.
-See the hub deployed from the committed `contracts-near/out/hub.wasm` and then locked: `code hash EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx (sha256 of contracts-near/out/hub.wasm), 0 access keys: locked`.
+See the hub deployed from the committed `contracts-near/out/hub.wasm` and then locked: `code hash H8NHZwWQPwgdYCku8kUR7AqcnbvY28BQGaRU5LhuARFN (sha256 of contracts-near/out/hub.wasm), 0 access keys: locked`.
 See the same paid calls, the same batch and the same 2 transfers as in step 2, each as a transaction.
 Every check reads its facts from the chain through a client that holds no key, never from the node's database.
 The first run downloads the near-sandbox binary once, about 30 MB, from NEAR's release bucket.
@@ -371,10 +371,10 @@ The dry run needs no key; it makes read-only RPC calls to look the accounts up, 
 Run for this page with a real public key in place of the placeholder, it printed the wasm's hash and every step as `planned`:
 
 ```text
-wasm <repo>/contracts-near/out/hub.wasm: 337826 bytes, sha256 cf978c32ec76c2967c05384e1533b298c9cbe623274e9542bc07987d9babcd3f, code hash EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx
+wasm <repo>/contracts-near/out/hub.wasm: 345682 bytes, sha256 ef9e1fcee61b4dbd89f9a2051c673c39a2eec480376128a93f23b107f552ea09, code hash H8NHZwWQPwgdYCku8kUR7AqcnbvY28BQGaRU5LhuARFN
 ```
 
-The same command without `--dry-run` and with `--confirm-lock` deploys the hub, registers it with the token, sets the settler and the checkout key, prefunds the settler's storage balance, registers the node's receipt key when it is given the settler's key, verifies the code hash, and deletes every key on the hub account.
+The same command without `--dry-run` and with `--confirm-lock` deploys the hub, registers it with the token, sets the settler, proposes the checkout key, prefunds the settler's storage balance, registers the node's receipt key and accepts the checkout role when it is given the settler's key, verifies the code hash, and deletes every key on the hub account.
 The steps are explained in [contracts-near/README.md](../contracts-near/README.md#deploy-and-lock) and [docs/SELF_HOST.md](SELF_HOST.md).
 
 ## Checks
