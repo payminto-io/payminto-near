@@ -67,6 +67,8 @@ What the hub enforces for the seller exit:
   Without that rule an owner, who chooses the agent key, could sign a voucher to itself and empty the escrow ahead of the sellers.
 - Sellers must keep their receipts.
   The SDK's voucher store keeps each voucher with its acceptance, and `FileVoucherStore` keeps them across restarts.
+- The SDK checks each acceptance with the hub's own signature rule before it keeps it (see "One signature rule" below).
+  An acceptance the hub would refuse, such as a node signature with a torsioned R, is not stored, and the seller is told it cannot settle that voucher itself.
 
 What the hub does not enforce, stated as limits:
 
@@ -150,6 +152,11 @@ It does not guarantee:
 
 A revoke starts a 24 hour grace period, and expiry is followed by a 3 day grace period.
 Settlement closes at the earlier of the two, and `reclaim` opens strictly after that.
+
+What a seller is guaranteed is 24 hours after a revoke, and nothing more.
+The owner can revoke at any time, including just after `validUntil`, and the hub v1 takes such a revoke: it then cuts the 3 day expiry grace to 24 hours after the revoke (internal audit F5).
+So a seller that relies on `settle_own` should settle within 24 hours of seeing a revoke or an expiry, not on day 2 or 3 of the expiry grace.
+Hub v2 refuses a revoke after `validUntil`; until it is deployed, read the 3 days as a maximum, not a promise.
 The grace period exists so that calls accepted before the revoke can still settle.
 The node stops accepting calls on a Budget as soon as it sees the revoke, including during the grace period.
 The agent key can still sign during the grace period, and the chain cannot tell a voucher signed before the revoke from one signed after it.
@@ -223,6 +230,12 @@ A settler whose balance cannot pay for a batch gets `INSUFFICIENT_STORAGE` for t
 `storage_of({ account })` reports the balance, and `withdraw_storage({ amount })` returns the unused part to its own account only.
 Storage freed from an entry that no settler paid for, and a Budget's unused `settle_own` reserve, stay on the hub account and cannot be withdrawn by anyone.
 
+The settler pays for every new (Budget, payee) pair a batch settles, about 3 milliNEAR each, whatever the amount, and the hub v1 never frees that storage (internal audit F4).
+An owner with throwaway payee accounts could therefore make a settler pay for many pairs with dust payments, until its balance runs out and its batches fail with `INSUFFICIENT_STORAGE`.
+The node bounds this with two limits of its own: a first payment to a payee new to a Budget must be at least `NEW_PAYEE_MIN_AMOUNT` (default 0.001 USDC), and one Budget may pay at most `NEW_PAYEES_PER_HOUR` new payees in a rolling hour (default 20).
+They bound the rate of the drain; they do not remove it.
+A settler should watch its storage balance, and hub v2 moves this cost to the owner.
+
 ### The node
 
 - The node's database is one SQLite file.
@@ -230,8 +243,10 @@ Storage freed from an entry that no settler paid for, and a Budget's unused `set
   Losing it loses the proofs for calls that were not yet settled, although sellers still hold their vouchers and receipts.
 - When the hub cannot be read and the node's funds snapshot is older than `FUNDS_MAX_AGE_MS`, the node refuses calls instead of accepting them.
   The rule is `NET_EXPOSURE`, with a message that says the hub could not be read and the retry hint `{ "kind": "after", "seconds": 5, "reason": "hub_unreadable" }`.
-- The node checks the voucher signature before any rule.
+- The node checks the voucher signature before any rule, with the hub's own signature rule (see "One signature rule" below).
   A voucher that is not signed by the Budget's agent key gets a plain `BAD_SIGNATURE` error and creates no refusal record, no event and no webhook, so a stranger cannot fill an owner's refusal log.
+- Before it builds a batch, the node checks every claim's signature again with the hub's rule, against the agent key the hub holds, and leaves out a claim that fails, so one bad claim cannot make the hub refuse a whole batch.
+  The claim stays accepted and the operator is alerted once (`claim_signature_invalid`).
   Such vouchers are also rate limited per provider key or client address (`RATE_LIMIT_UNSIGNED_RPS`, `RATE_LIMIT_UNSIGNED_BURST`).
 - A refusal that reaches an agent through a seller is the seller's unauthenticated word.
   The node signs its own record of every refusal of a voucher the agent signed, and the agent reads it with `GET /v1/budgets/:id/refusals?requestHash=`.
@@ -241,6 +256,31 @@ Storage freed from an entry that no settler paid for, and a Budget's unused `set
 - The live event stream accepts the recovery key as `?token=`, which can leak into proxy logs; see [OPERATIONS.md](OPERATIONS.md).
 - On `near:testnet` the node refuses the public development values for `ADMIN_TOKEN` and `NODE_SIGNING_SEED`.
   On the local sandbox it accepts them, so never expose a sandbox node to a network.
+
+### One signature rule
+
+The hub verifies every voucher and every acceptance with `env::ed25519_verify`, which is cofactorless: it requires `s < L`, recomputes `R' = [s]B - [k]A` and compares the bytes of `R'` with the signature's R.
+Many ed25519 libraries, including the one the node and the SDK used before, check the cofactored equation instead, and accept a signature whose R carries a small torsion component.
+The hub refuses such a signature, so a node that accepted it would sign acceptances for calls that never settle (internal audit F1), and a seller SDK would keep acceptances that `settle_own` refuses (F2).
+
+Every check that stands in for the hub now uses one function, `verifyDigest` in `packages/chain`: the node's voucher intake and batch pre-check, and the SDK's paywall, receipt, export and `verifyReceiptOnchain` checks.
+It returns true only when `env::ed25519_verify` would, and only for a key that is the canonical encoding of a point not of small order.
+The shared vectors in `packages/chain/vectors/signatures.json` cover a torsioned R, non-canonical R and A encodings, small-order keys including the all-zero key, and `s >= L`.
+The TypeScript tests run them through `verifyDigest`, and `contracts-near/src/tests/vectors.rs` runs them through the hub's own verify function, so the two sides cannot drift apart without a test failing.
+
+A small-order agent key, the all-zero key among them, lets anyone sign vouchers for its Budget without a secret, and the hub v1 accepts such a key in `open_budget` (F3).
+The node refuses to register such a Budget and the SDK refuses to create one, both with `WEAK_AGENT_KEY`.
+A Budget opened directly on the hub with such a key and a settler that does not check is not protected by this; hub v2 refuses the key on chain.
+
+### Batch ids are global until hub v2
+
+The hub v1 stores batches by batch id alone, and any allowlisted settler can use any id that is not taken yet (internal audit F6).
+The id does not need to be guessed: it is visible in a pending transaction, so a second settler that sees a batch on its way can settle a one-claim batch under the same id first.
+The first batch then fails with `BATCH_EXISTS`, and `verify_receipt` for that id checks against the other settler's root.
+This needs a second settler that the hub admin approved.
+The node books a batch only when the hub's record under its id names this node as settler and holds the root this node built; anything else fails the batch, returns its calls to the queue for a new id, and pages the operator (`batch_mismatch`).
+A receipt proof is only as good as the batch record it names, so check that the record's settler is the Budget's settler, as `verifyReceiptOnchain` does.
+Hub v2 keys batches by settler and batch id.
 
 ### Checkout and refunds
 

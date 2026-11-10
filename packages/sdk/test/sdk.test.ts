@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { FakeChain } from "@payminto/chain/fake";
+import { signWithTorsionedR } from "@payminto/chain/testing";
 import {
   budgetIdOf,
   budgetTermsToJson,
   buildReceiptTree,
+  publicKeyToString,
   computeNetting,
   decodeHeader,
   encodeHeader,
@@ -39,6 +41,7 @@ import {
 } from "@payminto/protocol";
 import {
   AgentClient,
+  CreateBudgetError,
   type BeforeSignRequest,
   callIdOf,
   computeRequestHash,
@@ -114,6 +117,8 @@ type Script = {
   servedPolicy?: { budget: BudgetTerms; policy: Policy };
   alwaysStale?: boolean;
   receiptSigner?: Keypair;
+  /** Signs each receipt digest instead of `receiptSigner` (a node that hands out signatures the hub refuses). */
+  receiptSign?: (digest: Id32) => Sig64;
   /** Key the receipt names as its node (default the honest node key). */
   receiptNode?: PublicKey;
   /** Added to every position GET /position serves (a lying node). */
@@ -188,7 +193,7 @@ function world(script: Script = {}) {
       cumulative: p.cumulative,
       timestamp: 1_800_000_000,
       digest: attested,
-      nodeSignature: signDigest((script.receiptSigner ?? NODE).secretKey, attested),
+      nodeSignature: script.receiptSign ? script.receiptSign(attested) : signDigest((script.receiptSigner ?? NODE).secretKey, attested),
       node: script.receiptNode ?? NODE.publicKey,
     };
     booked.set(receipt.callId, receipt);
@@ -449,6 +454,16 @@ describe("AgentClient.fetch", () => {
     expect(a.receipts.all()).toHaveLength(0);
   });
 
+  it("F2: does not store a receipt the node signed with a torsioned R, which the hub would refuse as an acceptance", async () => {
+    const w = world({ receiptSign: (digest) => signWithTorsionedR(NODE.secretKey, digest) });
+    const a = w.agent();
+    const errors: Error[] = [];
+    a.on("error", (e) => errors.push(e));
+    expect((await a.fetch("http://provider.test/q")).status).toBe(200);
+    expect(errors.map((e) => e.message)).toEqual(["receipt rejected: not signed by the configured node key", "receipt rejected: not signed by the configured node key"]);
+    expect(a.receipts.all()).toHaveLength(0);
+  });
+
   it("requires nodeUrl", () => {
     const w = world();
     expect(() => w.agent({ nodeUrl: undefined as never })).toThrow(/requires nodeUrl/);
@@ -686,7 +701,7 @@ describe("verifyReceiptOnchain", () => {
   const TS = 1_800_000_000;
 
   /** Two calls settled for real on the fake hub, and the node's receipt for the first of them. */
-  async function settled(o: { settler?: AccountId; signer?: Keypair } = {}) {
+  async function settled(o: { settler?: AccountId; signer?: Keypair; sign?: (digest: Id32) => Sig64 } = {}) {
     const settler = o.settler ?? OPERATOR;
     const chain = new FakeChain({ hub: HUB, token: TOKEN, network: NETWORK, operator: OPERATOR });
     chain.addSettler(settler);
@@ -707,7 +722,7 @@ describe("verifyReceiptOnchain", () => {
     await chain.settleAs(settler, { batchId: BATCH, root: tree.root, claims: [{ ...second.v, signature: second.sig }], expectedNet: entries });
     const attested = { callId, budgetId: b.id, payee: PAYEE, requestHash: first.v.requestHash, voucherSig: first.sig };
     const digest = nodeDigest({ ...attested, amount: 2000n, cumulative: 2000n, timestamp: BigInt(TS) });
-    const receipt = { ...attested, amount: "2000", cumulative: "2000", timestamp: TS, digest, nodeSignature: signDigest((o.signer ?? NODE).secretKey, digest) };
+    const receipt = { ...attested, amount: "2000", cumulative: "2000", timestamp: TS, digest, nodeSignature: o.sign ? o.sign(digest) : signDigest((o.signer ?? NODE).secretKey, digest) };
     return { chain, receipt, proof: tree.proofOf(callId) };
   }
 
@@ -721,6 +736,12 @@ describe("verifyReceiptOnchain", () => {
     // A broken path fails locally and at the hub.
     expect(await verifyReceiptOnchain({ ...args, proof: [] })).toMatchObject({ verified: false, localProofValid: false, merkleVerified: false });
     expect(await verifyReceiptOnchain({ ...args, batchId: sha256Text("missing") })).toMatchObject({ verified: false, settler: null });
+  });
+
+  it("F2: refuses a receipt whose node signature has a torsioned R, as the hub would", async () => {
+    const s = await settled({ sign: (digest) => signWithTorsionedR(NODE.secretKey, digest) });
+    const r = await verifyReceiptOnchain({ chain: s.chain, operator: OPERATOR, nodeKey: NODE.publicKey, receipt: s.receipt, batchId: BATCH, proof: s.proof });
+    expect(r).toMatchObject({ verified: false, nodeSigned: false, merkleVerified: true });
   });
 
   it("refuses a batch someone else settled", async () => {
@@ -968,6 +989,17 @@ describe("paywall", () => {
     expect(bad.sellerErrors).toHaveLength(1);
     expect(bad.sellerErrors[0]).toMatch(/acceptance does not verify.*settle_own/);
   });
+
+  it("F2: does not store a voucher whose acceptance has a torsioned R: settle_own would refuse it with BAD_ACCEPTANCE", async () => {
+    const w = world({ receiptSign: (digest) => signWithTorsionedR(NODE.secretKey, digest) });
+    const header = await signedFor(w, "http://provider.test/q");
+    const served = await pay(w, "http://provider.test/q", header);
+    // The node accepted the call, so it is served; the seller is told it cannot settle that voucher itself.
+    expect(served.status).toBe(200);
+    expect(w.sellerVouchers.all()).toEqual([]);
+    expect(w.sellerErrors).toHaveLength(1);
+    expect(w.sellerErrors[0]).toMatch(/acceptance does not verify.*settle_own/);
+  });
 });
 
 describe("settle_own from exported vouchers", () => {
@@ -1094,6 +1126,13 @@ describe("settle_own from exported vouchers", () => {
     const swapped = structuredClone(exp);
     swapped.vouchers[0]!.acceptance!.timestampS = "1";
     await expect(parseVoucherExport(swapped)).rejects.toThrow(/acceptance that is not a valid signature/);
+    // F2: the node's own key over exactly this voucher, but with a torsioned R. A cofactored check says valid; the hub's
+    // settle_own would refuse it with BAD_ACCEPTANCE, and so does the export check.
+    const v0 = exp.vouchers[0]!;
+    const claim0 = { budgetId: v0.budgetId, payee: v0.payee, amount: BigInt(v0.amount), cumulative: BigInt(v0.cumulative), requestHash: v0.requestHash, signature: v0.signature };
+    const torsioned = structuredClone(exp);
+    torsioned.vouchers[0]!.acceptance!.signature = signWithTorsionedR(NODE.secretKey, acceptanceDigest(claim0, BigInt(v0.acceptance!.timestampS)));
+    await expect(parseVoucherExport(torsioned)).rejects.toThrow(/acceptance that is not a valid signature/);
     await expect(parseVoucherExport(exp, new FakeChain({ hub: "other-hub.testnet", network: NETWORK }))).rejects.toThrow(/chain reader is for other-hub/);
     expect((await parseVoucherExport(exp, chain)).checkedAgainst).toBe("hub");
   });
@@ -1178,6 +1217,21 @@ describe("OwnerClient", () => {
     expect(() => owner().createBudget({ ...args, cap: 0n })).toThrow(/cap must be positive/);
     expect(() => owner().createBudget({ ...args, cap: 1n })).toThrow(/perCallCap exceeds cap/);
     expect(() => owner().createBudget({ ...args, validForSeconds: 0 })).toThrow(/validForSeconds/);
+  });
+
+  it.each([
+    ["the all-zero key", `ed25519:${"1".repeat(32)}`],
+    ["a point of order 8", publicKeyToString(Buffer.from("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", "hex"))],
+    ["a non-canonical encoding", publicKeyToString(Buffer.from(`ee${"ff".repeat(30)}7f`, "hex"))],
+  ])("F3: refuses to create a Budget for %s, with WEAK_AGENT_KEY", (_what, agentPk) => {
+    let err: unknown;
+    try {
+      owner().createBudget({ ...args, agentPk: agentPk as PublicKey });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(CreateBudgetError);
+    expect(err).toMatchObject({ code: "WEAK_AGENT_KEY", message: expect.stringMatching(/small-order or non-canonical/) });
   });
 
   it("registers a Budget with the node without any owner signature", async () => {

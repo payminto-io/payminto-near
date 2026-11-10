@@ -81,6 +81,48 @@ fn voucher_digests_match() {
     }
 }
 
+/// The hub's signature rule, pinned by `signatures.json`: torsioned R, non-canonical R and A, small-order A and
+/// s >= L. `hub` must be what the hub's own verify function returns; `key` is the key check Payminto applies off chain
+/// (canonical and not small order), computed here with ed25519-dalek, which decodes keys for `env::ed25519_verify`.
+/// The TypeScript side runs the same file through `verifyDigest` (packages/chain/test/signatures.test.ts).
+#[test]
+fn signature_rule_matches() {
+    setup();
+    let all = cases("signatures.json");
+    assert!(all.len() >= 12);
+    let mut hub_refused_but_cofactored_accepted = 0;
+    for case in all {
+        let name = s(&case, "name");
+        let pk = Id32::from_hex(s(&case, "public_key_hex")).unwrap().0;
+        let digest = id32(&case, "digest_hex").0;
+        let sig = Sig64::from_hex(s(&case, "signature_hex")).unwrap().0;
+        let hub = case["hub"].as_bool().unwrap();
+        assert_eq!(verify_signature(&digest, &sig, &pk), hub, "{name}: the hub's verify_signature");
+        assert_eq!(
+            near_sdk::env::ed25519_verify(&sig, &digest, &pk),
+            hub,
+            "{name}: env::ed25519_verify"
+        );
+        let key = match VerifyingKey::from_bytes(&pk) {
+            Err(_) => "not_a_point",
+            Ok(vk) if vk.to_edwards().compress().to_bytes() != pk => "non_canonical",
+            Ok(vk) if vk.is_weak() => "small_order",
+            Ok(_) => "ok",
+        };
+        assert_eq!(key, s(&case, "key"), "{name}: key verdict");
+        assert_eq!(
+            case["valid"].as_bool().unwrap(),
+            hub && key == "ok",
+            "{name}: valid is the hub's answer for a strong key"
+        );
+        if !hub && case["cofactored"].as_bool().unwrap() {
+            hub_refused_but_cofactored_accepted += 1;
+        }
+    }
+    // The audit's F1 and F2: signatures a cofactored verifier accepts and the hub refuses are in the file.
+    assert!(hub_refused_but_cofactored_accepted >= 3);
+}
+
 #[test]
 fn budget_ids_match() {
     setup();
