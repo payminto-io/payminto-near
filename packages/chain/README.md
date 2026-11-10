@@ -9,6 +9,15 @@ The only package that imports NEAR libraries.
 The files in `vectors/` are frozen and are the contract between this package and `contracts-near/`.
 `pnpm --filter @payminto/chain vectors` regenerates them, and `test/vectors.test.ts` fails if the code and the files disagree.
 `vectors/errors.json` lists every hub error code, and both `HUB_ERRORS` here and `ALL` in `contracts-near/src/errors.rs` must equal it.
+`vectors/signatures.json` pins the hub's ed25519 rule: a torsioned R, non-canonical R and A encodings, small-order keys including the all-zero key, and `s >= L`, each with what `env::ed25519_verify` returns and what `verifyDigest` returns.
+`test/signatures.test.ts` runs it through `verifyDigest`, and `contracts-near/src/tests/vectors.rs` runs it through the hub's own verify function.
+
+## Signatures
+
+`verifyDigest` is the one signature rule for every decision that stands in for the hub: the node's voucher intake and batch pre-check, and the SDK's acceptance and receipt checks.
+It returns true only when `ed25519VerifyAsHub` (exactly `env::ed25519_verify`: cofactorless, `s < L`, R compared byte for byte with `[s]B - [k]A`) accepts and the key passes `publicKeyProblem` (canonical and not of small order).
+A cofactored verifier, such as noble's `ed25519.verify` with or without ZIP-215, accepts signatures whose R carries a torsion component, which the hub refuses; that is internal audit finding F1.
+A small-order key lets anyone forge signatures with no secret, so the node and the SDK refuse to register or create a Budget for one (F3).
 
 ## NearRpcChain
 

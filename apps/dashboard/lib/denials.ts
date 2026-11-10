@@ -30,6 +30,8 @@ export const RULE_INFO: Record<DenialRule, { title: string; kind: "attack" | "li
   PAYEE_BLOCKED: { title: "Payee blocked by the Payee check", kind: "attack" },
   PAYEE_NEEDS_APPROVAL: { title: "Payee waiting for approval", kind: "state" },
   POSITION_UNVERIFIED: { title: "False balance claim", kind: "attack" },
+  NEW_PAYEE_MIN_AMOUNT: { title: "First payment to a new Payee too small", kind: "limit" },
+  NEW_PAYEE_RATE: { title: "Too many new Payees this hour", kind: "limit" },
 };
 
 export function ruleTitle(rule: DenialRule): string {
@@ -55,6 +57,8 @@ export const PLAIN_REASON: Record<DenialRule, string> = {
   PAYEE_BLOCKED: "The Payee check found a reason not to pay this Payee, or the Budget owner denied it.",
   PAYEE_NEEDS_APPROVAL: "The Payee check has warnings about this Payee, and the Budget owner has not approved it yet.",
   POSITION_UNVERIFIED: "The agent claimed a balance the chain does not show.",
+  NEW_PAYEE_MIN_AMOUNT: "The first payment from this Budget to a Payee it has never paid was below this server's minimum.",
+  NEW_PAYEE_RATE: "This Budget paid too many Payees for the first time within an hour.",
 };
 
 export function ruleDescription(rule: DenialRule): string {

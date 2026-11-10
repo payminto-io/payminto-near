@@ -42,6 +42,16 @@ export const LIVE_ADMIN_TOKEN_MIN_LENGTH = 32;
 export const DEFAULT_FUNDS_MAX_AGE_MS = 10_000;
 export const MAX_FUNDS_MAX_AGE_MS = 60_000;
 
+/**
+ * Limits on payees new to a Budget (internal audit F4). The first settlement of a (Budget, payee) pair makes the node's
+ * settler pay permanent hub storage, about 3 milliNEAR, whatever the amount; these bound how fast a Budget can make the
+ * node pay for pairs. The defaults let every listed Budget (at most 16 payees) and every demo run through.
+ * `minFirstAmount`: NEW_PAYEE_MIN_AMOUNT, atomic token units (1000 is 0.001 USDC). `maxPerHour`: NEW_PAYEES_PER_HOUR.
+ * 0 disables either.
+ */
+export type NewPayeeLimits = { minFirstAmount: bigint; maxPerHour: number };
+export const DEFAULT_NEW_PAYEE_LIMITS: NewPayeeLimits = { minFirstAmount: 1_000n, maxPerHour: 20 };
+
 /** Unsigned vouchers are never legitimate traffic, so their bucket is far smaller than the provider bucket. */
 export const DEFAULT_UNSIGNED_LIMIT = { rps: 5, burst: 50 } as const;
 
@@ -77,6 +87,19 @@ const envSchema = z.object({
   // Token buckets (requests per second, burst). 0 rps disables that limiter. Agents read their position before every
   // paid call, so one agent host legitimately makes about as many public reads as it makes calls.
   RATE_LIMIT_PROVIDER_RPS: intFromEnv(200),
+  // Payees new to a Budget: the least first payment, in atomic token units, and how many per Budget per hour (F4).
+  NEW_PAYEE_MIN_AMOUNT: z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v === "") return DEFAULT_NEW_PAYEE_LIMITS.minFirstAmount;
+      if (!/^(0|[1-9]\d{0,37})$/.test(v)) {
+        ctx.addIssue({ code: "custom", message: "must be a non-negative integer amount in atomic token units" });
+        return z.NEVER;
+      }
+      return BigInt(v);
+    }),
+  NEW_PAYEES_PER_HOUR: intFromEnv(DEFAULT_NEW_PAYEE_LIMITS.maxPerHour),
   RATE_LIMIT_PROVIDER_BURST: intFromEnv(1000, 1),
   RATE_LIMIT_IP_RPS: intFromEnv(100),
   RATE_LIMIT_IP_BURST: intFromEnv(1000, 1),
@@ -190,6 +213,8 @@ export type Config = {
   fundsRefreshSec: number;
   /** FUNDS_MAX_AGE_MS; absent means DEFAULT_FUNDS_MAX_AGE_MS. */
   fundsMaxAgeMs?: number;
+  /** NEW_PAYEE_MIN_AMOUNT and NEW_PAYEES_PER_HOUR; absent means DEFAULT_NEW_PAYEE_LIMITS. */
+  newPayees?: NewPayeeLimits;
   rateLimit: RateLimitConfig;
   /** Trusted reverse-proxy hops for X-Forwarded-For. */
   trustProxyHops: number;
@@ -390,6 +415,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logLevel: e.LOG_LEVEL,
     fundsRefreshSec: e.FUNDS_REFRESH_SEC,
     fundsMaxAgeMs: e.FUNDS_MAX_AGE_MS,
+    newPayees: { minFirstAmount: e.NEW_PAYEE_MIN_AMOUNT, maxPerHour: e.NEW_PAYEES_PER_HOUR },
     rateLimit: {
       provider: { rps: e.RATE_LIMIT_PROVIDER_RPS, burst: e.RATE_LIMIT_PROVIDER_BURST },
       ip: { rps: e.RATE_LIMIT_IP_RPS, burst: e.RATE_LIMIT_IP_BURST },
@@ -577,6 +603,7 @@ export function redactedConfig(c: Config) {
     settleIntervalSec: c.settleIntervalSec,
     settleMinCalls: c.settleMinCalls,
     fundsMaxAgeMs: c.fundsMaxAgeMs ?? DEFAULT_FUNDS_MAX_AGE_MS,
+    newPayees: { minFirstAmount: (c.newPayees ?? DEFAULT_NEW_PAYEE_LIMITS).minFirstAmount.toString(), maxPerHour: (c.newPayees ?? DEFAULT_NEW_PAYEE_LIMITS).maxPerHour },
     payoutIntervalSec: c.payoutIntervalSec ?? 0,
     publicUrl: c.publicUrl,
     corsOrigins: c.corsOrigins,

@@ -8,6 +8,8 @@ import { DENIAL_RULES, HUB_UNREADABLE_MESSAGE, REPEAT_WINDOW_SEC, type AccountId
 export type WindowQuery =
   | { window: "calls"; seconds: number; leave: number }
   | { window: "sameRequest"; seconds: number; leave: number }
+  /** In how many seconds `leave` of the payees this Budget paid for the first time in the window are out of it. */
+  | { window: "newPayees"; seconds: number; leave: number }
   | { window: "spend"; seconds: number; free: bigint };
 
 /** Everything the policy engine needs, loaded inside the acceptance transaction. Pure data, apart from `waitFor`. */
@@ -65,6 +67,21 @@ export type VoucherContext = {
   fundsAgeMs: number;
   /** FUNDS_MAX_AGE_MS: a snapshot older than this is never decided on, because the refresh that should have replaced it failed. */
   fundsMaxAgeMs: number;
+  /**
+   * The node's limits on payees new to a Budget (internal audit F4). The first settlement of a (Budget, payee) pair
+   * makes the node's settler pay permanent storage on the hub, whatever the amount, so dust payments to many new
+   * payees would drain it. Absent: no such limits.
+   */
+  newPayee?: {
+    /** True when this Budget has no accepted call to this payee yet. */
+    isNew: boolean;
+    /** Payees this Budget paid for the first time in the last hour, before this call. Only read when `isNew`. */
+    lastHour: number;
+    /** NEW_PAYEE_MIN_AMOUNT: the least a first payment to a new payee may be, atomic units. 0 disables it. */
+    minFirstAmount: bigint;
+    /** NEW_PAYEES_PER_HOUR: new payees per Budget per rolling hour. 0 disables it. */
+    maxPerHour: number;
+  };
   /**
    * Answers a WindowQuery in seconds from `now`, or null when it cannot. Called only for a limit the call breaks. When
    * absent or null the hint falls back to the whole window, which is always long enough.
@@ -135,6 +152,12 @@ export function evaluateVoucher(c: VoucherContext): Decision {
   }
 
   const firstPart = (c.requestPart ?? 0) === 0;
+  const np = c.newPayee?.isNew ? c.newPayee : null;
+  // The minimum is checked on the first voucher of a request, against the whole request: the later vouchers of a split
+  // payment pay the operator's own fee account, and their request already passed it.
+  if (np && firstPart && np.minFirstAmount > 0n && amount < np.minFirstAmount) {
+    return deny("NEW_PAYEE_MIN_AMOUNT", { kind: "never" }, { payee: v.payee, amount: amount.toString(), minFirstAmount: np.minFirstAmount.toString() });
+  }
   const maxCalls = m.policy.maxCallsPerMinute;
   const maxRepeats = m.policy.maxRepeatsPerRequest ?? 0;
   const hourlyCap = BigInt(m.policy.hourlyCap ?? "0");
@@ -142,6 +165,7 @@ export function evaluateVoucher(c: VoucherContext): Decision {
   const over = {
     rate: firstPart && maxCalls > 0 && c.callsLastMinute >= maxCalls,
     repeat: firstPart && maxRepeats > 0 && c.sameRequestCalls >= maxRepeats,
+    newPayees: np !== null && np.maxPerHour > 0 && np.lastHour >= np.maxPerHour,
     hourly: hourlyCap > 0n && c.spentLastHour + amount > hourlyCap,
     daily: c.spentLast24h + amount > dailyCap,
     total: c.spentTotal + amount > m.cap,
@@ -158,6 +182,7 @@ export function evaluateVoucher(c: VoucherContext): Decision {
     let seconds = 0;
     if (over.rate) seconds = Math.max(seconds, ask({ window: "calls", seconds: MINUTE_SEC, leave: c.callsLastMinute - maxCalls + 1 }));
     if (over.repeat) seconds = Math.max(seconds, ask({ window: "sameRequest", seconds: REPEAT_WINDOW_SEC, leave: c.sameRequestCalls - maxRepeats + 1 }));
+    if (over.newPayees && np) seconds = Math.max(seconds, ask({ window: "newPayees", seconds: HOUR_SEC, leave: np.lastHour - np.maxPerHour + 1 }));
     if (over.hourly) seconds = Math.max(seconds, ask({ window: "spend", seconds: HOUR_SEC, free: c.spentLastHour + amount - hourlyCap }));
     if (over.daily) seconds = Math.max(seconds, ask({ window: "spend", seconds: DAY_SEC, free: c.spentLast24h + amount - dailyCap }));
     return expiresWithin(c, seconds) ? { kind: "never" } : { kind: "after", seconds };
@@ -165,6 +190,7 @@ export function evaluateVoucher(c: VoucherContext): Decision {
 
   if (over.rate) return deny("RATE_LIMIT", windowHint(), { maxCallsPerMinute: maxCalls, callsLastMinute: c.callsLastMinute });
   if (over.repeat) return deny("REPEAT_REQUEST", windowHint(), { maxRepeatsPerRequest: maxRepeats, sameRequestCalls: c.sameRequestCalls });
+  if (over.newPayees && np) return deny("NEW_PAYEE_RATE", windowHint(), { payee: v.payee, newPayeesLastHour: np.lastHour, maxNewPayeesPerHour: np.maxPerHour });
   if (over.hourly) return deny("HOURLY_CAP", windowHint(), { hourlyCap: hourlyCap.toString(), spentLastHour: c.spentLastHour.toString(), ...amounts() });
   if (over.daily) return deny("DAILY_CAP", windowHint(), { dailyCap: dailyCap.toString(), spentLast24h: c.spentLast24h.toString(), ...amounts() });
   if (over.total) return deny("TOTAL_CAP", { kind: "never" }, { cap: m.cap.toString(), spentTotal: c.spentTotal.toString(), ...amounts() });
