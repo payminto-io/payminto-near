@@ -25,10 +25,10 @@ describe("hubReadinessProblems", () => {
     expect(hubReadinessProblems(node, { receiptKeys: [OTHER], storageYocto: NEAR })[0]!.happened).toContain("The hub holds another receipt key for node.payminto.testnet.");
     expect(hubReadinessProblems(node, { receiptKeys: [OTHER, "ed25519:x"], storageYocto: NEAR })[0]!.happened).toContain("2 other receipt keys");
   });
-  it("warns when prepaid storage is below one full batch, with exact figures", () => {
+  it("warns when prepaid storage is below 100 batch records, with exact figures", () => {
     const [p] = hubReadinessProblems(node, { receiptKeys: [KEY], storageYocto: 12n * 10n ** 22n });
     expect(p!.check).toBe("settle_storage_balance");
-    expect(p!.happened).toContain("node.payminto.testnet holds 0.12 NEAR of prepaid storage on the hub, below the 0.36913 NEAR one full settlement batch can cost.");
+    expect(p!.happened).toContain("node.payminto.testnet holds 0.12 NEAR of prepaid storage on the hub, below the 0.281 NEAR that 100 settlement batch records cost.");
     expect(p!.happened).toContain("INSUFFICIENT_STORAGE");
     expect(p!.todo).toBe("Call fund_storage on hub.payminto.testnet for node.payminto.testnet with NEAR attached. Anyone may fund it, and the unused part can be withdrawn later.");
   });
@@ -39,8 +39,8 @@ describe("hubReadinessProblems", () => {
     expect(hubReadinessProblems({ ...node, nodeKey: null }, { receiptKeys: [], storageYocto: NEAR })).toEqual([]);
     expect(hubReadinessProblems({ operator: node.operator, hub: node.hub }, { receiptKeys: [], storageYocto: 0n }).map((p) => p.check)).toEqual(["settle_storage_balance"]);
   });
-  it("uses the threshold of one full batch of 100 claims", () => {
-    expect(nearText(MIN_SETTLE_STORAGE_YOCTO)).toBe("0.36913 NEAR");
+  it("uses the threshold of 100 batch records", () => {
+    expect(nearText(MIN_SETTLE_STORAGE_YOCTO)).toBe("0.281 NEAR");
   });
 });
 

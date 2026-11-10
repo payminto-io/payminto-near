@@ -84,7 +84,7 @@ beforeAll(async () => {
   const settled = await stack.node.services.settlement.settle("manual");
   if ("skipped" in settled) throw new Error(`settlement skipped: ${settled.skipped}`);
   for (const id of settled.batchIds) {
-    const b = (await stack.hub.chain.batch(id))!;
+    const b = (await stack.hub.chain.batch(id, stack.hub.chain.operator))!;
     gross += b.gross;
     net += b.net;
   }

@@ -3,8 +3,9 @@
  * `pnpm verify:near`: proves a Payminto receipt against the hub on chain, with no node running and no keys.
  *
  *   pnpm verify:near --rpc-url <url> --hub <account> --receipt <receipt.json> [--batch <id>]
- *   pnpm verify:near --rpc-url <url> --hub <account> --batch <id>
+ *   pnpm verify:near --rpc-url <url> --hub <account> --batch <id> --settler <account>
  *
+ * Batch ids belong to their settler on the hub, so a batch alone needs its settler; a receipt file names it as `operator`.
  * NEAR_RPC_URL and HUB_ACCOUNT work in place of the flags. Exit 0 when every check passes, 1 when any check fails,
  * 2 for bad arguments, an unreadable file, or a hub that cannot be read.
  */
@@ -15,7 +16,7 @@ import { isAccountId, isId32, type Network } from "@payminto/protocol";
 import { hubAccountFacts } from "./rpc.ts";
 import { PROOF_LIMITS, receiptFileSchema, verifyBatch, verifyReceipt, type VerifyResult } from "./verify.ts";
 
-const USAGE = "usage: pnpm verify:near --rpc-url <url> --hub <account> (--receipt <file> [--batch <id>] | --batch <id>)";
+const USAGE = "usage: pnpm verify:near --rpc-url <url> --hub <account> (--receipt <file> [--batch <id>] | --batch <id> --settler <account>)";
 const out = (line: string) => process.stdout.write(`${line}\n`);
 const fail = (message: string): never => {
   process.stderr.write(`verify:near: ${message}\n`);
@@ -33,7 +34,7 @@ function parseArgs(argv: readonly string[]) {
     }
     const eq = a.indexOf("=");
     const [name, inline] = a.startsWith("--") && eq > 0 ? [a.slice(2, eq), a.slice(eq + 1)] : [a.slice(2), undefined];
-    if (!a.startsWith("--") || !["rpc-url", "hub", "receipt", "batch"].includes(name)) fail(`unknown argument ${a}\n${USAGE}`);
+    if (!a.startsWith("--") || !["rpc-url", "hub", "receipt", "batch", "settler"].includes(name)) fail(`unknown argument ${a}\n${USAGE}`);
     const v = inline ?? argv[++i];
     if (v === undefined) fail(`--${name} needs a value\n${USAGE}`);
     flags.set(name, v!);
@@ -46,12 +47,15 @@ function parseArgs(argv: readonly string[]) {
   if (batch !== undefined && !isId32(batch)) fail("--batch must be 64 lowercase hex characters");
   const receipt = flags.get("receipt");
   if (!receipt && !batch) fail(`give --receipt, --batch or both\n${USAGE}`);
+  const settler = flags.get("settler");
+  if (settler !== undefined && !isAccountId(settler)) fail("--settler must be a NEAR account id");
+  if (!receipt && !settler) fail(`a batch alone needs --settler: batch ids belong to their settler\n${USAGE}`);
   try {
     if (!/^https?:$/.test(new URL(rpcUrl!).protocol)) fail("--rpc-url must be an http or https URL");
   } catch {
     fail("--rpc-url must be a URL");
   }
-  return { rpcUrl: rpcUrl!, hub: hub!, batch, receipt };
+  return { rpcUrl: rpcUrl!, hub: hub!, batch, receipt, settler };
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -99,7 +103,7 @@ try {
     out(`  receipt ${file.path}: call ${file.data.receipt.callId}`);
     result = await verifyReceipt(chain, args.batch ? { ...file.data, batchId: args.batch } : file.data);
   } else {
-    result = await verifyBatch(chain, args.batch!);
+    result = await verifyBatch(chain, args.batch!, args.settler!);
   }
 } catch (err) {
   fail(`reading the hub failed: ${err instanceof Error ? err.message : String(err)}`);

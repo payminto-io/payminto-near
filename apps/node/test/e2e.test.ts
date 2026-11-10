@@ -103,7 +103,7 @@ describe("the clearing story", () => {
     expect(preview).toMatchObject({ calls: 47, grossTotal: "47000" });
     const out = (await admin("POST", "/v1/settlements")).json;
     expect(out.batchIds).toHaveLength(1);
-    const batch = (await chain.batch(out.batchIds[0]))!;
+    const batch = (await chain.batch(out.batchIds[0], chain.operator))!;
     // Alice: 18,000 out, 14,000 in. Bob: 15,000 out, 15,000 in. DAO: 14,000 out, 12,000 in. Seller: 6,000 in.
     expect(batch).toMatchObject({ gross: 47_000n, net: 6_000n });
     expect((await chain.budget(alice.id))!.escrow).toBe(16_000n);
@@ -129,12 +129,12 @@ describe("the clearing story", () => {
     expect(p).toMatchObject({ status: "settled", batchStatus: "confirmed", onchainVerified: true });
     // Anyone can check it with the hub's root and the receipt fields, without trusting the node.
     const fields = { callId: p.receipt.callId, budgetId: p.receipt.budgetId, payee: p.receipt.payee, amount: BigInt(p.receipt.amount), cumulative: BigInt(p.receipt.cumulative), requestHash: p.receipt.requestHash, timestampMs: BigInt(p.receipt.timestamp) * 1000n, voucherSig: p.receipt.voucherSig };
-    const root = (await chain.batch(p.batchId))!.root;
+    const root = (await chain.batch(p.batchId, chain.operator))!.root;
     expect(receiptLeaf(chain.hub, chain.network, p.batchId, fields)).toBe(p.leaf);
     expect(verifyMerkleProof(root, p.leaf, p.proof)).toBe(true);
-    expect(await chain.verifyReceipt(p.batchId, fields, p.proof)).toBe(true);
+    expect(await chain.verifyReceipt(p.batchId, chain.operator, fields, p.proof)).toBe(true);
     // A changed amount, or a proof from another call, does not verify.
-    expect(await chain.verifyReceipt(p.batchId, { ...fields, amount: fields.amount + 1n }, p.proof)).toBe(false);
+    expect(await chain.verifyReceipt(p.batchId, chain.operator, { ...fields, amount: fields.amount + 1n }, p.proof)).toBe(false);
     const attestation = { callId: fields.callId, budgetId: fields.budgetId, payee: fields.payee, amount: fields.amount, cumulative: fields.cumulative, requestHash: fields.requestHash, timestamp: BigInt(p.receipt.timestamp), voucherSig: fields.voucherSig };
     // The node counts a proof only for its own batches and its own signature.
     expect(await receiptVerifiedOnchain(chain, "someone-else.testnet", node.services.chain.nodeKey, p.batchId, fields, attestation, p.receipt.nodeSignature, p.proof)).toBe(false);

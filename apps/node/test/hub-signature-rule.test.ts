@@ -95,8 +95,9 @@ describe("F3: the node never registers a Budget whose agent key anyone can sign 
   const register = async (agentPk: PublicKey) => {
     const { terms, policy } = budgetTerms(OWNER_A, testKey(seed++), { policy: DEFAULT_POLICY as Policy });
     const weak = { ...terms, agentPk };
-    // The hub v1 takes any 32 bytes as agent_pk, so the Budget exists on chain; only the node can refuse it.
-    chain.openBudget(OWNER_A, weak);
+    // Hub v2 refuses such a key in open_budget (F3). The node refuses it too, before it reads the chain, for a hub that
+    // does not: hub v1 took any 32 bytes as agent_pk.
+    expect(() => chain.openBudget(OWNER_A, weak)).toThrow(/INVALID_BUDGET/);
     return admin("POST", "/v1/budgets", { budget: budgetTermsToJson(weak), policy, label: "weak key" });
   };
 

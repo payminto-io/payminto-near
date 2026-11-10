@@ -38,7 +38,7 @@ function seam(fake: FakeChain) {
           return once ? once(args) : target.settle(args);
         };
       }
-      if (prop === "batch") return async (id: Id32) => (control.batchAnswer ? control.batchAnswer(id) : target.batch(id));
+      if (prop === "batch") return async (id: Id32, settler: AccountId) => (control.batchAnswer ? control.batchAnswer(id) : target.batch(id, settler));
       const value = Reflect.get(target, prop, target) as unknown;
       return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
     },

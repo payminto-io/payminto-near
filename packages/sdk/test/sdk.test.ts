@@ -744,11 +744,14 @@ describe("verifyReceiptOnchain", () => {
     expect(r).toMatchObject({ verified: false, nodeSigned: false, merkleVerified: true });
   });
 
-  it("refuses a batch someone else settled", async () => {
+  it("refuses a batch someone else settled: the hub keeps batch ids per settler, so the operator has no such batch", async () => {
     const s = await settled({ settler: "other-node.testnet" });
     const foreign = await verifyReceiptOnchain({ chain: s.chain, operator: OPERATOR, nodeKey: NODE.publicKey, receipt: s.receipt, batchId: BATCH, proof: s.proof });
-    expect(foreign).toMatchObject({ verified: false, merkleVerified: true, settlerIsNode: false });
-    expect(foreign.reason).toMatch(/settled by/);
+    expect(foreign).toMatchObject({ verified: false, merkleVerified: false, settlerIsNode: false, settler: null });
+    expect(foreign.reason).toMatch(/does not exist/);
+    // Under the account that did settle it, the same receipt proves against that account's batch.
+    const theirs = await verifyReceiptOnchain({ chain: s.chain, operator: "other-node.testnet", nodeKey: NODE.publicKey, receipt: s.receipt, batchId: BATCH, proof: s.proof });
+    expect(theirs).toMatchObject({ merkleVerified: true, settlerIsNode: true });
   });
 
   it("refuses a receipt the node never signed, and one whose fields were altered", async () => {

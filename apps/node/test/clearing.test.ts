@@ -150,7 +150,7 @@ describe("clearing through FakeChain", () => {
     expect(preview.grossTotal).toBe("9000");
     const out = (await admin("POST", "/v1/settlements")).json;
     expect(out.batchIds).toHaveLength(1);
-    const batch = await chain.batch(out.batchIds[0]);
+    const batch = await chain.batch(out.batchIds[0], chain.operator);
     // Alice: 5,000 out, 4,000 in. Bob: 4,000 out, 2,000 in. Seller: 3,000 in. Net cash is 3,000 of 9,000 gross.
     expect(batch).toMatchObject({ gross: 9_000n, net: 3_000n, settler: chain.operator });
     expect((await chain.budget(a.id))!.escrow).toBe(4_000n);

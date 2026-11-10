@@ -469,6 +469,8 @@ export function createApi(s: NodeServices): Hono<Vars> {
           }
         : null,
       batchId: batch?.batch_id ?? null,
+      /** The settler of the batch, this node: the hub keys batches by settler and batch id. */
+      settler: batch ? chain.operator : null,
       batchStatus: batch?.status ?? null,
       receiptsRoot: batch?.receipts_root ?? null,
       /** The Merkle leaf, once the call is in a batch: it commits to the batch id, so it does not exist before. */
