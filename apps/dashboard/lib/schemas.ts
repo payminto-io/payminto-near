@@ -5,7 +5,7 @@
  * Amounts are decimal strings of atomic units; they are only ever converted with BigInt.
  */
 import { z } from "zod";
-import { DENIAL_RULES, PAYMENT_METHODS, PAYMENT_STATUSES, type DenialRule } from "@payminto/protocol";
+import { CHECKOUT_METHODS, DENIAL_RULES, PAYMENT_METHODS, PAYMENT_STATUSES, type DenialRule } from "@payminto/protocol";
 import type * as P from "@payminto/protocol";
 import type { Verdict } from "@payminto/payee-check";
 
@@ -633,7 +633,7 @@ export { PAYMENT_STATUSES, PAYMENT_METHODS };
 export { WEBHOOK_EVENT_TYPES } from "@payminto/protocol";
 export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
 export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
-export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
+export const paymentMethodSchema = z.enum(CHECKOUT_METHODS);
 
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 

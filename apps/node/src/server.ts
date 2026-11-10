@@ -28,6 +28,9 @@ import { TokenBuckets } from "./ratelimit.ts";
 import { pruneTable } from "./retention.ts";
 import { Mutex } from "./mutex.ts";
 import { NearRpc, type AccessKeyReader, type TxReader } from "./near-rpc.ts";
+import { IntentsRpc, type IntentsChainReader } from "./gateway/intents-rpc.ts";
+// Types only, erased at runtime: the package itself is loaded with a dynamic import below.
+import type { FetchLike as OneClickFetch } from "@payminto/near-addons/intents";
 import { createPayeeService, type PayeeCheckSources } from "./payees/index.ts";
 import { PayoutService } from "./payouts.ts";
 import { SettlementService } from "./settlement.ts";
@@ -69,6 +72,13 @@ export type CreateNodeOptions = {
    * when a Budget's funds were read and how old that snapshot is, so all three always agree. Default `Date.now`.
    */
   clockMs?: () => number;
+  /**
+   * The any-chain checkout's NEAR reads (merchant account, USDC registration, delivery transactions). Defaults to
+   * NEAR_MAINNET_RPC_URL. Tests pass a fake.
+   */
+  intentsReader?: IntentsChainReader;
+  /** The HTTP client for 1Click (tests pass the fake server's in-process fetch). Defaults to fetch. */
+  intentsFetch?: OneClickFetch;
 };
 
 /** Builds every service, checks the chain and database agree with the config, recovers interrupted batches, and listens. */
@@ -136,6 +146,17 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
       ip: new TokenBuckets(config.rateLimit.ip),
       unsigned: new TokenBuckets(config.rateLimit.unsigned ?? DEFAULT_UNSIGNED_LIMIT),
     };
+    // The any-chain checkout. The core never imports @payminto/near-addons: it is loaded here, only when
+    // INTENTS_CHECKOUT is simulated or live.
+    const intentsConfig = config.gateway?.intents;
+    const intents = intentsConfig
+      ? {
+          kit: await import("@payminto/near-addons/intents"),
+          reader: opts.intentsReader ?? new IntentsRpc(intentsConfig.nearRpcUrl),
+          ...(opts.intentsFetch ? { fetch: opts.intentsFetch } : {}),
+        }
+      : null;
+    if (intentsConfig) log[intentsConfig.mode === "live" ? "warn" : "info"](`any-chain checkout on: ${intentsConfig.mode === "live" ? "Live - NEAR mainnet (real money)" : "Simulated - no real money"}`, { baseUrl: intentsConfig.baseUrl });
     // Payminto Gateway (docs/GATEWAY.md), on when the config has a gateway section.
     const gateway = config.gateway
       ? await Gateway.create({
@@ -151,6 +172,7 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
           publicUrl: config.publicUrl,
           accessKeys: rpc,
           txs: rpc,
+          intents,
         })
       : null;
     // Decision 8: refusal webhooks go out through the gateway's outbox, in the transaction that records the refusal.

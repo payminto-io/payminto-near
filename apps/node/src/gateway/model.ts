@@ -10,6 +10,7 @@ import {
   type Network,
   type Payment,
   type PaymentLink,
+  type CheckoutMethod,
   type PaymentMethod,
   type PaymentRefundStatus,
   type PaymentStatus,
@@ -30,7 +31,7 @@ export type PaymentRow = {
   merchant_id: string;
   status: PaymentStatus;
   amount: string;
-  quote_method: PaymentMethod | null;
+  quote_method: CheckoutMethod | null;
   surcharge: string;
   amount_due: string;
   platform_fee: string;
@@ -52,7 +53,7 @@ export type PaymentRow = {
   order_hash: Id32;
   link_id: string | null;
   payer: AccountId | null;
-  method: PaymentMethod | null;
+  method: CheckoutMethod | null;
   late: number;
   success_url: string | null;
   /** Reported by the payer's wallet after it sent the checkout transaction; display only. */
@@ -72,7 +73,7 @@ export type PaymentRow = {
 export type CreditRow = {
   id: number;
   payment_id: string;
-  method: PaymentMethod;
+  method: CheckoutMethod;
   payer: AccountId | null;
   amount: string;
   tx_hash: string | null;
@@ -84,6 +85,8 @@ export type CreditRow = {
   late: number;
   created_at: string;
   confirmed_at: string | null;
+  /** Any-chain credits: the 1Click quote whose deposit this is. */
+  intents_quote_id?: string | null;
 };
 
 export type LinkRow = {
@@ -238,8 +241,9 @@ export function paymentJson(r: PaymentRow, m: ModelContext): PaymentJson {
     link_id: r.link_id,
     payer: r.payer,
     payout: r.payout,
-    // The method the fees were quoted for; a person who never picked one is shown the method that paid.
-    method: r.quote_method ?? r.method,
+    // The method the fees were quoted for; a person who never picked one is shown the method that paid. With the
+    // any-chain checkout on, this can be `oneclick` (CHECKOUT_METHODS), which the core Payment type does not list.
+    method: (r.quote_method ?? r.method) as PaymentMethod | null,
     late: r.late === 1,
     success_url: r.success_url,
     checkout_url: checkoutUrl(m.checkoutBaseUrl, r.id),
@@ -255,7 +259,8 @@ export function paymentJson(r: PaymentRow, m: ModelContext): PaymentJson {
 export function creditJson(r: CreditRow): Credit {
   return {
     payment_id: r.payment_id,
-    method: r.method,
+    // `oneclick` on a node with the any-chain checkout on (see paymentJson).
+    method: r.method as PaymentMethod,
     payer: r.payer,
     amount: r.amount,
     tx_hash: r.tx_hash,

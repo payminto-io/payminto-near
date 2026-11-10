@@ -9,10 +9,12 @@ import {
   linkUrl,
   MAX_EXPIRES_IN_SECONDS,
   MIN_EXPIRES_IN_SECONDS,
+  CHECKOUT_METHODS,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   isId,
   type AccountId,
+  type CheckoutMethod,
   type PaymentMethod,
   type PaymentStatus,
   type PublicKey,
@@ -30,6 +32,7 @@ import type { BusinessPermission } from "../auth/permissions.ts";
 import type { AuthService } from "../auth/service.ts";
 import type { CustomerService } from "./customers.ts";
 import { mountReports } from "./reports.ts";
+import { mountIntents } from "./intents-routes.ts";
 
 type AuthedActor = Exclude<Actor, { type: "anonymous" }>;
 
@@ -124,7 +127,8 @@ const methodsSchema = z.object({
   methods: z
     .array(
       z.object({
-        method: zMethod,
+        // `oneclick` (the any-chain checkout) only on a node with INTENTS_CHECKOUT on.
+        method: z.enum(CHECKOUT_METHODS),
         enabled: z.boolean().optional(),
         fee_bps: z.number().int().min(0).max(1000).optional(),
         fee_fixed: zUint.optional(),
@@ -134,7 +138,7 @@ const methodsSchema = z.object({
       }),
     )
     .min(1)
-    .max(PAYMENT_METHODS.length),
+    .max(CHECKOUT_METHODS.length),
 });
 
 const feePlanSchema = z.object({
@@ -314,6 +318,11 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     if (!terms && b.methods.some((m) => Object.keys(m).some((k) => k !== "method" && k !== "enabled"))) {
       throw new ApiError(403, "OPERATOR_ONLY", "fees and limits are set by the platform; a business can only enable or disable methods");
     }
+    // The any-chain rail needs the node to offer it, and a proven NEAR account registered with USDC before it is on.
+    if (b.methods.some((m) => m.method === "oneclick")) {
+      if (!g.intents) throw new ApiError(409, "INTENTS_CHECKOUT_OFF", "this node does not offer the any-chain checkout (INTENTS_CHECKOUT=off)");
+      if (b.methods.some((m) => m.method === "oneclick" && m.enabled === true)) g.intents.assertCanEnable(merchant);
+    }
     const items = g.db.tx(() => {
       const items = g.merchants.setMethods(merchant.id, b.methods, !terms);
       audit(actor, terms ? "pricing.changed" : "business.updated", { merchantId: merchant.id, target: merchant.id, meta: { what: "payment methods", methods: b.methods } });
@@ -370,6 +379,8 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   app.get("/v1/gateway/overview", (c) => c.json(g.overview(caller(c, "payments.read").merchant.id)));
   // Reconciliation report (section 16).
   mountReports(app, g, { access: a, publicUrl: d.publicUrl ?? "" });
+  // The any-chain checkout (NEAR Intents): public checkout, merchant and platform routes.
+  mountIntents(app, g, { access: a, auth: d.auth, clientIp: d.clientIp });
 
   app.post("/v1/payments", async (c) => {
     const who = caller(c, "payments.write");
@@ -386,12 +397,12 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     if (status?.some((s) => !PAYMENT_STATUSES.includes(s as PaymentStatus))) throw new ApiError(400, "VALIDATION_ERROR", `status must be among ${PAYMENT_STATUSES.join(", ")}`);
     const methodRaw = c.req.query("method");
     const method = methodRaw ? methodRaw.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
-    if (method?.some((m) => !PAYMENT_METHODS.includes(m as PaymentMethod))) throw new ApiError(400, "VALIDATION_ERROR", `method must be among ${PAYMENT_METHODS.join(", ")}`);
+    if (method?.some((m) => !(CHECKOUT_METHODS as readonly string[]).includes(m))) throw new ApiError(400, "VALIDATION_ERROR", `method must be among ${CHECKOUT_METHODS.join(", ")}`);
     const refunded = c.req.query("refunded");
     return c.json(
       g.payments.list(merchantIds, {
         status: status as PaymentStatus[] | undefined,
-        method: method as PaymentMethod[] | undefined,
+        method: method as CheckoutMethod[] | undefined,
         link_id: c.req.query("link_id") || undefined,
         email: c.req.query("email") || undefined,
         q: c.req.query("q") || undefined,

@@ -74,7 +74,37 @@ Human step, NEAR mainnet, real funds:
 4. Optionally run `submit --deposit <address> --tx <hash> --sender <you>`, then `status --deposit <address> --watch` until `SUCCESS` or `REFUNDED`.
 
 Risks: the deposit address and price come from 1Click, a third party; the signature check proves origin, not fairness.
-An unauthenticated quote pays an extra 25 bps; set `ONECLICK_API_KEY` to a partner JWT to avoid it.
+The docs say an unauthenticated quote pays an extra 25 bps; live quotes on 2026-11-10 showed 1 bp on stablecoin routes and 20 bps on others.
+Set `ONECLICK_API_KEY` to a partner JWT if you have one, and read the fee from each quote.
+
+### 1b. Any-chain checkout: paying into NEAR
+
+`src/intents/checkout.ts` is the other direction, used by the node's any-chain checkout (docs/DEVELOPERS.md, "Any-chain checkout"): a buyer pays from another chain and the merchant receives exactly the invoice amount of native USDC on NEAR in its own account.
+
+- `payInQuoteRequest` asks for `EXACT_OUTPUT` of `nep141:17208628...a1` (native USDC on NEAR, 6 decimals), `depositType` and `refundType` `ORIGIN_CHAIN`, `recipientType: DESTINATION_CHAIN`.
+- `CHECKOUT_ORIGINS` are USDC on Base, Ethereum, Arbitrum, Solana and Polygon, USDT on Ethereum, and ETH on Base and Ethereum, with asset ids and decimals from the live token list.
+  Not Bitcoin (the quote signature check fails on Bitcoin quotes today), Tron or BNB (high minimums), and no memo chain.
+- `isOriginAddress` checks a refund or deposit address per chain: EVM addresses (not the zero address) and Solana base58 keys (not the system program), the forms the live API accepted and refused.
+- `checkPayInQuote` returns the refusals that keep a deposit address from being shown: a signature that is not 1Click's, an echoed request that differs from what was asked, `minAmountOut` other than the invoice amount, a recipient other than the merchant's account, a missing or malformed deposit address, a memo, a deadline in the past.
+- `mapStatus` turns a 1Click status into a checkout state; `feeLines` computes the deposit screen's numbers from the signed quote; `quoteErrorReason` turns 1Click's refusals into plain words.
+- `src/intents/fake-server.ts` (export `@payminto/near-addons/intents/fake-server`) is a fake 1Click server for tests and `pnpm local`.
+  It answers the recorded live requests with the same status codes, keys and messages (a contract test checks this), signs with a public test key that can never pass as 1Click's, and simulates the swap from deposits reported on its `/_fake/` control routes.
+  Its `deliver` hook lets `pnpm local` deliver real mock USDC on the local chain.
+
+Verified live (read-only), 2026-11-10: the dry quotes in `test/fixtures/oneclick/pay-in/` (5 USDC delivered to a NEAR account, paid with USDC on Base, Ethereum and Solana and ETH on Base) verify against the published manager key and pass `checkPayInQuote`; the recorded refusals (Tron minimum, Bitcoin bridge minimum, invalid refund address, missing named recipient, past deadline) are the fake server's contract.
+Unit-tested only: every wet quote, status and deposit flow; no wet quote was ever requested live.
+
+`quote-in` shows live dry quotes for the demo.
+It is always dry: it refuses `--mainnet` and creates no deposit address.
+
+```sh
+pnpm --filter @payminto/near-addons intents quote-in --from base:USDC --usdc 5 --merchant <existing mainnet account>
+pnpm --filter @payminto/near-addons intents quote-in --from all --usdc 5 --merchant <existing mainnet account>
+```
+
+It prints what the buyer sends, what the merchant receives, the swap cost, the price buffer, the refund and delivery fees, the time estimate, whether the signature is 1Click's and whether the checks passed, then the exact request and response.
+`--refund-to` sets the refund address (default a placeholder of the right format, which a dry quote needs), and `--slippage` the basis points (default 10 for stablecoins, 100 for ETH).
+Use a NEAR mainnet account that exists: 1Click answers a named account that does not with a 400 "Internal server error".
 
 ## 2. DAO owner with Sputnik DAO v2
 

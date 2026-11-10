@@ -30,6 +30,7 @@ import { nearBalance, USDC } from "./accounts.ts";
 import { approvePayee, payCheckout, payeeApprovals, payOut, paymentFromLink, settleNow } from "./activity.ts";
 import type { CallResult } from "./agents.ts";
 import { NETWORK } from "./config.ts";
+import { intentsChecks } from "./check-intents.ts";
 import { NodeSession } from "./session.ts";
 import { MERCHANT_EMAIL, OWNER_EMAIL, POLICIES, signerClient } from "./setup.ts";
 import type { Stack } from "./stack.ts";
@@ -128,7 +129,7 @@ export async function runChecks(s: Stack, say: (line: string) => void): Promise<
     return { ok: me.user?.email === OWNER_EMAIL && me.user.platform_role === "owner" && business.payout === acct("merchant"), detail: `${me.user?.email} is platform ${me.user?.platform_role}; ${adminLogin.email} sees ${business.name} with payout ${business.payout}; through ${api}` };
   });
 
-  await step("setup left a business, a payment link, six paid services and three funded Budgets, and the hub holds all three", async () => {
+  await step("setup left a business, two payment links, six paid services and three funded Budgets, and the hub holds all three", async () => {
     const [merchants, links, providers, budgets] = await Promise.all([
       owner.get<{ items: unknown[] }>("/v1/merchants"),
       owner.get<{ items: unknown[] }>("/v1/links"),
@@ -136,8 +137,8 @@ export async function runChecks(s: Stack, say: (line: string) => void): Promise<
       owner.get<Array<{ id: Id32 }>>("/v1/budgets"),
     ]);
     const onChain = await Promise.all([chain.budget(alice.budgetId), chain.budget(bob.budgetId), chain.budget(s.setup.budgets.carol.budgetId)]);
-    const ok = merchants.items.length === 1 && links.items.length === 1 && providers.filter((p) => s.services.some((x) => x.name === p.name)).length === 6 && budgets.length === 3 && onChain.every((b) => b !== null && b.settler === s.accounts.settler && b.escrow > 0n);
-    return { ok, detail: `${merchants.items.length} business, ${links.items.length} link, ${providers.length} services, ${budgets.length} Budgets; on the hub: ${onChain.map((b) => (b ? `${b.owner} cap ${usdc(b.cap)} escrow ${usdc(b.escrow)}` : "missing")).join("; ")}` };
+    const ok = merchants.items.length === 1 && links.items.length === 2 && providers.filter((p) => s.services.some((x) => x.name === p.name)).length === 6 && budgets.length === 3 && onChain.every((b) => b !== null && b.settler === s.accounts.settler && b.escrow > 0n);
+    return { ok, detail: `${merchants.items.length} business, ${links.items.length} links (the bag of beans, and the any-chain returned-deposit demo), ${providers.length} services, ${budgets.length} Budgets; on the hub: ${onChain.map((b) => (b ? `${b.owner} cap ${usdc(b.cap)} escrow ${usdc(b.escrow)}` : "missing")).join("; ")}` };
   });
 
   await step("fund a Budget from a local account: escrow rises on the hub by exactly the deposit", async () => {
@@ -283,6 +284,9 @@ export async function runChecks(s: Stack, say: (line: string) => void): Promise<
     const ok = paid.status === "paid" && !!record && record.merchant === acct("merchant") && record.payer === acct("shopper") && record.amount === amount && before - after === amount && checkoutMerchantCredit >= amount;
     return { ok, detail: `${view.id} is ${paid.status}; the hub records ${record ? `${usdc(record.amount)} from ${record.payer} for ${record.merchant}` : "nothing"}; the shopper's balance fell by ${usdc(before - after)}; tx ${paid.txHash}` };
   });
+
+  // The any-chain checkout (NEAR Intents, simulated): paid from USDC on Base, and a short deposit returned.
+  await intentsChecks(s, step, { api, origin, admin: adminLogin });
 
   await step("pay out: hub credit leaves the hub and arrives in each creditor's own account", async () => {
     const who = [acct("merchant"), acct("seller"), acct("alice"), acct("bob")];

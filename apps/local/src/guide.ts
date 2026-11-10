@@ -18,12 +18,14 @@ export function guide(s: Stack): string[] {
     ["Local signer", `${urls.signer}  (DEVELOPMENT ONLY: signs for the local accounts in place of a wallet)`],
     ["Gas relayer", `${urls.relayer}  (pays the gas of a revoke for an owner who has none)`],
     ["NEAR RPC", `${urls.rpc}  (near-sandbox, chain id ${SANDBOX_CHAIN_ID}; your browser reads proofs from here)`],
+    ["NEAR Intents", `${urls.oneclick}  (a fake 1Click server: Simulated - no real money; it never calls the live API)`],
     ["Logs", paths.logs],
   ];
   const who: Array<[string, string, string]> = [
     ...accounts.list.map((x): [string, string, string] => [x.accountId, x.role, x.does]),
     [accounts.settler, "Settler", "The node's own account. The node settles and pays out with a key limited to those two calls; the signer does not hold it"],
     [accounts.relayer.accountId, "Gas relayer", "Pays gas for revoke_budget, reclaim and payout on the hub. Only the relayer service holds its key"],
+    [accounts.solver, "1Click solver", "Simulated: the fake 1Click server delivers any-chain payments from it with a real ft_transfer. Only the stack holds its key"],
     [accounts.vendor, "New payee", "Exists on chain and never registered with the token: the payee check warns about it, and its payouts wait"],
     [s.hub.names.hub, "Hub", "The Payminto contract from contracts-near/out/hub.wasm, locked: it has no access key"],
     [s.hub.names.token, "Mock USDC", "A mock NEP-141 token that stands in for USDC on this local chain only"],
@@ -41,6 +43,7 @@ export function guide(s: Stack): string[] {
     `Settle now. Open "Next settlement" and press "Settle now".\n     See how many transfers the waiting calls would take one by one and how few after offsetting what Alice and Bob\n     owe each other; then, under Settlements, the newest batch with gross cleared next to tokens moved and its transaction.`,
     `Prove a call. On Home, click the amount of a settled call in Live Calls (or Verify under Records, then a recent call).\n     See "Verified on NEAR" and "Read from ${urls.rpc}": your browser read the batch root from the local chain itself.`,
     `Pay a checkout link as the shopper. Open ${setup.link.url}, press "Continue to pay", then "Pay 4.50 USDC",\n     and pick ${a.shopper.accountId}. See "Payment complete" and its payment proof; in the dashboard, Payments shows it as Paid.`,
+    `Pay from another chain (NEAR Intents, Simulated - no real money). The checkout's "Any chain" tab is the next\n     dashboard step; until it lands, do what it does with the node's API (P is the payment id the first call returns):\n       curl -s -X POST ${urls.node}/v1/links/public/${setup.link.slug}/payments -H 'content-type: application/json' -d '{}'\n       curl -s ${urls.node}/v1/checkout/P/intents/options          (eight origins, priced from signed quotes)\n       curl -s -X POST ${urls.node}/v1/checkout/P/intents/quotes -H 'content-type: application/json' \\\n            -d '{"origin_asset":"nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near","refund_to":"0x5f2b3a1e9c7d4b6a8f0e1d2c3b4a59687766554f"}'\n       curl -s -X POST ${urls.node}/v1/checkout/P/intents/quotes/Q/simulate -H 'content-type: application/json' -d '{}'\n     (Q is the quote id.) Read GET .../intents/quotes/Q a few times. See its steps go waiting, received, converting,\n     delivered, then "confirmed" with verification "rpc_checked": the node read the delivery on this chain, where\n     ${a.anychain.accountId} received the USDC from ${accounts.solver}. Again with the slug ${setup.anyChain.link.slug} in the first\n     call and {"amount":"1000000"} in simulate: too little, so see the deposit "refunded" and the payment open again.`,
     `Pay out. Open Payouts and press "Pay out now".\n     See the hub credit of ${a.merchant.accountId} (the checkout payment) and of the other creditors arrive in their own accounts,\n     with the payout transaction.`,
     `Revoke a Budget. Budgets, then "Trading agent", then "Revoke on NEAR", signed by ${a.bob.accountId}.\n     See a note with the transaction hash and the Budget marked "Stopped"; in the agent remote, a call from "Trading agent"\n     is now refused with BUDGET_REVOKED.\n     ${a.carol.accountId} holds no NEAR for gas, so her own "Revoke on NEAR" of "Support agent" is turned away by the chain;\n     the gas relayer at ${urls.relayer} is what lets her revoke.`,
   ];

@@ -33,6 +33,8 @@ export const ID_PREFIXES = {
   apiKey: "key",
   merchant: "mer",
   feePlan: "fp",
+  /** A NEAR Intents (1Click) quote of the any-chain checkout. */
+  intentsQuote: "iq",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
@@ -95,6 +97,7 @@ export const newDeliveryId = (): string => newId("delivery");
 export const newApiKeyId = (): string => newId("apiKey");
 export const newMerchantId = (): string => newId("merchant");
 export const newFeePlanId = (): string => newId("feePlan");
+export const newIntentsQuoteId = (): string => newId("intentsQuote");
 
 /** Payment link slug: 8 url-safe characters (40 random bits); uniqueness is the store's job. */
 export function newLinkSlug(): string {
@@ -229,6 +232,44 @@ export function verifyPayoutProofSignature(proof: PayoutProof, merchantId: strin
   const sig = signatureHex(proof.signature);
   if (!sig) return false;
   return verifyDigest(proof.public_key, nep413Digest(payoutProofRequest(merchantId, proof.payout, proof.timestamp, scope)), sig);
+}
+
+/**
+ * What an any-chain payout proof is bound to: the network the USDC of the any-chain checkout lands on (`near:mainnet`,
+ * or the local chain in simulated mode) and this node's hub, so a proof is good on one node only.
+ */
+export type IntentsPayoutScope = { settlementNetwork: string; hub: AccountId };
+
+/**
+ * The message the merchant's NEAR account signs to receive any-chain checkout payments. Its own prefix keeps a
+ * payout-change proof from passing as this one, and the other way round.
+ */
+export function intentsPayoutMessage(merchantId: string, account: AccountId, timestamp: number, scope: IntentsPayoutScope): string {
+  return `Payminto intents payout ${merchantId} ${account} ${timestamp} network ${scope.settlementNetwork} hub ${scope.hub}`;
+}
+
+/** The exact `signMessage` request (NEP-413) for an any-chain payout proof: recipient the hub, nonce from the message. */
+export function intentsPayoutProofRequest(merchantId: string, account: AccountId, timestamp: number, scope: IntentsPayoutScope): { message: string; recipient: string; nonce: Uint8Array } {
+  const message = intentsPayoutMessage(merchantId, account, timestamp, scope);
+  return { message, recipient: scope.hub, nonce: hexToBytes(sha256Text(message)) };
+}
+
+/** What `PUT /v1/merchant/intents-payout` takes as `proof`: the wallet's answer to `intentsPayoutProofRequest`. */
+export type IntentsPayoutProof = {
+  /** Unix seconds, as signed in the message. */
+  timestamp: number;
+  /** The key that signed; the node checks it is a full-access key of the account on the settlement network. */
+  public_key: PublicKey;
+  /** The ed25519 signature, base64 as NEAR wallets return it. */
+  signature: string;
+};
+
+/** True when `proof.public_key` signed the any-chain payout message for `account`. The key's owner is a chain read. */
+export function verifyIntentsPayoutSignature(account: AccountId, proof: IntentsPayoutProof, merchantId: string, scope: IntentsPayoutScope): boolean {
+  if (!isAccountId(account) || !isPublicKey(proof.public_key)) return false;
+  const sig = signatureHex(proof.signature);
+  if (!sig) return false;
+  return verifyDigest(proof.public_key, nep413Digest(intentsPayoutProofRequest(merchantId, account, proof.timestamp, scope)), sig);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -880,6 +921,12 @@ export const REPORT_CSV_COLUMNS = [
   "receipt_proof_urls",
   "proof_url",
   "screening_rules",
+  // Any-chain checkout (NEAR Intents): where the money settled and where it came from. Empty for the other methods
+  // except settlement_network.
+  "settlement_network",
+  "origin_asset",
+  "origin_amount",
+  "deposit_address",
 ] as const;
 export type ReportCsvColumn = (typeof REPORT_CSV_COLUMNS)[number];
 
@@ -921,6 +968,12 @@ export type ReconciliationTransaction = {
   call_id: Id32 | null;
   /** Public JSON proof of an agent charge: its Merkle path to the batch's receipts root on chain. */
   receipt_proof_url: string | null;
+  /**
+   * Any-chain payments only. `near_delivery`: the credit, the USDC delivered on NEAR (amounts in USDC).
+   * `origin_deposit`: the buyer's deposit on the origin chain (amounts in `origin_asset`'s own units), for the audit trail.
+   */
+  leg?: "near_delivery" | "origin_deposit";
+  origin_asset?: string;
 };
 
 export type ReconciliationRow = ReportAmounts<ReportAmountField> & {
@@ -942,6 +995,17 @@ export type ReconciliationRow = ReportAmounts<ReportAmountField> & {
   proof_url: string | null;
   /** Screening rules that refused a payer for this payment (for example PAYER_DENIED). */
   screening_rules: string[];
+  /**
+   * Where the money settled: the node's network for wallet and voucher payments, `near:mainnet` for an any-chain
+   * payment (`near:mainnet (simulated)` in simulated mode), null while nothing was received.
+   */
+  settlement_network: string | null;
+  /** Any-chain payments: the 1Click asset ids the buyer paid with, space separated. Null otherwise. */
+  origin_asset: string | null;
+  /** Any-chain payments: what the buyer deposited, in the origin token's decimal units ("5.010154 USDC"). */
+  origin_amount: string | null;
+  /** Any-chain payments: the 1Click deposit addresses that delivered. */
+  deposit_address: string | null;
 };
 
 export type ReconciliationReport = {

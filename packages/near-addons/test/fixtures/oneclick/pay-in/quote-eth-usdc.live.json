@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "source": "POST https://1click.chaindefuser.com/v0/quote",
+    "recorded": "2026-11-10",
+    "live": true,
+    "note": "Dry EXACT_OUTPUT quote: 5 USDC delivered, paid with USDC on Ethereum, 10 bps slippage. Addresses are clearly fake; no deposit address was created."
+  },
+  "request": {
+    "dry": true,
+    "swapType": "EXACT_OUTPUT",
+    "slippageTolerance": 10,
+    "originAsset": "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "amount": "5000000",
+    "refundTo": "0x1111111111111111111111111111111111111111",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "1111111111111111111111111111111111111111111111111111111111111111",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-10T15:49:42.000Z"
+  },
+  "status": 201,
+  "body": {
+    "quote": {
+      "amountIn": "5010131",
+      "amountInFormatted": "5.010131",
+      "amountInUsd": "5.007906501836",
+      "minAmountIn": "5005125",
+      "amountOut": "5000000",
+      "amountOutFormatted": "5.0",
+      "amountOutUsd": "4.997780000000",
+      "minAmountOut": "5000000",
+      "timeEstimate": 45,
+      "refundFee": "300000",
+      "withdrawFee": "4628"
+    },
+    "quoteRequest": {
+      "dry": true,
+      "depositMode": "SIMPLE",
+      "swapType": "EXACT_OUTPUT",
+      "slippageTolerance": 10,
+      "originAsset": "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
+      "depositType": "ORIGIN_CHAIN",
+      "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+      "amount": "5000000",
+      "refundTo": "0x1111111111111111111111111111111111111111",
+      "refundType": "ORIGIN_CHAIN",
+      "recipient": "1111111111111111111111111111111111111111111111111111111111111111",
+      "recipientType": "DESTINATION_CHAIN",
+      "deadline": "2026-11-10T15:49:42.000Z",
+      "confidentiality": "public",
+      "quoteWaitingTimeMs": 0,
+      "insured": false,
+      "appFees": [
+        {
+          "recipient": "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+          "fee": 1
+        }
+      ]
+    },
+    "signature": "ed25519:3Md7JGhwtMGJ14ck5GeeRgHJsoPbZQHH5dtcjLhX893b4xztPkNzjm5c3tTG3Y8bUcVz3zMEc6v8Ls6umxpGNkRx",
+    "timestamp": "2026-11-10T15:19:44.810Z",
+    "correlationId": "e7e3ec60-ae6d-435f-bdaf-943afbd8f848"
+  }
+}

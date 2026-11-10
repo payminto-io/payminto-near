@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { computeFees } from "@payminto/protocol";
-import { FileSignature, Wallet } from "lucide-react";
+import { FileSignature, Globe, Wallet } from "lucide-react";
 import { useToken } from "@/lib/queries";
 import { formatBps, parseAmountInput, parsePercentToBps, plainAmount } from "@/lib/gateway";
 import { formatToken } from "@/lib/format";
@@ -16,6 +16,7 @@ export type MethodRow = Omit<MerchantMethod, "merchant_id">;
 export const METHOD_INFO: Record<PaymentMethod, { label: string; hint: string; icon: typeof Wallet }> = {
   wallet: { label: "Pay with a NEAR wallet", hint: "The customer approves one transfer to the hub from any NEAR wallet.", icon: Wallet },
   voucher: { label: "AI agent with a Budget", hint: "An agent pays per Call from a Budget its owner opened on the hub.", icon: FileSignature },
+  oneclick: { label: "Any chain (NEAR Intents)", hint: "The customer pays from another chain and USDC arrives in the business's NEAR mainnet account.", icon: Globe },
 };
 
 export const DEFAULT_METHODS: MethodRow[] = (["wallet", "voucher"] as const).map((method) => ({

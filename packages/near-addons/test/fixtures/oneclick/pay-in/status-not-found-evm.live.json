@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "source": "GET https://1click.chaindefuser.com/v0/status?depositAddress=0x1111111111111111111111111111111111111111",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "status": 404,
+  "body": {
+    "message": "Deposit address 0x1111111111111111111111111111111111111111 not found",
+    "error": "Not Found",
+    "statusCode": 404,
+    "timestamp": "2026-11-10T15:20:13.336Z",
+    "path": "/v0/status?depositAddress=0x1111111111111111111111111111111111111111"
+  }
+}

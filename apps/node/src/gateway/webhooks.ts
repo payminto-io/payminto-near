@@ -8,6 +8,7 @@ import {
   signWebhook,
   WEBHOOK_EVENT_ID_HEADER,
   WEBHOOK_EVENT_TYPE_HEADER,
+  INTENTS_EVENT_TYPES,
   WEBHOOK_EVENT_TYPES,
   WEBHOOK_RETRY_SCHEDULE_SECONDS,
   WEBHOOK_SIGNATURE_HEADER,
@@ -25,6 +26,8 @@ import { checkWebhookUrl, guardedLookup, type UrlPolicy } from "./ssrf.ts";
  */
 export const SUBSCRIBABLE_EVENTS: readonly string[] = [
   ...WEBHOOK_EVENT_TYPES,
+  // Any-chain checkout: a deposit 1Click returned to the buyer, or a swap that failed.
+  ...INTENTS_EVENT_TYPES,
   "merchant.payout_changed",
   "agent_run.succeeded",
   "agent_run.failed",
@@ -32,8 +35,8 @@ export const SUBSCRIBABLE_EVENTS: readonly string[] = [
   "agent_run.timed_out",
 ];
 
-/** Events a platform endpoint (no business) may subscribe to: clearing alerts for the node's Budgets. */
-export const PLATFORM_EVENTS: readonly string[] = ["budget.refused"];
+/** Events a platform endpoint (no business) may subscribe to: clearing alerts for the node's Budgets, and failed any-chain swaps. */
+export const PLATFORM_EVENTS: readonly string[] = ["budget.refused", "payment.deposit_failed"];
 
 /** A business id, or null for the platform's own endpoints and events. */
 export type WebhookScope = string | null;

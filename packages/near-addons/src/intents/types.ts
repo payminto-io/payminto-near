@@ -102,17 +102,23 @@ export type SwapDetails = {
   nearTxHashes: string[];
   amountIn?: string;
   amountInFormatted?: string;
+  amountInUsd?: string;
   amountOut?: string;
   amountOutFormatted?: string;
+  amountOutUsd?: string;
   slippage?: number;
   originChainTxHashes: TransactionDetails[];
   destinationChainTxHashes: TransactionDetails[];
   refundedAmount?: string;
   refundedAmountFormatted?: string;
+  refundedAmountUsd?: string;
+  /** For example `PARTIAL_DEPOSIT`. */
   refundReason?: string;
   depositedAmount?: string;
   depositedAmountFormatted?: string;
+  depositedAmountUsd?: string;
   withdrawFee?: string;
+  referral?: string;
 };
 
 /** `GetExecutionStatusResponse`, and also `SubmitDepositTxResponse`, which has the same shape. */
