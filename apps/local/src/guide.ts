@@ -1,4 +1,5 @@
 import { SANDBOX_CHAIN_ID } from "./config.ts";
+import { DEFAULT_MAINNET_RPC, deliveryCheckLines, liveBanner, ONECLICK_LIVE_URL, payoutStatusText } from "./intents-live.ts";
 import type { Stack } from "./stack.ts";
 
 const pad = (s: string, n: number) => (s.length >= n ? `${s} ` : s.padEnd(n));
@@ -10,6 +11,7 @@ const pad = (s: string, n: number) => (s.length >= n ? `${s} ` : s.padEnd(n));
 export function guide(s: Stack): string[] {
   const { urls, paths, accounts, setup } = s;
   const a = accounts.by;
+  const live = s.opts?.intents?.mode === "live" ? s.opts.intents : null;
   const rows: Array<[string, string]> = [
     ["Dashboard", urls.dashboard],
     ["Agent remote", `${urls.remote}  (makes paid agent calls; it stands in for an agent's runtime)`],
@@ -18,14 +20,17 @@ export function guide(s: Stack): string[] {
     ["Local signer", `${urls.signer}  (DEVELOPMENT ONLY: signs for the local accounts in place of a wallet)`],
     ["Gas relayer", `${urls.relayer}  (pays the gas of a revoke for an owner who has none)`],
     ["NEAR RPC", `${urls.rpc}  (near-sandbox, chain id ${SANDBOX_CHAIN_ID}; your browser reads proofs from here)`],
-    ["NEAR Intents", `${urls.oneclick}  (a fake 1Click server: Simulated - no real money; it never calls the live API)`],
+    live
+      ? ["NEAR Intents", `LIVE - real money: ${ONECLICK_LIVE_URL} and NEAR mainnet (${live.rpcUrl ?? DEFAULT_MAINNET_RPC}); USDC lands in ${live.payout}`]
+      : ["NEAR Intents", `${urls.oneclick}  (a fake 1Click server: Simulated - no real money; it never calls the live API)`],
     ["Logs", paths.logs],
   ];
   const who: Array<[string, string, string]> = [
-    ...accounts.list.map((x): [string, string, string] => [x.accountId, x.role, x.does]),
+    // Live, the any-chain rail is on NEAR mainnet: the local stand-ins for it are not part of this run.
+    ...accounts.list.filter((x) => !live || x.key !== "anychain").map((x): [string, string, string] => [x.accountId, x.role, x.does]),
     [accounts.settler, "Settler", "The node's own account. The node settles and pays out with a key limited to those two calls; the signer does not hold it"],
     [accounts.relayer.accountId, "Gas relayer", "Pays gas for revoke_budget, reclaim and payout on the hub. Only the relayer service holds its key"],
-    [accounts.solver, "1Click solver", "Simulated: the fake 1Click server delivers any-chain payments from it with a real ft_transfer. Only the stack holds its key"],
+    ...(live ? [] : [[accounts.solver, "1Click solver", "Simulated: the fake 1Click server delivers any-chain payments from it with a real ft_transfer. Only the stack holds its key"] as [string, string, string]]),
     [accounts.vendor, "New payee", "Exists on chain and never registered with the token: the payee check warns about it, and its payouts wait"],
     [s.hub.names.hub, "Hub", "The Payminto contract from contracts-near/out/hub.wasm, locked: it has no access key"],
     [s.hub.names.token, "Mock USDC", "A mock NEP-141 token that stands in for USDC on this local chain only"],
@@ -43,13 +48,25 @@ export function guide(s: Stack): string[] {
     `Settle now. Open "Next settlement" and press "Settle now".\n     See how many transfers the waiting calls would take one by one and how few after offsetting what Alice and Bob\n     owe each other; then, under Settlements, the newest batch with gross cleared next to tokens moved and its transaction.`,
     `Prove a call. On Home, click the amount of a settled call in Live Calls (or Verify under Records, then a recent call).\n     See "Verified on NEAR" and "Read from ${urls.rpc}": your browser read the batch root from the local chain itself.`,
     `Pay a checkout link as the shopper. Open ${setup.link.url}, press "Continue to pay", then "Pay 4.50 USDC",\n     and pick ${a.shopper.accountId}. See "Payment complete" and its payment proof; in the dashboard, Payments shows it as Paid.`,
-    `Pay from another chain (NEAR Intents, Simulated - no real money). Open ${setup.link.url}, press "Continue to pay",\n     then the "Any chain" tab. Pick "USDC on Base", enter any Base address as the refund address (for example\n     0x5f2b3a1e9c7d4b6a8f0e1d2c3b4a59687766554f) and press "Get deposit address". Press "Simulate deposit (local only)".\n     See the steps go received, converting, delivered, then "Payment complete" with "Paid from Base through NEAR Intents"\n     and both transactions: the node read the delivery on this chain, where ${a.anychain.accountId} received the USDC from\n     ${accounts.solver}. In the dashboard the payment has a "NEAR Intents" card with "Delivery checked on NEAR".\n     Again with ${setup.anyChain.link.url} and "Send too little": see "Your deposit was returned" and "Try again".`,
+    ...(live
+      ? [
+          `Set up the any-chain payout (LIVE, NEAR mainnet). Sign in with the second login (the business Admin of ${setup.merchant.name}),\n     open Settings, Payment methods, "Accept any chain (NEAR Intents)". Enter ${live.payout}, press "Sign with a NEAR mainnet\n     wallet", read the message and approve it in your own mainnet wallet, then "Save and check account" (it asks for your password).\n     See three checks: exists, registered with USDC, signed. If USDC is not registered, "Review the storage deposit" shows the\n     exact storage_deposit (0.00125 NEAR) labeled NEAR mainnet before your wallet opens. Then turn the switch on.`,
+          `Pay a live link from Base (real money, 1 to 2 USDC). Payment links, "New link", a fixed amount of 1 to 2 USDC; open it,\n     "Continue to pay", the "Any chain" tab, "USDC on Base", your own Base address as the refund address, "Get deposit address".\n     Send exactly the amount shown from your own wallet before the deadline. See waiting, received, converting, delivered, then\n     "Payment complete" with both transactions, and the payment's proof read from NEAR mainnet. docs/LIVE_RUN.md has every step.`,
+        ]
+      : [
+          `Pay from another chain (NEAR Intents, Simulated - no real money). Open ${setup.link.url}, press "Continue to pay",\n     then the "Any chain" tab. Pick "USDC on Base", enter any Base address as the refund address (for example\n     0x5f2b3a1e9c7d4b6a8f0e1d2c3b4a59687766554f) and press "Get deposit address". Press "Simulate deposit (local only)".\n     See the steps go received, converting, delivered, then "Payment complete" with "Paid from Base through NEAR Intents"\n     and both transactions: the node read the delivery on this chain, where ${a.anychain.accountId} received the USDC from\n     ${accounts.solver}. In the dashboard the payment has a "NEAR Intents" card with "Delivery checked on NEAR".\n     Again with ${setup.anyChain?.link.url ?? setup.link.url} and "Send too little": see "Your deposit was returned" and "Try again".`,
+        ]),
     `Pay out. Open Payouts and press "Pay out now".\n     See the hub credit of ${a.merchant.accountId} (the checkout payment) and of the other creditors arrive in their own accounts,\n     with the payout transaction.`,
     `Revoke a Budget. Budgets, then "Trading agent", then "Revoke on NEAR", signed by ${a.bob.accountId}.\n     See a note with the transaction hash and the Budget marked "Stopped"; in the agent remote, a call from "Trading agent"\n     is now refused with BUDGET_REVOKED.\n     ${a.carol.accountId} holds no NEAR for gas, so her own "Revoke on NEAR" of "Support agent" is turned away by the chain;\n     the gas relayer at ${urls.relayer} is what lets her revoke.`,
   ];
 
+  const liveNotes = live
+    ? ["", ...liveBanner(live.payout), "", payoutStatusText(live.payout, s.mainnetPayout ?? null), "", ...deliveryCheckLines(live)]
+    : [];
   return [
-    "Payminto is running on this machine. Everything below is local: a NEAR node on 127.0.0.1, a mock USDC, and test accounts.",
+    live
+      ? "Payminto is running on this machine. Everything below is local except the any-chain checkout, which is LIVE on NEAR mainnet."
+      : "Payminto is running on this machine. Everything below is local: a NEAR node on 127.0.0.1, a mock USDC, and test accounts.",
     "",
     ...rows.map(([k, v]) => `  ${pad(k, 15)}${v}`),
     "",
@@ -63,5 +80,6 @@ export function guide(s: Stack): string[] {
     `it shows up in the agent remote within a few seconds. The second login in the logins file is the business admin of ${setup.merchant.name}.`,
     "The swarm market is a separate page on its own simulated hub: run pnpm swarm --serve in another terminal and open http://127.0.0.1:4477.",
     "Stopping deletes the chain. The next start begins from a clean database, because this one describes a chain that will be gone.",
+    ...liveNotes,
   ];
 }

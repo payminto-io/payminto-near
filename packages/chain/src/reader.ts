@@ -158,6 +158,30 @@ export class NearReader {
     return { status: "pending" };
   }
 
+  /**
+   * The NEP-141 transfers a transaction made, from the `ft_transfer` events of its successful receipts. NEAR RPC finds a
+   * transaction only by its hash and its signer's account, so each candidate sender is tried in turn; the first that
+   * knows it answers. `unknown` when none does, `pending` before it is final.
+   */
+  async txTransfers(hash: TxHash, senders: readonly AccountId[]): Promise<TxTransfers> {
+    senders.forEach((s) => assertAccountId(s, "sender"));
+    for (const sender of senders) {
+      let raw: { final_execution_status?: string; status?: unknown; receipts_outcome?: unknown };
+      try {
+        raw = (await this.#rpc(`tx ${hash}`, "tx", { tx_hash: hash, sender_account_id: sender, wait_until: "NONE" })) as typeof raw;
+      } catch (err) {
+        if (err instanceof NearReadError && err.kind === "not_found") continue;
+        throw err;
+      }
+      if (typeof raw !== "object" || raw === null) throw new NearReadError("invalid_response", `tx ${hash}`, "empty result");
+      const failure = failureOf(raw.status);
+      if (failure !== null) return { status: "failed", error: failure };
+      if (raw.final_execution_status !== "FINAL") return { status: "pending" };
+      return { status: "final", sender, transfers: nep141Transfers(Array.isArray(raw.receipts_outcome) ? (raw.receipts_outcome as ReceiptOutcome[]) : []) };
+    }
+    return { status: "unknown" };
+  }
+
   async #rpc(what: string, method: string, params: Record<string, unknown>): Promise<unknown> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
@@ -188,6 +212,46 @@ export class NearReader {
     if (!body || typeof body !== "object" || !("result" in body)) throw new NearReadError("invalid_response", what, "no result in the RPC answer");
     return body.result;
   }
+}
+
+// ---- NEP-141 transfers of a transaction ----
+
+/** One NEP-141 `ft_transfer` event: `token` is the contract that emitted it. */
+export type Nep141Transfer = { token: AccountId; from: AccountId; to: AccountId; amount: bigint };
+
+/** `NearReader.txTransfers`: `sender` is the account NEAR RPC found the transaction by. */
+export type TxTransfers = { status: "final"; sender: AccountId; transfers: Nep141Transfer[] } | { status: "failed"; error: string } | { status: "pending" } | { status: "unknown" };
+
+/** The parts of a receipt outcome in a NEAR `tx` answer that carry events. */
+export type ReceiptOutcome = { id?: string; outcome?: { executor_id?: string; logs?: string[]; status?: Record<string, unknown> } };
+
+/**
+ * NEP-141 transfers in the logs of the receipts that succeeded. A receipt that failed keeps the logs it wrote before
+ * failing, so its events are ignored: they never moved anything.
+ */
+export function nep141Transfers(outcomes: readonly ReceiptOutcome[]): Nep141Transfer[] {
+  const out: Nep141Transfer[] = [];
+  for (const o of outcomes) {
+    const status = o.outcome?.status ?? {};
+    if (!("SuccessValue" in status) && !("SuccessReceiptId" in status)) continue;
+    const token = o.outcome?.executor_id;
+    if (!token) continue;
+    for (const log of o.outcome?.logs ?? []) {
+      if (!log.startsWith("EVENT_JSON:")) continue;
+      let ev: { standard?: unknown; event?: unknown; data?: unknown };
+      try {
+        ev = JSON.parse(log.slice("EVENT_JSON:".length)) as typeof ev;
+      } catch {
+        continue;
+      }
+      if (ev.standard !== "nep141" || ev.event !== "ft_transfer" || !Array.isArray(ev.data)) continue;
+      for (const d of ev.data as Array<Record<string, unknown>>) {
+        if (typeof d.new_owner_id !== "string" || typeof d.old_owner_id !== "string" || typeof d.amount !== "string" || !U128.test(d.amount)) continue;
+        out.push({ token, from: d.old_owner_id, to: d.new_owner_id, amount: BigInt(d.amount) });
+      }
+    }
+  }
+  return out;
 }
 
 // ---- proof of one Call against the hub ----

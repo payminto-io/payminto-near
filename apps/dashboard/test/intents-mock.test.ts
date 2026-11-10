@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockIntents, type IntentsHost } from "@/lib/mock/intents";
-import { intentsOptionsSchema, intentsPayoutSchema, intentsQuoteSchema, paymentIntentsSchema, type PaymentDetail } from "@/lib/schemas";
+import { intentsOptionsSchema, intentsPayoutSchema, intentsProofSchema, intentsQuoteSchema, intentsSummarySchema, paymentIntentsSchema, publicLinkIntentsSchema, type PaymentDetail } from "@/lib/schemas";
 import { ApiError } from "@/lib/http";
 
 const BASE_USDC = "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near";
@@ -44,7 +44,7 @@ function payment(over: Partial<PaymentDetail> = {}): PaymentDetail {
 }
 
 /** The mock gateway's own state step, reduced: pending credits hold processing, confirmed ones pay. */
-function harness(seed: { account: string | null } = { account: "acme-store.near" }, enabled = true) {
+function harness(seed: { account: string | null; live?: boolean } = { account: "acme-store.near" }, enabled = true) {
   const p = payment();
   const host: IntentsHost = {
     find: (id) => {
@@ -113,6 +113,19 @@ describe("the mock node's any-chain checkout", () => {
     const merchantView = paymentIntentsSchema.parse(intents.paymentIntents("pay_anychain"));
     expect(merchantView.quotes[0]!.refund_to).toBe(REFUND);
     expect(merchantView.quotes[0]!.quote_response).toBeTruthy();
+    // The list, the public link and the proof say the same as the node does.
+    expect(intentsSummarySchema.parse(intents.summary("pay_anychain"))).toEqual({ mode: "simulated", label: "Simulated - no real money", status: "confirmed", origin: { asset: BASE_USDC, chain: "base", chain_name: "Base", symbol: "USDC" } });
+    expect(publicLinkIntentsSchema.parse(intents.linkOffer("mer_acme"))).toEqual({ mode: "simulated", label: "Simulated - no real money", offered: true, reason: null });
+    const proof = intentsProofSchema.parse(intents.proof("pay_anychain"));
+    expect(proof).toMatchObject({ amount: "25000000", payer: "base:0x5f2b...554f", recipient: "acme-store.near", delivery_tx: { hash: done.delivery_tx!.hash }, oneclick: { status: "SUCCESS" }, verified: true });
+    const receipts = intents.deliveryReceipts(done.delivery_tx!.hash)!;
+    expect(receipts[0]!.outcome.logs[0]).toContain('"new_owner_id":"acme-store.near","amount":"25000000"');
+  });
+
+  it("plays a server in live mode for the mainnet screens, labeled as such", () => {
+    const { intents } = harness({ account: null, live: true });
+    expect(intents.payout()).toMatchObject({ mode: "live", label: "Live - NEAR mainnet", settlement_network: "near:mainnet", proof_scope: { settlement_network: "near:mainnet" } });
+    expect(intents.linkOffer("mer_acme")).toMatchObject({ offered: false, reason: "This business does not take payments from other chains." });
   });
 
   it("returns a deposit that is too small and opens the payment again", () => {

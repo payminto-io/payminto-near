@@ -1195,10 +1195,11 @@ Merchant and platform routes:
 | Method and path | Does |
 |---|---|
 | `GET /v1/merchant/intents-payout` | `IntentsPayout`: the business's NEAR account for any-chain payments and its checks, read now (`payments.read`) |
-| `PUT /v1/merchant/intents-payout` | Body `{ "account", "proof": { "timestamp", "public_key", "signature" } }`: checks the NEP-413 signature, that the key is a full-access key of the account, that the account exists, and its USDC registration (`payout.change`, a verified email and a fresh password check, like a payout change) |
+| `PUT /v1/merchant/intents-payout` | Body `{ "account", "proof": { "timestamp", "public_key", "signature" } }`: checks the NEP-413 signature, that the key is a full-access key of the account, that the account exists, and its USDC registration (`payout.change`, a verified email and a fresh password check, like a payout change); answers the `IntentsPayout` read from the chain again, so no check is `null` after a save |
 | `PUT /v1/merchants/:id/methods` | Turns `oneclick` on or off; turning it on is refused with `409 INTENTS_PAYOUT_REQUIRED` or `INTENTS_PAYOUT_NOT_REGISTERED` until the account is verified |
 | `GET /v1/merchants/:id/methods`, `GET /v1/merchant` | `methods` list the `oneclick` row too when the node runs the any-chain checkout |
 | `GET /v1/payments/:id` | Adds `intents: { mode, label, quotes: IntentsQuote[] }`, null when the payment has no quote; merchant quotes carry the full `refund_to` and `quote_response`, the whole signed 1Click answer, for disputes |
+| `GET /v1/payments` | Each item (`PaymentListItem`) adds `intents`, an `IntentsSummary` of its confirmed quote, else its newest one: `{ mode, label, status, origin: { asset, chain, chain_name, symbol } }`, so a list can say "Any chain - USDC on Base"; null for a payment with no quote and on a node with the rail off |
 | `GET /v1/platform/intents` | `IntentsPlatformStatus`: mode, base URL, whether an API key is set, which manager key checks quotes, the last 1Click call, the rate limit left and quote counts by state (`platform.read`) |
 
 The proof is a NEP-413 `signMessage` of `intentsPayoutProofRequest(merchantId, account, timestamp, { settlementNetwork, hub })` from `@payminto/protocol`, signed by the account itself within 10 minutes.
@@ -1228,6 +1229,40 @@ The message reads `Payminto intents payout <merchant id> <account> <timestamp> n
 ```
 
 `storage_step` is the one human step when the account is not registered with USDC; the account sends it from its own wallet, and the next `GET` sees it.
+
+`GET /v1/links/public/:slug` adds `intents` (`PublicLinkIntents`), null when the rail is off: `{ "mode", "label", "offered", "reason" }`.
+`offered` is true when the business has `oneclick` on with a verified account, is active, and the link's fixed amount carries no platform fee; `reason` says why not in plain words.
+Each payment made from the link still checks its own expiry window, so a page says "Any chain" only when `offered` is true.
+
+`GET /v1/checkout/:id/proof` proves a credit paid from another chain with an `IntentsProofCredit` (method `oneclick`), never a hub record or a Merkle proof:
+
+```json
+{
+  "method": "oneclick",
+  "amount": "1500000",
+  "payer": "base:0x5f2b...554f",
+  "quote_id": "iq_ccbq7ktq3ypx2m3l3wmbqcbb",
+  "mode": "live",
+  "label": "Live - NEAR mainnet",
+  "settlement_network": "near:mainnet",
+  "token": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  "recipient": "northwind-usdc.near",
+  "origin": { "asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", "chain": "base", "chain_name": "Base", "symbol": "USDC", "decimals": 6 },
+  "deposited": { "amount": "1501678", "formatted": "1.501678", "symbol": "USDC" },
+  "origin_txs": [{ "hash": "0x...", "explorer_url": "https://basescan.org/tx/0x..." }],
+  "delivery_tx": { "hash": "4oUu8NQ5wVyZCjU2LhJ3PZm6yZ5v1nTzgk8h2KkS4m7Q", "explorer_url": "https://nearblocks.io/txns/4oUu8NQ5wVyZCjU2LhJ3PZm6yZ5v1nTzgk8h2KkS4m7Q" },
+  "delivery_senders": ["northwind-usdc.near"],
+  "oneclick": { "status": "SUCCESS", "correlation_id": "0f8b2c1e-6a43-4c1b-9d61-3f0c8f0d2a77", "deposit_address": "0x8715...dc05", "read_at": "2026-11-14T10:05:00.000Z" },
+  "verification": "rpc_checked",
+  "delivered_on_chain": "1500000",
+  "verified": true
+}
+```
+
+The node reads the delivery transaction again when asked: `delivered_on_chain` is what its NEP-141 `ft_transfer` events of `token` paid `recipient`, and `verified` is true when that is at least `amount`, false when it is less, and null when the transaction could not be read.
+`oneclick` is 1Click's status as the node last read it, kept beside the evidence and never counted as evidence.
+`delivery_senders` are the accounts NEAR RPC can find the transaction under (`INTENTS_DELIVERY_SENDERS`, then the recipient), so a browser can read it again; the dashboard's proof page does, from NEAR mainnet when live.
+The top-level `network`, `hub` and `token` of the proof stay the node's own.
 
 Webhooks: `payment.processing`, `payment.paid`, `payment.overpaid` and `payment.expired` come as for any payment.
 `payment.deposit_returned` (1Click returned a deposit) and `payment.deposit_failed` (the swap failed; also sent to platform alert endpoints) are new; their object is the payment with `intents` and `deposit`, the quote they are about (`IntentsDepositEvent`).
@@ -1649,12 +1684,14 @@ Every command here was run for this page unless marked.
 |---|---|---|
 | `pnpm install` | Installs the workspace (Node 22.18 or newer, pnpm 9) | Done |
 | `pnpm -r typecheck` | Type-checks every package | Passes |
-| `pnpm -r test` | Unit tests on the simulated hub; sandbox suites are skipped | Passes: 2,053 tests in 15 packages, 15 sandbox tests skipped |
+| `pnpm -r test` | Unit tests on the simulated hub; sandbox suites are skipped | Passes: 2,305 tests in 15 packages, 15 sandbox tests skipped |
 | `cd contracts-near && cargo test --lib` | The contract's unit tests, with no sandbox | Passes: 87 tests |
 | `pnpm demo` | The whole story on the simulated hub | `25 of 25 checks passed in 4.1 s.` |
 | `pnpm demo --chain sandbox` | The same on a sandbox (a local NEAR node) | `26 of 26 checks passed in 97.2 s.` |
 | `pnpm local` | The whole product on a sandbox, with the dashboard and local test accounts, until Ctrl-C | Run on spare ports: `Ready in 107.5 s.`; Ctrl-C stopped everything with exit code 130 |
-| `pnpm local --check` | The same stack, the browser guide as a script, checked against the chain | `21 of 21 checks passed in 149.5 s.` |
+| `pnpm local --check` | The same stack, the browser guide as a script, checked against the chain | `24 of 24 checks passed in 194.5 s.` |
+| `pnpm local --intents live --intents-payout <account>` | LIVE - real money: the any-chain checkout on the real 1Click API and NEAR mainnet, everything else local (docs/LIVE_RUN.md) | Run only far enough to print the banner, then stopped; without `--intents-payout` it refuses with exit code 2 |
+| `pnpm live:capture <payment id>` | Saves a live run's quote, 1Click status and NEAR delivery transaction as a dated fixture | Unit-tested with a fake node, 1Click and RPC; not run live |
 | `pnpm verify:near --rpc-url <url> --hub <account> --receipt <file>` | Checks a receipt with no node and no keys | Run by the sandbox demo as its own process, on this commit too: `VERIFIED: 8 checks passed` for the receipt, `NOT VERIFIED: 3 check(s) failed` for the tampered copy |
 | `pnpm swarm` | 20 buyers and 5 sellers on the simulated hub | `17 of 17 checks passed.` in 4.7 s |
 | `pnpm agent market work --dry-run` | The Agent Market seller flow with no market account: four paid calls on an in-process node on the simulated hub, and a deliverable with their receipts | Exit code 0; 4 receipts, each `VERIFIED` in process |

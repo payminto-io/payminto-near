@@ -965,17 +965,15 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
       <div className="relative flex flex-col gap-2 print:hidden">
         {back && <ReturnButton url={back} merchant={view.merchant.name} auto={watched} />}
         <div className="flex gap-2">
-          {/* The proof page checks the hub's record of a wallet payment; an any-chain payment's proof is its NEAR delivery above. */}
-          {!iq && (
-            <Button asChild variant="outline" className="h-11 flex-1 rounded-xl">
-              <Link href={`/receipt/${view.id}`}>
-                <ShieldCheck /> Payment proof
-              </Link>
-            </Button>
-          )}
-          <Button variant="outline" className={cn("h-11 rounded-xl", iq && "flex-1")} onClick={() => window.print()} aria-label="Print receipt">
+          {/* The proof page checks the hub's record of a wallet payment, and the NEAR delivery of an any-chain payment. */}
+          <Button asChild variant="outline" className="h-11 flex-1 rounded-xl">
+            <Link href={`/receipt/${view.id}`}>
+              <ShieldCheck /> Payment proof
+            </Link>
+          </Button>
+          <Button variant="outline" className="h-11 rounded-xl" onClick={() => window.print()} aria-label="Print receipt">
             <Printer />
-            <span className={cn(!iq && "max-sm:sr-only")}>Print</span>
+            <span className="max-sm:sr-only">Print</span>
           </Button>
         </div>
         {!back && <p className="mt-1 text-center text-xs text-muted-foreground">You can close this page. This receipt stays at the same address.</p>}

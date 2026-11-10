@@ -4,7 +4,7 @@
  * the code path and the screen are the same and only the URL says "demo".
  */
 import { NearReadError, NearReader, PUBLIC_RPC_URLS, networks, type AccountId, type Network } from "@payminto/protocol";
-import { RPC_URL_OVERRIDE } from "./config";
+import { MAINNET_RPC_URL_OVERRIDE, RPC_URL_OVERRIDE } from "./config";
 
 /** Per request. A proof makes two or three requests, so the page gives up within about half a minute at worst. */
 export const READ_TIMEOUT_MS = 8_000;
@@ -28,6 +28,18 @@ export function proofRpcUrl(network: Network, nodeRpcUrl?: string | null): strin
 export function liveReader(network: Network, hub: AccountId, nodeRpcUrl?: string | null): ReaderSource | null {
   const rpcUrl = proofRpcUrl(network, nodeRpcUrl);
   return rpcUrl ? { reader: new NearReader({ rpcUrl, hub, timeoutMs: READ_TIMEOUT_MS }), demo: false } : null;
+}
+
+/**
+ * Where an any-chain delivery is read: NEAR mainnet when the USDC landed there (the configured mainnet RPC, else the
+ * public one), and otherwise the chain the hub is on, which stands in for mainnet when the server runs it simulated.
+ * The demo reads its own in-browser chain either way.
+ */
+export function deliveryReader(settlement: string, hubSource: ReaderSource | null): ReaderSource | null {
+  if (hubSource?.demo || settlement !== "near:mainnet") return hubSource;
+  const rpcUrl = MAINNET_RPC_URL_OVERRIDE ?? PUBLIC_RPC_URLS["near:mainnet"];
+  // NearReader names a hub for its views; a delivery read uses none, so any account id does.
+  return rpcUrl ? { reader: new NearReader({ rpcUrl, hub: "near", timeoutMs: READ_TIMEOUT_MS }), demo: false } : null;
 }
 
 /** "Read from https://rpc.testnet.near.org" or the demo wording, for the line under a proof. */

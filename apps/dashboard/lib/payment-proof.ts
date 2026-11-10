@@ -9,7 +9,7 @@
  * read that does not finish throws `NearReadError`; the page says so and offers to read again.
  */
 import { canonicalJson, sha256Text, type ChainPayment, type Id32, type NearReader } from "@payminto/protocol";
-import type { OrderCommitment, PaymentProof } from "./schemas";
+import type { IntentsProof, OrderCommitment, PaymentProof } from "./schemas";
 
 /** The order as the node served it: the exact bytes that were hashed, and the parsed object for display. */
 export type ServedOrder = { raw: string; order: OrderCommitment };
@@ -23,7 +23,14 @@ export type ProofResult = { checks: ProofCheck[]; read: { rpcUrl: string; hub: s
 /** The chain reads a payment proof needs. */
 export type PaymentReader = Pick<NearReader, "payments" | "txState" | "rpcUrl" | "hub">;
 
+/**
+ * The read a payment paid from another chain needs, on the network the USDC landed on (NEAR mainnet live; the local
+ * chain when simulated), which is not always the hub's.
+ */
+export type DeliveryReader = Pick<NearReader, "txTransfers" | "rpcUrl">;
+
 const CHECK_IDS = ["tx", "record", "transfer", "order"] as const;
+const INTENTS_CHECK_IDS = ["delivery", "delivered", "order"] as const;
 
 /** The order fingerprint: sha256 of the exact canonical order bytes the node served, as hex. */
 export const orderFingerprint = (raw: string): Id32 => sha256Text(raw);
@@ -34,8 +41,17 @@ function same(a: string | null | undefined, b: string | null | undefined): boole
   return Boolean(a && b && a.toLowerCase() === b.toLowerCase());
 }
 
-/** Runs every check that can run. A check that could not run is "skip"; only a check that ran and matched is "pass". */
-export async function runProofChecks(proof: PaymentProof, served: ServedOrder | null, reader: PaymentReader | null): Promise<ProofResult> {
+/**
+ * Runs every check that can run. A check that could not run is "skip"; only a check that ran and matched is "pass".
+ * A payment paid from another chain (`proof.intents`) is checked by its NEAR delivery through `delivery`, never by a
+ * hub record: it has none.
+ */
+export async function runProofChecks(proof: PaymentProof, served: ServedOrder | null, reader: PaymentReader | null, delivery: DeliveryReader | null = null): Promise<ProofResult> {
+  if (proof.intents) {
+    const checks = await deliveryChecks(proof.intents, delivery);
+    checks.push(orderCheck(proof, served));
+    return { checks, read: delivery ? { rpcUrl: delivery.rpcUrl, hub: reader?.hub ?? proof.hub ?? "", blockHeight: null } : null };
+  }
   const checks: ProofCheck[] = [];
 
   let blockHeight: number | null = null;
@@ -81,28 +97,66 @@ export async function runProofChecks(proof: PaymentProof, served: ServedOrder | 
   }
 
   // 4. The order: hashed here from the bytes the node served, which must also be the canonical form of the order.
-  if (!served) checks.push({ id: "order", label: "Order matches its fingerprint", state: "fail", detail: "The order could not be loaded." });
-  else {
-    const recomputed = orderFingerprint(served.raw);
-    const canonical = canonicalJson(served.order) === served.raw;
-    const ok = canonical && recomputed === proof.order_hash.replace(/^0x/, "").toLowerCase() && served.order.payment_id === proof.payment_id;
-    checks.push({
-      id: "order",
-      label: "Order matches its fingerprint",
-      state: ok ? "pass" : "fail",
-      detail: ok
-        ? "Hashed in this browser from the canonical order the server served."
-        : !canonical
-          ? "The served order is not in canonical form."
-          : `Hashed to ${recomputed.slice(0, 12)}..., the server claims ${proof.order_hash.slice(0, 12)}...`,
-    });
-  }
+  checks.push(orderCheck(proof, served));
   return { checks, read: reader ? { rpcUrl: reader.rpcUrl, hub: reader.hub, blockHeight } : null };
 }
 
+function orderCheck(proof: PaymentProof, served: ServedOrder | null): ProofCheck {
+  if (!served) return { id: "order", label: "Order matches its fingerprint", state: "fail", detail: "The order could not be loaded." };
+  const recomputed = orderFingerprint(served.raw);
+  const canonical = canonicalJson(served.order) === served.raw;
+  const ok = canonical && recomputed === proof.order_hash.replace(/^0x/, "").toLowerCase() && served.order.payment_id === proof.payment_id;
+  return {
+    id: "order",
+    label: "Order matches its fingerprint",
+    state: ok ? "pass" : "fail",
+    detail: ok
+      ? "Hashed in this browser from the canonical order the server served."
+      : !canonical
+        ? "The served order is not in canonical form."
+        : `Hashed to ${recomputed.slice(0, 12)}..., the server claims ${proof.order_hash.slice(0, 12)}...`,
+  };
+}
+
+/**
+ * A payment paid from another chain: the NEAR delivery transaction, read in this browser, is final, and its successful
+ * receipts carry the USDC contract's NEP-141 `ft_transfer` to the business's account for at least the amount.
+ */
+async function deliveryChecks(i: IntentsProof, delivery: DeliveryReader | null): Promise<ProofCheck[]> {
+  const where = settlementName(i.settlement_network);
+  const skip = (id: string, label: string, detail: string): ProofCheck => ({ id, label, state: "skip", detail });
+  if (!i.delivery_tx) return [{ id: "delivery", label: "Delivery is final", state: "fail", detail: "The server names no delivery transaction." }, skip("delivered", "USDC delivered to the business", "There is no delivery to read.")];
+  const hash = i.delivery_tx.hash;
+  if (!delivery) {
+    const why = `This page has no RPC for ${where}, so the delivery was not checked.`;
+    return [skip("delivery", "Delivery is final", why), skip("delivered", "USDC delivered to the business", why)];
+  }
+  const read = await delivery.txTransfers(hash, i.delivery_senders);
+  if (read.status !== "final") {
+    const why = read.status === "failed" ? `NEAR reports the delivery failed: ${read.error}` : read.status === "pending" ? "NEAR reports the delivery as not final yet." : `${where} does not know ${hash} under any of the accounts the server named.`;
+    return [
+      { id: "delivery", label: "Delivery is final", state: "fail", detail: why },
+      { id: "delivered", label: "USDC delivered to the business", state: "fail", detail: "There is no final delivery to compare." },
+    ];
+  }
+  const total = read.transfers.filter((t) => t.token === i.token && t.to === i.recipient).reduce((sum, t) => sum + t.amount, 0n);
+  const due = BigInt(i.amount);
+  return [
+    { id: "delivery", label: "Delivery is final", state: "pass", detail: `${hash} is final on ${where} (found under ${read.sender}).` },
+    total >= due
+      ? { id: "delivered", label: "USDC delivered to the business", state: "pass", detail: `${total} base units of ${i.token} transferred to ${i.recipient} (NEP-141 ft_transfer).` }
+      : { id: "delivered", label: "USDC delivered to the business", state: "fail", detail: `The delivery transferred ${total} base units of ${i.token} to ${i.recipient}; the payment needs ${due}.` },
+  ];
+}
+
+/** "NEAR mainnet", or the local chain that stands in for it when the server runs the any-chain checkout simulated. */
+export function settlementName(settlement: string): string {
+  return settlement === "near:mainnet" ? "NEAR mainnet" : settlement.startsWith("near:mainnet") ? "the local chain (simulated mainnet)" : settlement;
+}
+
 /** The checks runProofChecks produces, in order, so the page can list them before they finish. */
-export function expectedCheckIds(): string[] {
-  return [...CHECK_IDS];
+export function expectedCheckIds(proof?: Pick<PaymentProof, "intents"> | null): string[] {
+  return proof?.intents ? [...INTENTS_CHECK_IDS] : [...CHECK_IDS];
 }
 
 /** One sentence a non-technical reader understands, per check; the technical detail stays in its own line. */
@@ -116,6 +170,10 @@ export function plainCheckTitle(id: string, ctx: { merchant: string; network: st
       return `The hub credited it to ${ctx.merchant}`;
     case "order":
       return "The order matches what was bought";
+    case "delivery":
+      return `The delivery is final on ${ctx.network}`;
+    case "delivered":
+      return `The USDC reached ${ctx.merchant}'s NEAR account`;
     default:
       return id;
   }

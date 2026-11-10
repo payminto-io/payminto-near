@@ -210,3 +210,64 @@ export type IntentsPlatformStatus = {
 
 /** The object of a `payment.deposit_returned` or `payment.deposit_failed` webhook: the payment, with the quote it is about. */
 export type IntentsDepositEvent = Payment & { intents: PaymentIntents | null; deposit: IntentsQuote };
+
+/**
+ * `intents` on each item of `GET /v1/payments`: where an any-chain payment came from, so a list can say "Any chain - USDC
+ * on Base". The payment's confirmed quote, else its newest one; null when the payment has no quote or the rail is off.
+ */
+export type IntentsSummary = {
+  mode: Exclude<IntentsMode, "off">;
+  label: string;
+  status: IntentsQuoteStatus;
+  origin: Pick<IntentsOrigin, "asset" | "chain" | "chain_name" | "symbol">;
+};
+
+/** A payment of `GET /v1/payments` (a page item): the payment and, for an any-chain payment, its summary. */
+export type PaymentListItem = Payment & { intents: IntentsSummary | null };
+
+/**
+ * `intents` on `GET /v1/links/public/{slug}`: whether a buyer of this link can pay from another chain. Null when the node
+ * runs with INTENTS_CHECKOUT=off. `offered` is decided for the link; each payment still checks its own window and fee.
+ */
+export type PublicLinkIntents = {
+  mode: Exclude<IntentsMode, "off">;
+  label: string;
+  offered: boolean;
+  /** Why not, in plain words, when `offered` is false. */
+  reason: string | null;
+};
+
+/**
+ * A credit paid through NEAR Intents in `GET /v1/checkout/{id}/proof`. The evidence is the NEAR delivery transaction:
+ * the node reads it again when asked and looks for the NEP-141 `ft_transfer` event of the USDC contract to `recipient`.
+ * `oneclick` is what 1Click last reported, as the node read it; it is the provider's word, not evidence.
+ */
+export type IntentsProofCredit = {
+  method: "oneclick";
+  amount: string;
+  /** The buyer's refund address prefixed by its chain, masked: `base:0x5f2b...554f`. */
+  payer: string | null;
+  quote_id: string;
+  mode: Exclude<IntentsMode, "off">;
+  label: string;
+  /** Where the USDC landed: `near:mainnet`, or `near:mainnet (simulated)`. */
+  settlement_network: string;
+  /** The USDC contract on the settlement network. */
+  token: AccountId;
+  /** The business's own NEAR account the USDC was delivered to. */
+  recipient: AccountId;
+  origin: IntentsOrigin;
+  /** What the buyer deposited on the origin chain. */
+  deposited: IntentsAmount | null;
+  origin_txs: IntentsTx[];
+  delivery_tx: IntentsTx | null;
+  /** Accounts NEAR RPC can find the delivery transaction by (it needs the signer's account to look a transaction up). */
+  delivery_senders: AccountId[];
+  oneclick: { status: string | null; correlation_id: string; deposit_address: string; read_at: string };
+  /** How the node confirmed it: read on NEAR (`rpc_checked`) or on 1Click's word after 10 minutes (`provider_only`). */
+  verification: "rpc_checked" | "provider_only" | null;
+  /** USDC base units the delivery transaction transferred to `recipient`, read now; null when it could not be read. */
+  delivered_on_chain: string | null;
+  /** True when the delivery read now pays `recipient` at least `amount` of `token`; false when it does not; null when unread. */
+  verified: boolean | null;
+};

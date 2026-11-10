@@ -29,7 +29,7 @@ const METHOD_LABEL: Record<string, string> = { wallet: "Pay with a NEAR wallet",
 
 /** How the payment was paid, naming the token and chain of an any-chain payment. */
 function methodText(p: PaymentDetail): string | undefined {
-  return p.method === "oneclick" ? anyChainMethodLabel(p, p.intents?.quotes) : p.method ? METHOD_LABEL[p.method] : undefined;
+  return p.method === "oneclick" ? anyChainMethodLabel({ method: p.method, payer: p.payer }, p.intents?.quotes) : p.method ? METHOD_LABEL[p.method] : undefined;
 }
 
 /** "from 0x5f2b...554f on Base" for an any-chain payer, "from alice.testnet" for a NEAR one. */

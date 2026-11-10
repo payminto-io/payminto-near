@@ -7,12 +7,26 @@
 import { CHECKOUT_ORIGINS, NEAR_MAINNET_USDC_ASSET, formatUnits, type CheckoutOrigin } from "@payminto/near-addons/intents";
 import { INTENTS_LABELS, sha256Text } from "@payminto/protocol";
 import { ApiError } from "../http";
-import type { Credit, IntentsCheckout, IntentsFeeLines, IntentsOption, IntentsOptions, IntentsPayout, IntentsQuote, IntentsQuoteStatus, IntentsStep, PaymentDetail, PaymentIntents } from "../schemas";
+import type {
+  Credit,
+  IntentsCheckout,
+  IntentsFeeLines,
+  IntentsOption,
+  IntentsOptions,
+  IntentsPayout,
+  IntentsProof,
+  IntentsQuote,
+  IntentsQuoteStatus,
+  IntentsStep,
+  IntentsSummary,
+  PaymentDetail,
+  PaymentIntents,
+  PublicLinkIntents,
+} from "../schemas";
 
-const MODE = "simulated" as const;
-const LABEL = INTENTS_LABELS.simulated;
-const SETTLEMENT = "near:mainnet (simulated)";
 const USDC_CONTRACT = "usdc.near";
+/** The account the demo's deliveries come from, as the local stack's simulated solver. */
+const SOLVER = "solver.near";
 /** Ten minutes or more must be left on a payment to pay it from another chain, as on the node. */
 const MIN_WINDOW_MS = 600_000;
 const QUOTE_TTL_MS = 1_800_000;
@@ -126,10 +140,22 @@ export class MockIntents {
   readonly #rows = new Map<string, Row[]>();
   #payout: { account: string | null; exists: boolean | null; registered: boolean | null; provenAt: string | null };
 
+  readonly #mode: "simulated" | "live";
+  readonly #label: string;
+  readonly #settlement: string;
+
+  /**
+   * `live` plays a server that runs the any-chain checkout live (`?demo=intents-live`), so its NEAR mainnet screens can
+   * be walked: the labels and the settlement network say mainnet, and the demo wallet stands in for a mainnet wallet.
+   * Nothing here reaches NEAR or 1Click either way.
+   */
   constructor(
     private readonly host: IntentsHost,
-    seed: { account: string | null },
+    seed: { account: string | null; live?: boolean },
   ) {
+    this.#mode = seed.live ? "live" : "simulated";
+    this.#label = INTENTS_LABELS[this.#mode];
+    this.#settlement = seed.live ? "near:mainnet" : "near:mainnet (simulated)";
     this.#payout = seed.account ? { account: seed.account, exists: true, registered: true, provenAt: new Date(Date.now() - 6 * 86_400_000).toISOString() } : { account: null, exists: null, registered: null, provenAt: null };
   }
 
@@ -154,7 +180,7 @@ export class MockIntents {
     const reason = this.#unavailable(p);
     const rows = (this.#rows.get(p.id) ?? []).filter((r) => r.q.status !== "expired");
     const newest = rows.at(-1);
-    return { mode: MODE, label: LABEL, available: reason === null, reason, settlement_network: SETTLEMENT, active_quote: newest ? this.#json(newest) : null };
+    return { mode: this.#mode, label: this.#label, available: reason === null, reason, settlement_network: this.#settlement, active_quote: newest ? this.#json(newest) : null };
   }
 
   /** `methods` gains `oneclick` while the payment can be paid from another chain. */
@@ -179,11 +205,11 @@ export class MockIntents {
     return {
       object: "intents_options",
       payment_id: p.id,
-      mode: MODE,
-      label: LABEL,
+      mode: this.#mode,
+      label: this.#label,
       amount_out: amount(out, 6, "USDC"),
       recipient: this.#payout.account ?? "",
-      settlement_network: SETTLEMENT,
+      settlement_network: this.#settlement,
       quoted_at: new Date(at).toISOString(),
       valid_until: new Date(at + 30_000).toISOString(),
       options,
@@ -268,7 +294,7 @@ export class MockIntents {
         slippage_bps: o.stable ? 10 : 100,
         time_estimate_sec: f.time_estimate_sec,
         recipient: this.#payout.account ?? "",
-        settlement_network: SETTLEMENT,
+        settlement_network: this.#settlement,
         deadline: new Date(deadline).toISOString(),
         inactive_at: new Date(deadline).toISOString(),
         deposited: null,
@@ -354,11 +380,63 @@ export class MockIntents {
     return this.#json(r);
   }
 
+  /** `intents` on a list item: the confirmed quote of the payment, else its newest one; null when it has none. */
+  summary(paymentId: string): IntentsSummary | null {
+    const rows = this.#rows.get(paymentId) ?? [];
+    const r = rows.find((x) => x.q.status === "confirmed") ?? rows.at(-1);
+    if (!r) return null;
+    const { asset, chain, chain_name, symbol } = r.q.origin;
+    return { mode: this.#mode, label: this.#label, status: r.q.status, origin: { asset, chain, chain_name, symbol } };
+  }
+
+  /** `intents` on the public link: offered while the business takes payments from other chains. */
+  linkOffer(merchantId: string): PublicLinkIntents {
+    const offered = this.host.enabled(merchantId) && this.verified();
+    return { mode: this.#mode, label: this.#label, offered, reason: offered ? null : "This business does not take payments from other chains." };
+  }
+
+  /** The proof of a payment paid from another chain: its delivery on NEAR, and what 1Click reported. */
+  proof(paymentId: string): IntentsProof | null {
+    const r = (this.#rows.get(paymentId) ?? []).find((x) => x.q.status === "confirmed");
+    if (!r || !r.q.delivery_tx) return null;
+    return {
+      method: "oneclick",
+      amount: r.q.amount_out.amount,
+      payer: `${r.q.origin.chain}:${mask(r.refundTo)}`,
+      quote_id: r.q.id,
+      mode: this.#mode,
+      label: this.#label,
+      settlement_network: this.#settlement,
+      token: USDC_CONTRACT,
+      recipient: r.q.recipient,
+      origin: r.q.origin,
+      deposited: r.q.deposited,
+      origin_txs: r.q.origin_txs,
+      delivery_tx: r.q.delivery_tx,
+      delivery_senders: [SOLVER, r.q.recipient],
+      oneclick: { status: r.q.provider_status, correlation_id: r.q.correlation_id, deposit_address: r.q.deposit_address, read_at: r.q.updated_at },
+      verification: r.q.verification,
+      delivered_on_chain: r.q.amount_out.amount,
+      verified: true,
+    };
+  }
+
+  /** The demo chain's receipts of a delivery transaction: the USDC contract's NEP-141 transfer to the business. */
+  deliveryReceipts(hash: string): Array<{ id: string; outcome: { executor_id: string; logs: string[]; status: { SuccessValue: string } } }> | null {
+    for (const rows of this.#rows.values()) {
+      const r = rows.find((x) => x.q.delivery_tx?.hash === hash);
+      if (!r) continue;
+      const event = { standard: "nep141", version: "1.0.0", event: "ft_transfer", data: [{ old_owner_id: SOLVER, new_owner_id: r.q.recipient, amount: r.q.amount_out.amount, memo: "NEAR Intents delivery (simulated)" }] };
+      return [{ id: `${hash}:usdc`, outcome: { executor_id: USDC_CONTRACT, logs: [`EVENT_JSON:${JSON.stringify(event)}`], status: { SuccessValue: "" } } }];
+    }
+    return null;
+  }
+
   /** `intents` on the business's payment detail: every quote, the refund address in full and the signed answer. */
   paymentIntents(paymentId: string): PaymentIntents | null {
     const rows = this.#rows.get(paymentId) ?? [];
     if (rows.length === 0) return null;
-    return { mode: MODE, label: LABEL, quotes: rows.map((r) => this.#json(r, true)) };
+    return { mode: this.#mode, label: this.#label, quotes: rows.map((r) => this.#json(r, true)) };
   }
 
   // ------------------------------------------------------------------ the business's NEAR account
@@ -368,9 +446,9 @@ export class MockIntents {
     const registered = p.account ? p.registered : null;
     return {
       object: "intents_payout",
-      mode: MODE,
-      label: LABEL,
-      settlement_network: SETTLEMENT,
+      mode: this.#mode,
+      label: this.#label,
+      settlement_network: this.#settlement,
       account: p.account,
       verified: this.verified(),
       checks: { exists: p.account ? p.exists : null, usdc_registered: registered, proven: p.provenAt !== null, proven_at: p.provenAt },
@@ -384,7 +462,7 @@ export class MockIntents {
             }
           : null,
       enabled: this.host.enabled(this.host.merchant.id),
-      proof_scope: { settlement_network: SETTLEMENT, hub: this.host.merchant.hub },
+      proof_scope: { settlement_network: this.#settlement, hub: this.host.merchant.hub },
       checked_at: new Date().toISOString(),
     };
   }
@@ -437,7 +515,7 @@ export class MockIntents {
 
   #json(r: Row, merchant = false): IntentsQuote {
     const deadlinePassed = Date.now() >= new Date(r.q.deadline).getTime();
-    const out: IntentsQuote = { ...r.q, object: "intents_quote", mode: MODE, label: LABEL, refund_to: merchant ? r.refundTo : mask(r.refundTo), steps: steps(r.q.status), deadline_passed: deadlinePassed };
+    const out: IntentsQuote = { ...r.q, object: "intents_quote", mode: this.#mode, label: this.#label, refund_to: merchant ? r.refundTo : mask(r.refundTo), steps: steps(r.q.status), deadline_passed: deadlinePassed };
     if (merchant) out.quote_response = { correlationId: r.q.correlation_id, simulated: true, note: "The in-browser demo's quote; no 1Click server answered it." };
     return out;
   }

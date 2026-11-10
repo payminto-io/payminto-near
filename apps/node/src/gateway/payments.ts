@@ -387,10 +387,12 @@ export class PaymentService {
     counts.all = Object.entries(counts)
       .filter(([k]) => k !== "refunded")
       .reduce((a, [, n]) => a + n, 0);
+    // Where an any-chain payment came from ("Any chain - USDC on Base"); null for every other payment.
+    const summaries = this.intentsSummaries?.(page.map((r) => r.id)) ?? new Map<string, unknown>();
     return {
       items: page.map((r) => {
         const { rid: _rid, ...row } = r;
-        return this.json(row);
+        return { ...this.json(row), intents: summaries.get(row.id) ?? null };
       }),
       next_cursor: rows.length > f.limit && page.length ? String(page[page.length - 1]!.rid) : null,
       counts,
@@ -474,6 +476,8 @@ export class PaymentService {
 
   /** `intents` of the payment detail; set by the gateway when the any-chain checkout is on. */
   intentsOf: ((paymentId: string) => unknown) | null = null;
+  /** `intents` of each list item, for a page of payments at once; set with `intentsOf`. */
+  intentsSummaries: ((paymentIds: readonly string[]) => ReadonlyMap<string, unknown>) | null = null;
 
   /**
    * The locked step: sums confirmed credits, picks the state, and writes amount_paid, the status and the webhook outbox

@@ -5,6 +5,11 @@ export const NODE_URL = (process.env.NEXT_PUBLIC_NODE_URL || "http://localhost:8
  * never one the node chooses, except on a local sandbox, where the node's own RPC is the only one there is.
  */
 export const RPC_URL_OVERRIDE = (process.env.NEXT_PUBLIC_NEAR_RPC_URL || process.env.NEXT_PUBLIC_RPC_URL || "").replace(/\/+$/, "") || null;
+/**
+ * The NEAR mainnet RPC this browser reads an any-chain delivery from when the server runs the any-chain checkout live
+ * (NEXT_PUBLIC_NEAR_MAINNET_RPC_URL). Unset, NEAR's public mainnet RPC.
+ */
+export const MAINNET_RPC_URL_OVERRIDE = (process.env.NEXT_PUBLIC_NEAR_MAINNET_RPC_URL || "").replace(/\/+$/, "") || null;
 /** "1" serves realistic fixtures; "empty" serves a fresh node so the first-run guide shows. */
 export const MOCK_MODE = process.env.NEXT_PUBLIC_MOCK === "1" || process.env.NEXT_PUBLIC_MOCK === "empty";
 /**

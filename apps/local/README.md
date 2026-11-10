@@ -9,6 +9,7 @@ pnpm local
 
 It needs Node.js 22.18 or newer and pnpm 9.
 It needs no testnet account, no wallet extension and no secret, and it never reaches testnet or mainnet.
+The one exception is `--intents live`, which you ask for by name: see "Any-chain checkout, live" below.
 It takes about 100 seconds to start, most of it deploying contracts and compiling the dashboard, and then prints a guide and waits for Ctrl-C.
 
 ## What it starts
@@ -83,6 +84,31 @@ The business sees the payment's "NEAR Intents" card in the dashboard, and its se
 A second link, "Gift card, 2 USDC", is for sending too little: the deposit is returned and the payment is open again.
 The fake server's log is `apps/local/data/logs/oneclick-fake.log`.
 
+## Any-chain checkout, live
+
+```sh
+pnpm local --intents live --intents-payout <your NEAR mainnet account>
+```
+
+LIVE - real money on NEAR mainnet.
+With this option the node runs `INTENTS_CHECKOUT=live` against the real 1Click API (`https://1click.chaindefuser.com`) and reads NEAR mainnet, for the any-chain checkout only.
+The hub, the Budgets, every local account and the "NEAR wallet" tab stay on the local chain.
+[docs/LIVE_RUN.md](../../docs/LIVE_RUN.md) is the step-by-step checklist for one real payment.
+
+- It is reachable only by the `--intents live` flag; no environment variable turns it on, and the node's configuration is built from this run's values only.
+- It refuses to start without `--intents-payout`, the business's own NEAR mainnet account that the USDC lands in, and refuses an account that is not a mainnet one (`.testnet`, the local `.test.near` names).
+- It refuses `--check`, which always runs the simulated pass.
+- It prints a "LIVE - real money on NEAR mainnet" banner before anything starts, again under the guide, and reads the payout account on NEAR mainnet (whether it exists and is registered with USDC; two views, nothing sent).
+- It seeds nothing simulated: no fake 1Click server, no proven `anychain.test.near`, no returned-deposit link, and the checkout shows no "Simulate deposit" button.
+  The business proves its own account in the dashboard, with the separate NEAR mainnet wallet connection of the any-chain settings.
+- `--intents-senders a.near,b.near` sets `INTENTS_DELIVERY_SENDERS`, the accounts NEAR RPC is asked to find 1Click's delivery transaction under before the payout account.
+  NEAR's public mainnet RPC found a transaction under any sender on 2026-11-10, so it is optional there.
+  If the node cannot read a delivery for 10 minutes, it confirms on 1Click's word and marks it `provider_only`; the printed guide explains this too.
+- `--intents-rpc <https url>` sets the NEAR mainnet RPC of the node and of the proof page (`NEAR_MAINNET_RPC_URL`, `NEXT_PUBLIC_NEAR_MAINNET_RPC_URL`); the default is `https://rpc.mainnet.near.org`.
+
+`pnpm live:capture <payment id>`, run while the live stack is up, saves the payment's quote with the signed 1Click quote, 1Click's status and the NEAR mainnet delivery transaction as `docs/live-run/<date>-<payment id>.json`, and lists every account and address in it for your approval before you commit it.
+It only reads: the node with the business's API key from the logins file, 1Click's public status route and a NEAR mainnet RPC.
+
 ## Transactions and proofs on a local node
 
 A local node has no public explorer, so no page links a sandbox transaction to an explorer.
@@ -150,6 +176,9 @@ Screenshots of these steps at 1280 and 375 pixels, light and dark, are in [docs/
 | `--signer-port <n>` | Default 4211 |
 | `--services-port <n>` | Default 4212: the paid services and the agent remote |
 | `--relayer-port <n>` | Default 4213 |
+| `--intents live --intents-payout <account>` | LIVE - real money: the any-chain checkout on the real 1Click API and NEAR mainnet; see "Any-chain checkout, live" |
+| `--intents-senders <a,b>` | Live only: `INTENTS_DELIVERY_SENDERS` |
+| `--intents-rpc <https url>` | Live only: the NEAR mainnet RPC |
 
 Exit codes: 0 stopped cleanly or every check passed, 1 a check failed or a part of the stack broke, 2 a usage or start error, 130 interrupted.
 
@@ -158,7 +187,7 @@ Exit codes: 0 stopped cleanly or every check passed, 1 a check failed or a part 
 The scripted pass does the steps of the guide through the routes the browser uses: the node's API through the dashboard's own `/api` path with a signed-in session, the signer over HTTP with the dashboard's origin, the public checkout routes, and the agent remote's route.
 Every result is then asserted against the chain through a client that holds no key.
 It picks free ports, so it can run on a machine where the default ports are taken.
-A full run takes about three minutes and ends with `23 of 23 checks passed`.
+A full run takes about three minutes and ends with `24 of 24 checks passed`.
 
 It checks, in order:
 
@@ -177,6 +206,7 @@ It checks, in order:
 - a call's proof verifies against the local chain with the browser's own reader, and a changed amount does not;
 - the shopper pays a checkout link and the hub records the payment for the merchant;
 - a buyer pays a checkout from USDC on Base through the simulated any-chain path: the business's any-chain account receives exactly the invoice amount on chain, the delivery transaction's NEP-141 event says so, the quote is `confirmed` with `rpc_checked`, the payment is paid, a signed `payment.paid` reaches a local webhook receiver, and the reconciliation row names the origin and the settlement network;
+- that payment as the business and the buyer see it: the payment list says "USDC on Base", the payment link offers Any chain, and its public proof names the delivery transaction, which the node read again and which pays the business's account on chain;
 - a buyer sends too little from another chain: the deposit is returned, no USDC moves on chain, the payment is open again and a signed `payment.deposit_returned` arrives;
 - a payout empties hub credit into each creditor's own account, and the unregistered payee's credit stays on the hub;
 - a revoke by the owner marks the Budget revoked on the hub and the node refuses its next call;

@@ -45,9 +45,23 @@ In simulated mode the deposit screen has "Simulate deposit (local only)" and "Se
 
 The business sets it up in Settings, Payment methods, "Accept any chain (NEAR Intents)": the NEAR account the USDC lands in, its three checks (it exists, it is registered with USDC, it signed a NEP-413 message for this server), the storage deposit when it is not registered, and the switch.
 The server refuses the switch until the checks pass, and the page says why.
+The storage deposit opens the same transaction review as every other chain action (receiver, method, arguments, deposit, gas, signer) before any wallet opens.
 A payment paid this way has a "NEAR Intents" card with the origin, the amount sent, the addresses, both transactions, how the delivery was checked, returned deposits and the signed quote.
+Payment lists say where it came from ("Any chain - USDC on Base") from each item's `intents` summary.
+The payment link page says "Pay from NEAR or any chain" when the link offers it (`intents.offered`), and "Pay from your NEAR wallet" only when that is the one way.
+The payment proof (`/receipt/<id>`) of a payment paid from another chain checks, in this browser, that the NEAR delivery transaction is final and that its USDC `ft_transfer` reached the business's account for the amount, then the order fingerprint; it reads NEAR mainnet when the server runs the rail live (`NEXT_PUBLIC_NEAR_MAINNET_RPC_URL`, default `https://rpc.mainnet.near.org`) and the local chain when simulated.
+It shows 1Click's status beside the checks as the server last read it, and never a hub record or a Merkle proof, which such a payment does not have.
 
-In mock mode Acme Store takes any-chain payments, simulated, and one earlier payment was paid from USDC on Base; `?demo=intents-setup` starts with nothing set up.
+### NEAR mainnet signing, live mode only
+
+When the server runs the any-chain checkout live (`mode: live`, settlement network `near:mainnet`), the business's payout account is on NEAR mainnet while the rest of the dashboard keeps its own wallet (testnet, or the local signer under `pnpm local`).
+The any-chain settings then use a second, separate wallet connection on NEAR mainnet, for exactly two actions: the NEP-413 ownership message and the USDC storage deposit.
+It is labeled "NEAR mainnet" on the page, in the review and on the button ("Sign with a NEAR mainnet wallet", "Open my NEAR mainnet wallet"), and a note says it is real money and what it signs.
+`lib/wallet.ts` builds it as a second `NearConnector` of `@hot-labs/near-connect` 0.12.0 with `network: "mainnet"`, the features `signMessage`, `signAndSendTransaction` and `mainnet` (so NEAR Connect lists only wallets that can do both on mainnet), and its own `storage`, which keeps its chosen wallet under `payminto-mainnet:` keys in localStorage, apart from the dashboard's own connection.
+A signature or a transaction from any account but the one typed is refused before it reaches the server or NEAR, and its transactions link to NearBlocks.
+Tests use a fake wallet for each connection (`test/wallet-mainnet.test.ts`, `test/any-chain-mainnet.test.tsx`); nobody signed on mainnet to build it.
+
+In mock mode Acme Store takes any-chain payments, simulated, and one earlier payment was paid from USDC on Base; `?demo=intents-setup` starts with nothing set up, and `?demo=intents-live` plays a server in live mode with nothing set up, so the NEAR mainnet screens can be walked with a second demo wallet standing in for the mainnet one.
 The mock waives Acme's platform fee on this rail so the flow can be clicked; a node offers it only for a payment that carries no platform fee.
 
 Captures from `pnpm local` are in `docs/screenshots`: `anychain-choose-1280-light.png`, `anychain-deposit-1280-light.png` and `-375-light.png`, `anychain-incomplete-1280-light.png`, `anychain-returned-1280-light.png` and `-375-light.png`, `anychain-paid-1280-light.png` and `-375-light.png`, `intents-card-1280-light.png`, `anychain-settings-1280-light.png` and `embed-demo-paid-1280-light.png`.
@@ -147,6 +161,7 @@ Failure states are switched on in the address bar and stay for the tab until `?d
 | `relayer-slow` | The relayer takes nine seconds, to see the waiting state. |
 | `dao-edge` | The DAO also holds a proposal whose voting period has ended and a call Payminto does not expect. |
 | `intents-setup` | Acme Store has not set up the any-chain checkout yet; read when the page loads. |
+| `intents-live` | The any-chain checkout as on a server that runs it live, not set up yet: the settings use the NEAR mainnet connection, played by a second demo wallet; read when the page loads. |
 
 Several can be combined with commas.
 
