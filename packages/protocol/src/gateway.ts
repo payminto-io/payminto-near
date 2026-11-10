@@ -17,6 +17,7 @@ import {
   type Sig64,
   type WalletTx,
 } from "@payminto/chain";
+import type { IntentsProofCredit } from "./intents.ts";
 import type { RetryHint } from "./policy.ts";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1072,5 +1073,7 @@ export type PaymentProof = {
         /** True when the hub verified the call's Merkle proof against a batch this node settled; null before settlement or on a read failure. */
         verified: boolean | null;
       }
+    /** Paid from another chain through NEAR Intents: the NEAR delivery transaction is the evidence (no hub record, no Merkle proof). */
+    | IntentsProofCredit
   >;
 };

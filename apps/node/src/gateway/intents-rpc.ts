@@ -1,4 +1,4 @@
-import type { AccountId, PublicKey } from "@payminto/protocol";
+import { nep141Transfers, type AccountId, type Nep141Transfer, type PublicKey, type ReceiptOutcome } from "@payminto/protocol";
 import type { AccessKeyKind } from "../near-rpc.ts";
 
 /**
@@ -16,7 +16,7 @@ export interface IntentsChainReader {
 }
 
 /** One NEP-141 `ft_transfer` event: `token` is the contract that emitted it. */
-export type DeliveryTransfer = { token: AccountId; from: AccountId; to: AccountId; amount: bigint };
+export type DeliveryTransfer = Nep141Transfer;
 
 export type DeliveryRead =
   | { status: "unknown" }
@@ -24,36 +24,9 @@ export type DeliveryRead =
   | { status: "final"; hash: string; transfers: DeliveryTransfer[] };
 
 type RpcError = { name?: string; cause?: { name?: string }; message?: string };
-type Outcome = { id?: string; outcome?: { executor_id?: string; logs?: string[]; status?: Record<string, unknown> } };
 
-/**
- * NEP-141 transfers in the logs of the receipts that succeeded. A receipt that failed keeps the logs it wrote before
- * failing, so its events are ignored: they never moved anything.
- */
-export function nep141Transfers(outcomes: readonly Outcome[]): DeliveryTransfer[] {
-  const out: DeliveryTransfer[] = [];
-  for (const o of outcomes) {
-    const status = o.outcome?.status ?? {};
-    if (!("SuccessValue" in status) && !("SuccessReceiptId" in status)) continue;
-    const token = o.outcome?.executor_id;
-    if (!token) continue;
-    for (const log of o.outcome?.logs ?? []) {
-      if (!log.startsWith("EVENT_JSON:")) continue;
-      let ev: { standard?: unknown; event?: unknown; data?: unknown };
-      try {
-        ev = JSON.parse(log.slice("EVENT_JSON:".length)) as typeof ev;
-      } catch {
-        continue;
-      }
-      if (ev.standard !== "nep141" || ev.event !== "ft_transfer" || !Array.isArray(ev.data)) continue;
-      for (const d of ev.data as Array<Record<string, unknown>>) {
-        if (typeof d.new_owner_id !== "string" || typeof d.old_owner_id !== "string" || typeof d.amount !== "string" || !/^\d+$/.test(d.amount)) continue;
-        out.push({ token, from: d.old_owner_id, to: d.new_owner_id, amount: BigInt(d.amount) });
-      }
-    }
-  }
-  return out;
-}
+/** The shared parser (`@payminto/chain`), which the browser's proof page uses too. */
+export { nep141Transfers };
 
 /** JSON-RPC over fetch at final finality, with a timeout. */
 export class IntentsRpc implements IntentsChainReader {
@@ -129,7 +102,7 @@ export class IntentsRpc implements IntentsChainReader {
         pending = true;
         continue;
       }
-      return { status: "final", hash, transfers: nep141Transfers((r.result?.receipts_outcome ?? []) as Outcome[]) };
+      return { status: "final", hash, transfers: nep141Transfers((r.result?.receipts_outcome ?? []) as ReceiptOutcome[]) };
     }
     return pending ? { status: "pending" } : { status: "unknown" };
   }

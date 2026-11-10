@@ -184,7 +184,8 @@ describe("the merchant's NEAR account for any-chain payments", () => {
   it("saves a proven account; until it is registered with USDC it shows the storage step and oneclick stays off", async () => {
     const r = await call("PUT", "/v1/merchant/intents-payout", { account: MAINNET, proof: proof(MAINNET, shopId) });
     expect(r.status, r.text).toBe(200);
-    expect(r.json).toMatchObject({ account: MAINNET, verified: false, checks: { exists: null, usdc_registered: false, proven: true } });
+    // The save reads the chain again, so every check has an answer (none shows as "not read").
+    expect(r.json).toMatchObject({ account: MAINNET, verified: false, checks: { exists: true, usdc_registered: false, proven: true } });
     expect(r.json.storage_step.transaction).toEqual({
       receiverId: TOKEN,
       actions: [{ type: "FunctionCall", params: { methodName: "storage_deposit", args: { account_id: MAINNET, registration_only: true }, gas: "30000000000000", deposit: "1250000000000000000000" } }],
@@ -278,6 +279,51 @@ describe("paying from another chain", () => {
     expect(view).toMatchObject({ status: "paid", methods: [], tx_hash: done.delivery_tx, intents: { available: false, active_quote: { status: "confirmed" } } });
   });
 
+  it("lists the payment with where it came from: Any chain - USDC on Base", async () => {
+    const list = (await call("GET", "/v1/payments?limit=50")).json;
+    const item = list.items.find((x: any) => x.id === paymentId);
+    expect(item.intents).toEqual({ mode: "simulated", label: "Simulated - no real money", status: "confirmed", origin: { asset: BASE_USDC, chain: "base", chain_name: "Base", symbol: "USDC" } });
+    const wallet = await newPayment("1000000");
+    expect((await call("GET", "/v1/payments?limit=50")).json.items.find((x: any) => x.id === wallet).intents).toBeNull();
+  });
+
+  it("proves the payment with the NEAR delivery transaction read again now, and 1Click's status as the node read it", async () => {
+    const r = await pub("GET", `/v1/checkout/${paymentId}/proof`);
+    expect(r.status, r.text).toBe(200);
+    const detail = (await call("GET", `/v1/payments/${paymentId}`)).json;
+    const q = detail.intents.quotes[0];
+    expect(r.json.credits).toEqual([
+      {
+        method: "oneclick",
+        amount: "5000000",
+        payer: "base:0x2527...f10d",
+        quote_id: quote.id,
+        mode: "simulated",
+        label: "Simulated - no real money",
+        settlement_network: "near:mainnet (simulated)",
+        token: TOKEN,
+        recipient: MAINNET,
+        origin: { asset: BASE_USDC, chain: "base", chain_name: "Base", symbol: "USDC", decimals: 6 },
+        deposited: q.deposited,
+        origin_txs: q.origin_txs,
+        delivery_tx: q.delivery_tx,
+        delivery_senders: [SOLVER, MAINNET],
+        oneclick: { status: "SUCCESS", correlation_id: quote.correlation_id, deposit_address: quote.deposit_address, read_at: expect.any(String) },
+        verification: "rpc_checked",
+        delivered_on_chain: "5000000",
+        verified: true,
+      },
+    ]);
+    // A delivery that cannot be read now is not proven either way, and one that pays less is refused.
+    const hash = q.delivery_tx.hash as string;
+    const kept = reader.txs.get(hash)!;
+    reader.txs.set(hash, { status: "unknown" });
+    expect((await pub("GET", `/v1/checkout/${paymentId}/proof`)).json.credits[0]).toMatchObject({ delivered_on_chain: null, verified: null });
+    reader.txs.set(hash, { status: "final", hash, transfers: [{ token: TOKEN, from: SOLVER, to: MAINNET, amount: 4_999_999n }] });
+    expect((await pub("GET", `/v1/checkout/${paymentId}/proof`)).json.credits[0]).toMatchObject({ delivered_on_chain: "4999999", verified: false });
+    reader.txs.set(hash, kept);
+  });
+
   it("the reconciliation report says where the money came from and where it settled", async () => {
     const day = new Date().toISOString().slice(0, 10);
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
@@ -299,6 +345,21 @@ describe("paying from another chain", () => {
     const [head, line] = [csv.split("\r\n")[0]!, csv.split("\r\n").find((l) => l.includes(paymentId))!];
     expect(head.endsWith('"settlement_network","origin_asset","origin_amount","deposit_address"')).toBe(true);
     expect(line).toContain(`"near:mainnet (simulated)","${BASE_USDC}"`);
+  });
+});
+
+describe("the public payment link", () => {
+  it("says whether a buyer can pay from another chain, and why not", async () => {
+    const link = (await call("POST", "/v1/links", { title: "Gift card", amount: "2000000" })).json;
+    const view = async () => (await pub("GET", `/v1/links/public/${link.slug}`)).json;
+    expect((await view()).intents).toEqual({ mode: "simulated", label: "Simulated - no real money", offered: true, reason: null });
+    expect((await view()).methods.map((m: { method: string }) => m.method)).toContain("oneclick");
+    await call("PUT", `/v1/merchants/${shopId}/methods`, { methods: [{ method: "oneclick", enabled: false }] });
+    try {
+      expect((await view()).intents).toEqual({ mode: "simulated", label: "Simulated - no real money", offered: false, reason: "This business does not take payments from other chains." });
+    } finally {
+      await call("PUT", `/v1/merchants/${shopId}/methods`, { methods: [{ method: "oneclick", enabled: true }] });
+    }
   });
 });
 
@@ -613,6 +674,9 @@ describe("live mode", () => {
       const methods = (await (await fetch(`${n.url}/v1/merchant`, { headers: h })).json()).methods.map((m: { method: string }) => m.method);
       expect(methods).toEqual(["voucher", "wallet"]);
       expect((await (await fetch(`${n.url}/v1/payments/${p.id}`, { headers: h })).json()).intents).toBeNull();
+      expect((await (await fetch(`${n.url}/v1/payments`, { headers: h })).json()).items[0].intents).toBeNull();
+      const link = await (await fetch(`${n.url}/v1/links`, { method: "POST", headers: h, body: JSON.stringify({ title: "Plain", amount: "1000000" }) })).json();
+      expect((await (await fetch(`${n.url}/v1/links/public/${link.slug}`)).json()).intents).toBeNull();
     } finally {
       await n.stop();
       t.cleanup();

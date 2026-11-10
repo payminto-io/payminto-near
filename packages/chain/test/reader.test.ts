@@ -151,3 +151,48 @@ describe("checkReceiptOnChain", () => {
     expect(c).toMatchObject({ storedRoot: null, rootMatches: false, hubVerified: null, verified: false });
   });
 });
+
+describe("NearReader.txTransfers", () => {
+  const hash = "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH";
+  const USDC = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+  const ev = (to: string, amount: string) => `EVENT_JSON:${JSON.stringify({ standard: "nep141", version: "1.0.0", event: "ft_transfer", data: [{ old_owner_id: "intents.near", new_owner_id: to, amount }] })}`;
+  const final = {
+    final_execution_status: "FINAL",
+    status: { SuccessValue: "" },
+    receipts_outcome: [
+      { id: "r1", outcome: { executor_id: "intents.near", logs: [], status: { SuccessReceiptId: "r2" } } },
+      { id: "r2", outcome: { executor_id: USDC, logs: [ev("shop.near", "1500000")], status: { SuccessValue: "" } } },
+      { id: "r3", outcome: { executor_id: USDC, logs: [ev("shop.near", "9")], status: { Failure: { ActionError: {} } } } },
+    ],
+  };
+  /** Answers by sender: an unknown transaction for every sender but `signer`. */
+  const bySender = (signer: string, answer: unknown, asked: string[] = []): typeof fetch =>
+    (async (_url: string | URL | Request, init?: RequestInit) => {
+      const req = sent(init);
+      expect(req.method).toBe("tx");
+      expect(req.params).toMatchObject({ tx_hash: hash, wait_until: "NONE" });
+      const sender = String(req.params.sender_account_id);
+      asked.push(sender);
+      const body = sender === signer ? { jsonrpc: "2.0", id: "x", result: answer } : { jsonrpc: "2.0", id: "x", error: { name: "HANDLER_ERROR", cause: { name: "UNKNOWN_TRANSACTION" }, message: "unknown" } };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+  it("tries each sender until one knows the transaction, and returns the transfers of successful receipts only", async () => {
+    const asked: string[] = [];
+    const r = await reader(bySender("relay.near", final, asked)).txTransfers(hash, ["shop.near", "relay.near"]);
+    expect(asked).toEqual(["shop.near", "relay.near"]);
+    expect(r).toEqual({ status: "final", sender: "relay.near", transfers: [{ token: USDC, from: "intents.near", to: "shop.near", amount: 1_500_000n }] });
+  });
+
+  it("answers unknown when no sender knows it, pending before it is final, and failed with the reason", async () => {
+    expect(await reader(bySender("nobody.near", final)).txTransfers(hash, ["shop.near"])).toEqual({ status: "unknown" });
+    const notYet = { final_execution_status: "EXECUTED_OPTIMISTIC", status: { SuccessValue: "" }, receipts_outcome: [] };
+    expect(await reader(bySender("shop.near", notYet)).txTransfers(hash, ["shop.near"])).toEqual({ status: "pending" });
+    const failed = await reader(bySender("shop.near", { final_execution_status: "FINAL", status: { Failure: { ActionError: { kind: "x" } } }, receipts_outcome: [] })).txTransfers(hash, ["shop.near"]);
+    expect(failed.status).toBe("failed");
+  });
+
+  it("refuses a sender that is not an account id", async () => {
+    await expect(reader(bySender("shop.near", final)).txTransfers(hash, ["Not An Account"])).rejects.toThrow(/sender/);
+  });
+});

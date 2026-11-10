@@ -151,6 +151,7 @@ export class Gateway {
       this.merchants.listIntentsMethod();
       const intents = this.intents;
       this.payments.intentsOf = (id) => intents.paymentIntents(id);
+      this.payments.intentsSummaries = (ids) => intents.summaries(ids);
     } else {
       this.intents = null;
       this.intentsWatcher = null;
@@ -335,6 +336,8 @@ export class Gateway {
       active: l.active === 1 && m.status === "active" && m.payout_set !== 0 && !(l.expires_at && Date.parse(l.expires_at) <= Date.now()),
       expires_at: l.expires_at ?? null,
       methods: this.#publicMethods(m, l),
+      // Whether "Any chain" is offered on this link; null when the node does not run the any-chain checkout.
+      intents: this.intents ? this.intents.linkOffer(m, l.amount === null ? null : BigInt(l.amount)) : null,
       merchant: { id: m.id, name: m.name, support_email: m.support_email, brand_color: m.brand_color, logo_url: m.logo_url },
       network: this.network,
       token: this.token,
@@ -612,6 +615,10 @@ export class Gateway {
           receipt_proof_url: `${this.#publicUrl}/v1/receipts/${c.call_id}/proof`,
           verified,
         });
+      } else if (c.method === "oneclick" && c.intents_quote_id && this.intents) {
+        // Paid from another chain: the NEAR delivery transaction, read again now, is the evidence.
+        const credit = await this.intents.proofCredit(c);
+        if (credit) out.push(credit);
       }
     }
     return {
