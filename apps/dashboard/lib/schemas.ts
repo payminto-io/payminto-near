@@ -701,6 +701,152 @@ const feeFields = {
 /** The NEAR network a gateway object lives on. Optional until the gateway wire types carry it; testnet by default. */
 const networkField = z.string().default("near:testnet");
 
+// ---------------------------------------------------------------------------
+// Any-chain checkout through NEAR Intents (docs/DEVELOPERS.md, "Any-chain checkout"; packages/protocol/src/intents.ts)
+// ---------------------------------------------------------------------------
+
+export const intentsModeSchema = z.enum(["simulated", "live"]);
+export type IntentsLiveMode = z.infer<typeof intentsModeSchema>;
+
+/** An amount in base units, the same in units of its token, and the token's symbol. */
+export const intentsAmountSchema = z.object({ amount: atomicSchema, formatted: z.string(), symbol: z.string() });
+export type IntentsAmount = z.infer<typeof intentsAmountSchema>;
+
+export const intentsOriginSchema = z.object({ asset: z.string(), chain: z.string(), chain_name: z.string(), symbol: z.string(), decimals: z.number().int() });
+export type IntentsOrigin = z.infer<typeof intentsOriginSchema>;
+
+/** The deposit screen's fee lines, all from the signed quote; never a constant. */
+export const intentsFeeLinesSchema = z.object({
+  send_exactly: intentsAmountSchema,
+  merchant_receives: intentsAmountSchema,
+  /** In the origin token for a stablecoin; `unit` USD and `amount` in micro-dollars otherwise. */
+  swap_cost: z.object({ amount: atomicSchema, formatted: z.string(), unit: z.string() }),
+  price_buffer: intentsAmountSchema,
+  refund_fee: intentsAmountSchema.nullable(),
+  delivery_fee: intentsAmountSchema.nullable(),
+  time_estimate_sec: z.number(),
+});
+export type IntentsFeeLines = z.infer<typeof intentsFeeLinesSchema>;
+
+export const intentsOptionSchema = z.object({
+  origin: intentsOriginSchema,
+  available: z.boolean(),
+  reason: z.string().nullable(),
+  slippage_bps: z.number(),
+  amount_in: intentsAmountSchema.nullable(),
+  amount_in_usd: z.string().nullable(),
+  time_estimate_sec: z.number().nullable(),
+  fees: intentsFeeLinesSchema.nullable(),
+});
+export type IntentsOption = z.infer<typeof intentsOptionSchema>;
+
+export const intentsOptionsSchema = z.object({
+  object: z.literal("intents_options"),
+  payment_id: z.string(),
+  mode: intentsModeSchema,
+  label: z.string(),
+  amount_out: intentsAmountSchema,
+  recipient: addressSchema,
+  settlement_network: z.string(),
+  quoted_at: z.string(),
+  valid_until: z.string(),
+  options: z.array(intentsOptionSchema),
+});
+export type IntentsOptions = z.infer<typeof intentsOptionsSchema>;
+
+export const INTENTS_QUOTE_STATUSES = ["awaiting_deposit", "deposit_detected", "incomplete_deposit", "processing", "delivered", "confirmed", "refunded", "failed", "expired"] as const;
+export const intentsQuoteStatusSchema = z.enum(INTENTS_QUOTE_STATUSES);
+export type IntentsQuoteStatus = z.infer<typeof intentsQuoteStatusSchema>;
+
+export const intentsTxSchema = z.object({ hash: z.string(), explorer_url: z.string().nullable() });
+export type IntentsTx = z.infer<typeof intentsTxSchema>;
+
+export const intentsStepSchema = z.object({
+  key: z.enum(["waiting", "received", "converting", "delivered"]),
+  label: z.string(),
+  state: z.enum(["done", "current", "pending", "failed"]),
+});
+export type IntentsStep = z.infer<typeof intentsStepSchema>;
+
+/** One deposit address of a payment and its state: the deposit screen, `intents.active_quote` and each of `intents.quotes`. */
+export const intentsQuoteSchema = z.object({
+  id: z.string(),
+  object: z.literal("intents_quote"),
+  payment_id: z.string(),
+  mode: intentsModeSchema,
+  label: z.string(),
+  status: intentsQuoteStatusSchema,
+  provider_status: z.string().nullable(),
+  origin: intentsOriginSchema,
+  deposit_address: z.string(),
+  deposit_memo: z.string().nullable(),
+  send_exactly: intentsAmountSchema,
+  min_amount_in: intentsAmountSchema,
+  amount_out: intentsAmountSchema,
+  amount_in_usd: z.string().nullable(),
+  fees: intentsFeeLinesSchema,
+  slippage_bps: z.number(),
+  time_estimate_sec: z.number(),
+  /** Masked on the public routes, in full for the merchant. */
+  refund_to: z.string(),
+  recipient: addressSchema,
+  settlement_network: z.string(),
+  deadline: z.string(),
+  deadline_passed: z.boolean(),
+  inactive_at: z.string().nullable(),
+  deposited: intentsAmountSchema.nullable(),
+  delivered: intentsAmountSchema.nullable(),
+  refunded: intentsAmountSchema.nullable(),
+  refund_reason: z.string().nullable(),
+  origin_txs: z.array(intentsTxSchema),
+  destination_txs: z.array(intentsTxSchema),
+  near_txs: z.array(z.string()),
+  delivery_tx: intentsTxSchema.nullable(),
+  verification: z.enum(["rpc_checked", "provider_only"]).nullable(),
+  steps: z.array(intentsStepSchema),
+  warning: z.string(),
+  correlation_id: z.string(),
+  signature_valid: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  quote_response: z.unknown().optional(),
+});
+export type IntentsQuote = z.infer<typeof intentsQuoteSchema>;
+
+/** `intents` on the public checkout view; null when the node runs with INTENTS_CHECKOUT=off. */
+export const intentsCheckoutSchema = z.object({
+  mode: intentsModeSchema,
+  label: z.string(),
+  available: z.boolean(),
+  reason: z.string().nullable(),
+  settlement_network: z.string(),
+  active_quote: intentsQuoteSchema.nullable(),
+});
+export type IntentsCheckout = z.infer<typeof intentsCheckoutSchema>;
+
+/** `intents` on a payment's detail: null when the payment has no quote. */
+export const paymentIntentsSchema = z.object({ mode: intentsModeSchema, label: z.string(), quotes: z.array(intentsQuoteSchema) });
+export type PaymentIntents = z.infer<typeof paymentIntentsSchema>;
+
+const walletTxSchema = z.object({ receiverId: addressSchema, actions: z.array(z.object({ type: z.literal("FunctionCall"), params: z.object({ methodName: z.string(), args: z.record(z.string(), z.unknown()), gas: z.string(), deposit: z.string() }) })).min(1) });
+
+/** `GET` and `PUT /v1/merchant/intents-payout`: the business's NEAR account for any-chain payments and its checks. */
+export const intentsPayoutSchema = z.object({
+  object: z.literal("intents_payout"),
+  mode: z.enum(["off", "simulated", "live"]),
+  label: z.string().nullable(),
+  settlement_network: z.string(),
+  account: addressSchema.nullable(),
+  verified: z.boolean(),
+  checks: z.object({ exists: z.boolean().nullable(), usdc_registered: z.boolean().nullable(), proven: z.boolean(), proven_at: z.string().nullable() }),
+  usdc: z.object({ contract: addressSchema, asset_id: z.string(), decimals: z.number() }),
+  storage_step: z.object({ why: z.string(), deposit_near: z.string(), transaction: walletTxSchema }).nullable(),
+  enabled: z.boolean(),
+  proof_scope: z.object({ settlement_network: z.string(), hub: addressSchema }),
+  checked_at: z.string(),
+});
+export type IntentsPayout = z.infer<typeof intentsPayoutSchema>;
+
 /** GET /v1/checkout/{id}: the public payment view. Never carries metadata, email or name. */
 export const checkoutViewSchema = z.object({
   id: z.string(),
@@ -736,6 +882,8 @@ export const checkoutViewSchema = z.object({
   paid_at: nullableTime,
   payer: addressSchema.nullable().optional(),
   payout: addressSchema.nullable().optional(),
+  /** The any-chain checkout; null or absent when the node does not run it. */
+  intents: intentsCheckoutSchema.nullable().default(null),
 });
 export type CheckoutView = z.infer<typeof checkoutViewSchema>;
 
@@ -839,6 +987,8 @@ export const paymentDetailSchema = paymentSchema.extend({
   credits: z.array(creditSchema).default([]),
   refunds: z.array(refundSchema).default([]),
   events: z.array(timelineEventSchema).default([]),
+  /** Any-chain quotes with their signed 1Click answers; null when the payment has none or the node does not run them. */
+  intents: paymentIntentsSchema.nullable().default(null),
 });
 export type PaymentDetail = z.infer<typeof paymentDetailSchema>;
 
@@ -1032,7 +1182,7 @@ const platformFeesViewSchema = z.object({
 });
 export type PlatformFees = z.infer<typeof platformFeesViewSchema>;
 
-const METHOD_ORDER = ["wallet", "deposit", "x402", "voucher"];
+const METHOD_ORDER = ["wallet", "oneclick", "deposit", "x402", "voucher"];
 
 /** GET /v1/platform/fees as the node serves it: one row per merchant and method, folded into both views. */
 const nodeFeesSchema = z
@@ -1224,7 +1374,12 @@ const contract: [
   Parses<typeof feePlanSchema, P.FeePlan>,
   Parses<typeof merchantMethodSchema, P.MerchantMethod>,
   Parses<typeof platformSchema, P.Platform>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+  Parses<typeof intentsOptionsSchema, P.IntentsOptions>,
+  Parses<typeof intentsQuoteSchema, P.IntentsQuote>,
+  Parses<typeof intentsCheckoutSchema, P.IntentsCheckout>,
+  Parses<typeof paymentIntentsSchema, P.PaymentIntents>,
+  Parses<typeof intentsPayoutSchema, P.IntentsPayout>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 void contract;
 
 // ---------------------------------------------------------------------------

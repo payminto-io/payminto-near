@@ -36,6 +36,8 @@ export const DEMO_SCENARIOS = [
   "payee-check-off",
   /** Six seconds after a page subscribes, the Vendor Agent tries a Payee with a warning, so a request arrives live. */
   "payee-request-arrives",
+  /** Acme Store has not set up the any-chain checkout: no NEAR account for it, and the method is off. Read on load. */
+  "intents-setup",
 ] as const;
 export type DemoScenario = (typeof DEMO_SCENARIOS)[number];
 

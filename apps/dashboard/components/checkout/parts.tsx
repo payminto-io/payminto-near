@@ -297,7 +297,7 @@ export function SummaryFrame({ merchant, livemode, compactTitle, compactAmount, 
 }
 
 /** "Paid to Acme Store" and its full NEAR payout account, which the payer can check, linking to the explorer when there is one. */
-export function PaidDirectly({ merchant, payout, explorer, className }: { merchant: string; payout?: string | null; explorer?: string | null; className?: string }) {
+export function PaidDirectly({ merchant, payout, explorer, className, note }: { merchant: string; payout?: string | null; explorer?: string | null; className?: string; note?: string }) {
   const words = useNetworkWords();
   const addr = payout ? (
     explorer ? (
@@ -317,7 +317,7 @@ export function PaidDirectly({ merchant, payout, explorer, className }: { mercha
         <span>Paid to {merchant}</span>
         {addr}
       </p>
-      <p className="pl-5">{words.escrowShort}.</p>
+      <p className="pl-5">{note ?? `${words.escrowShort}.`}</p>
     </div>
   );
 }
