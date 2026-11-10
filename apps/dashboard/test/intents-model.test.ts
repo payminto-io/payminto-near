@@ -7,6 +7,7 @@ import {
   clockUtc,
   deadlineModel,
   enableErrorText,
+  approxUnits,
   exactUnits,
   expiredCopy,
   failedCopy,
@@ -200,6 +201,17 @@ describe("amounts: exact, without padding zeros", () => {
     expect(exactUnits("4.509585")).toBe("4.509585");
     expect(exactUnits("0.002441510000000000")).toBe("0.00244151");
     expect(exactUnits("5")).toBe("5.00");
+  });
+
+  it("rounds an indicative amount to what a person reads: 6 places from 1 up, 4 significant digits below 1", () => {
+    expect(approxUnits("0.000977882374124212")).toBe("0.0009779");
+    expect(approxUnits("0.000977849999999999")).toBe("0.0009778");
+    expect(approxUnits("2.006834")).toBe("2.006834");
+    expect(approxUnits("2.0068345")).toBe("2.006835");
+    expect(approxUnits("0.999999999")).toBe("1.00");
+    expect(approxUnits("12.500000")).toBe("12.50");
+    expect(approxUnits("0.5")).toBe("0.50");
+    expect(approxUnits("not a number")).toBe("not a number");
     expect(amountText({ formatted: "5.010154", symbol: "USDC" })).toBe("5.010154 USDC");
     expect(unitsOf(2010154n, 6)).toBe("2.010154");
     expect(unitsOf(5n, 6)).toBe("0.000005");

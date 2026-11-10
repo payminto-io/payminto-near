@@ -100,6 +100,24 @@ export function exactUnits(formatted: string): string {
   return `${m[1]}.${frac.padEnd(2, "0")}`;
 }
 
+/**
+ * An indicative amount rounded half up to what a person reads, for estimates only (the deposit screen stays exact):
+ * 6 places from 1 up, 4 significant digits below 1. "0.000977882374124212" is "0.0009779", "2.0068345" is "2.006835".
+ */
+export function approxUnits(formatted: string): string {
+  const m = /^(\d+)(?:\.(\d*))?$/.exec(formatted.trim());
+  if (!m) return formatted;
+  const int = m[1]!;
+  const frac = m[2] ?? "";
+  const whole = BigInt(int) > 0n;
+  const leadingZeros = /^0*/.exec(frac)![0].length;
+  if (!whole && leadingZeros === frac.length) return "0.00";
+  const places = whole ? 6 : leadingZeros + 4;
+  let scaled = BigInt(int + frac.padEnd(places, "0").slice(0, places));
+  if ((frac[places] ?? "0") >= "5") scaled += 1n;
+  return exactUnits(unitsOf(scaled, places));
+}
+
 /** "4.509585 USDC". */
 export const amountText = (a: Pick<IntentsAmount, "formatted" | "symbol">): string => `${exactUnits(a.formatted)} ${a.symbol}`;
 

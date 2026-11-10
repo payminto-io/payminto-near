@@ -376,7 +376,7 @@ export function CheckoutSummary({
                 merchant={view.merchant.name}
                 payout={anyChainTo}
                 explorer={view.intents?.mode === "live" ? "https://nearblocks.io" : null}
-                note={`Delivered as USDC to this ${view.intents?.mode === "live" ? "NEAR mainnet" : "NEAR (simulated)"} account through NEAR Intents.`}
+                note={view.intents?.mode === "live" ? "Delivered as USDC to this NEAR mainnet account through NEAR Intents." : "Delivered as USDC to this account through NEAR Intents (simulated on a local chain)."}
               />
             )}
           </StaggerItem>

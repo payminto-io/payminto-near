@@ -11,6 +11,7 @@ import type { CheckoutApi } from "@/lib/gateway-api";
 import type { CheckoutView, IntentsOption, IntentsQuote, IntentsStep, IntentsTx } from "@/lib/schemas";
 import {
   amountText,
+  approxUnits,
   deadlineModel,
   exactUnits,
   expiredCopy,
@@ -366,7 +367,7 @@ function OriginList({ rows, value, onChange }: { rows: IntentsOption[]; value: s
             {o.available && o.amount_in && (
               <span id={`${id}-d`} className="min-w-0 flex-1 text-right">
                 <span className="block text-xs text-muted-foreground">about</span>
-                <span className="num block text-[0.8125rem] font-medium [overflow-wrap:anywhere]">{amountText(o.amount_in)}</span>
+                <span className="num block text-[0.8125rem] font-medium [overflow-wrap:anywhere]">{`${approxUnits(o.amount_in.formatted)} ${o.amount_in.symbol}`}</span>
               </span>
             )}
           </label>
