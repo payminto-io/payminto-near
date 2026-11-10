@@ -2,6 +2,7 @@
 //! Those files are owned by the chain package and are read here, never written.
 
 use super::*;
+use crate::crypto::verify_signature;
 use crate::netting::Netting;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::Value;
@@ -97,9 +98,13 @@ fn signature_rule_matches() {
         let digest = id32(&case, "digest_hex").0;
         let sig = Sig64::from_hex(s(&case, "signature_hex")).unwrap().0;
         let hub = case["hub"].as_bool().unwrap();
-        assert_eq!(verify_signature(&digest, &sig, &pk), hub, "{name}: the hub's verify_signature");
         assert_eq!(
-            near_sdk::env::ed25519_verify(&sig, &digest, &pk),
+            verify_signature(&digest, &sig, &pk),
+            hub,
+            "{name}: the hub's verify_signature"
+        );
+        assert_eq!(
+            near_sdk::env::ed25519_verify(&sig, digest, &pk),
             hub,
             "{name}: env::ed25519_verify"
         );
@@ -110,6 +115,19 @@ fn signature_rule_matches() {
             Ok(_) => "ok",
         };
         assert_eq!(key, s(&case, "key"), "{name}: key verdict");
+        // The hub's own key check, which `open_budget`, `register_receipt_key` and `set_checkout_key` apply, agrees
+        // wherever the key is a point. It cannot tell a non-point, which nothing can sign for anyway.
+        match key {
+            "ok" => assert!(
+                crate::crypto::is_acceptable_public_key(&pk),
+                "{name}: the hub refuses a strong key"
+            ),
+            "small_order" | "non_canonical" => assert!(
+                !crate::crypto::is_acceptable_public_key(&pk),
+                "{name}: the hub accepts a weak key"
+            ),
+            _ => {}
+        }
         assert_eq!(
             case["valid"].as_bool().unwrap(),
             hub && key == "ok",

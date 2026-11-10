@@ -49,6 +49,8 @@ pub struct World {
     pub token: AccountId,
     pub admin: AccountId,
     pub node: AccountId,
+    /// Every Budget opened through `open_budget`, so `hub_own_balance` can leave out their storage reserves.
+    pub budgets: std::sync::Mutex<Vec<Id32>>,
 }
 
 pub fn id32(n: u8) -> Id32 {
@@ -101,6 +103,7 @@ impl World {
             token,
             admin,
             node,
+            budgets: std::sync::Mutex::new(Vec::new()),
         };
         // A real deployment registers the hub at the token with `storage_deposit` before accepting deposits.
         world
@@ -165,13 +168,36 @@ impl World {
         Ok((view.amount.as_yoctonear(), view.storage_usage))
     }
 
-    /// The hub's own NEAR: its balance, less what its storage locks, less the storage balance it holds for the node.
-    /// A charge moves prepaid NEAR from the node's balance to the storage lock and leaves this unchanged.
-    /// If it falls, the hub paid for someone's storage.
+    /// The hub's own NEAR: its balance, less what its storage locks, less the storage balance it holds for the node
+    /// and the storage reserves it holds for the Budgets. A charge moves prepaid NEAR from a balance or a reserve to the
+    /// storage lock and leaves this unchanged. If it falls, the hub paid for someone's storage.
     pub async fn hub_own_balance(&self) -> TestResult<u128> {
         let (amount, storage) = self.near_account(&self.hub.clone()).await?;
         let held_for_node = self.storage_of(&self.node.clone()).await?;
-        Ok(amount - u128::from(storage) * BYTE_COST - held_for_node)
+        let ids: Vec<Id32> = self.budgets.lock().unwrap().clone();
+        let mut reserves = 0u128;
+        for id in ids {
+            reserves += u128::from(self.reserve_bytes(&id).await?) * BYTE_COST;
+        }
+        Ok(amount - u128::from(storage) * BYTE_COST - held_for_node - reserves)
+    }
+
+    /// Storage bytes the Budget's owner prepaid and the Budget has not used yet.
+    pub async fn reserve_bytes(&self, budget_id: &Id32) -> TestResult<u64> {
+        Ok(self.budget(budget_id).await?["storage_reserve_bytes"]
+            .as_str()
+            .unwrap()
+            .parse()?)
+    }
+
+    /// The batch the node settled under `batch_id`.
+    pub async fn batch(&self, batch_id: Id32) -> TestResult<Value> {
+        self.view(
+            &self.hub,
+            "batch",
+            json!({ "settler": self.node, "batch_id": batch_id }),
+        )
+        .await
     }
 
     /// `settle_own` signed by the payee, with the node's acceptance of that claim.
@@ -331,6 +357,23 @@ impl World {
         payees: &[&AccountId],
         salt: u8,
     ) -> TestResult<Id32> {
+        let max = if payees.is_empty() { 16 } else { 0 };
+        self.open_budget_for(owner, key, cap, valid_ms_from_now, payees, max, salt)
+            .await
+    }
+
+    /// `open_budget` with an explicit `max_payees`. An empty `payees` list opens a Budget with `allow_any_payee`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_budget_for(
+        &self,
+        owner: &AccountId,
+        key: &SigningKey,
+        cap: u128,
+        valid_ms_from_now: u64,
+        payees: &[&AccountId],
+        max_payees: u32,
+        salt: u8,
+    ) -> TestResult<Id32> {
         let terms = json!({
             "agent_pk": Id32(key.verifying_key().to_bytes()),
             "settler": self.node,
@@ -339,6 +382,8 @@ impl World {
             "payees": payees,
             "policy_hash": id32(0xaa),
             "salt": id32(salt),
+            "allow_any_payee": payees.is_empty(),
+            "max_payees": max_payees,
         });
         let result = self
             .call_with_deposit(
@@ -351,6 +396,7 @@ impl World {
             .await?
             .assert_success();
         let raw: Id32 = result.json().expect("budget id");
+        self.budgets.lock().unwrap().push(raw);
         Ok(raw)
     }
 

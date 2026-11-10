@@ -18,7 +18,9 @@ const PAYOUT_SCAN_FROM_TGAS: u64 = 262;
 /// A batch of `n` claims from one Budget to `n` payees that have no settled or credit entry yet.
 async fn one_budget_new_payees(w: &World, owner: &near_api::AccountId, n: usize, batch: u8) -> TestResult<f64> {
     let key = agent(100 + batch);
-    let budget = w.open_budget(owner, &key, 1_000_000, DAY_MS, &[], 200 + batch).await?;
+    let budget = w
+        .open_budget_for(owner, &key, 1_000_000, DAY_MS, &[], n as u32, 200 + batch)
+        .await?;
     w.deposit(owner, &budget, n as u128).await?;
 
     let mut claims = Vec::new();

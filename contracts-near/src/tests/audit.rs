@@ -53,7 +53,7 @@ fn forge_for_small_order_key(weak_point: EdwardsPoint, budget: &Id32) -> Claim {
                 let mut sig = [0u8; 64];
                 sig[..32].copy_from_slice(&r_bytes);
                 assert!(
-                    near_sdk::env::ed25519_verify(&sig, &digest, &weak),
+                    near_sdk::env::ed25519_verify(&sig, digest, &weak),
                     "the forgery verifies under the host function"
                 );
                 return Claim {
