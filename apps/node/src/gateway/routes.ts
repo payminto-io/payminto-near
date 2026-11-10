@@ -1,9 +1,7 @@
 import type { Context, Hono } from "hono";
-import { streamSSE } from "hono/streaming";
+import { streamSSE } from "../sse.ts";
 import { z } from "zod";
-import { verifyMessage, type Hex } from "viem";
 import {
-  decodeHeader,
   encodeHeader,
   HEADER_REQUIRED,
   HEADER_RESPONSE,
@@ -11,20 +9,20 @@ import {
   linkUrl,
   MAX_EXPIRES_IN_SECONDS,
   MIN_EXPIRES_IN_SECONDS,
-  networkFor,
   PAYMENT_METHODS,
-  PAYOUT_PROOF_MAX_AGE_SECONDS,
-  payoutChangeMessage,
   PAYMENT_STATUSES,
-  SCHEME,
-  X402_VERSION,
   isId,
+  type AccountId,
   type PaymentMethod,
   type PaymentStatus,
+  type PublicKey,
+  type Refusal,
 } from "@payminto/protocol";
 import { ApiError } from "../errors.ts";
-import { body, cursorOf, limitOf, parse, rawBody, zAddress, zAmount, zBytes32, zHex, zUint, zUrl } from "./http.ts";
-import type { ExactPayload, Gateway, VoucherPayload } from "./index.ts";
+import { UnsignedVoucherError, type VoucherInput } from "../vouchers.ts";
+import { body, cursorOf, limitOf, parse, rawBody, zAccount, zAmount, zPublicKey, zTxHash, zUint, zUrl } from "./http.ts";
+import type { Gateway } from "./index.ts";
+import { parsePaymentSignature, paymentFailure, paymentSuccess, sameRequirement, type ParsedPayment, type PaymentRequiredV2 } from "./x402-wire.ts";
 import { feePlanJson, merchantJson, methodJson, type MerchantRow } from "./merchants.ts";
 import type { PaymentRow } from "./model.ts";
 import { auditActor, type Access, type Actor } from "../auth/actor.ts";
@@ -91,27 +89,14 @@ const createRefundSchema = z.object({
   paymentId: z.string().refine((v) => isId("payment", v), "must be a payment id"),
   amount: zAmount,
   reason: z.string().max(500).nullish(),
-  to: zAddress.optional(),
+  to: zAccount.optional(),
   note: z.string().max(1000).nullish(),
   /** Always ask an Admin to approve, even when the caller could issue it (the merchant MCP server sends true). */
   requestApproval: z.boolean().optional(),
 });
 
-const zAuthorization = z.object({
-  from: zAddress,
-  to: zAddress,
-  value: zUint.transform((v) => BigInt(v)),
-  validAfter: zUint.transform((v) => BigInt(v)),
-  validBefore: zUint.transform((v) => BigInt(v)),
-  nonce: zBytes32,
-});
-
-// Optional `terms` (what the dashboard signed against) must be exactly the refund's terms; the node derives them anyway.
-const zTerms = z.object({ paymentRef: zBytes32, payout: zAddress, feeRecipient: zAddress, fee: zUint.transform((v) => BigInt(v)) });
-const submitRefundSchema = z.union([
-  z.object({ authorization: zAuthorization.extend({ signature: zHex }), terms: zTerms.optional() }),
-  z.object({ txHash: zBytes32 }),
-]);
+/** The merchant's own refund transaction, sent from its payout account. */
+const submitRefundSchema = z.object({ txHash: zTxHash });
 
 const zEvents = z.array(z.string().min(1).max(60)).min(1).max(50);
 const createWebhookSchema = z.object({ url: zUrl, description: z.string().max(500).nullish(), events: zEvents });
@@ -126,7 +111,8 @@ const merchantPatchSchema = z.object({
 });
 const operatorMerchantPatchSchema = merchantPatchSchema.extend({ status: z.enum(["active", "suspended"]).optional(), fee_plan_id: z.string().min(1).optional() });
 
-const payoutProofSchema = z.object({ payout: zAddress, timestamp: z.number().int().positive(), signature: zHex });
+/** A NEP-413 proof: what NEAR Connect `signMessage` returns for `payoutProofRequest`, plus the account and the time signed. */
+const payoutProofSchema = z.object({ payout: zAccount, timestamp: z.number().int().positive(), public_key: zPublicKey, signature: z.string().min(1).max(200) });
 const createMerchantSchema = merchantPatchSchema.extend({
   name: zText(120),
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "lowercase letters, digits and dashes").optional(),
@@ -172,28 +158,10 @@ const platformPatchSchema = z.object({
   agent_budgets_for_businesses: z.boolean().optional(),
 });
 
-const authorizeSchema = z.object({ payer: zAddress, signature: zHex });
-const hspPrepareSchema = z.object({ payer: zAddress });
-const hspSubmitSchema = z.object({ payer: zAddress, signature: zHex });
+const walletSentSchema = z.object({ tx_hash: zTxHash.optional() });
 const emailSchema = z.object({ email: zEmail });
 const linkPaymentSchema = z.object({ amount: zAmount.optional(), email: zEmail.optional(), name: z.string().trim().min(1).max(200).optional(), method: zMethod.optional() });
-const denySchema = z.object({ address: zAddress, reason: z.string().max(300).nullish() });
-
-// x402 payloads. `exact` per the x402 v2 EVM scheme (scheme at top level or in `accepted`); vouchers as one
-// payminto-voucher payment, an array of them, or {vouchers: [...]} when a fee needs a second payee.
-const exactSchema = z.object({
-  x402Version: z.literal(X402_VERSION),
-  scheme: z.literal("exact").optional(),
-  accepted: z.object({ scheme: z.literal("exact") }).passthrough().optional(),
-  payload: z.object({ signature: zHex, authorization: zAuthorization }),
-});
-const voucherSchema = z.object({
-  x402Version: z.literal(X402_VERSION),
-  scheme: z.literal(SCHEME),
-  network: z.string(),
-  payload: z.object({ mandateId: zBytes32, payee: zAddress, amount: zAmount, cumulative: zAmount, signature: zHex, requestHash: zBytes32 }),
-});
-const voucherListSchema = z.union([voucherSchema.transform((v) => [v]), z.array(voucherSchema).min(1).max(2), z.object({ vouchers: z.array(voucherSchema).min(1).max(2) }).transform((o) => o.vouchers)]);
+const denySchema = z.object({ address: zAccount, reason: z.string().max(300).nullish() });
 
 const idParam = (c: Context, kind: Parameters<typeof isId>[0], name = "id"): string => {
   const v = c.req.param(name);
@@ -210,13 +178,14 @@ export type GatewayRouteDeps = {
   sseClosers: Set<() => void>;
   /** Public URL of this node, for receipt proof links in reports. */
   publicUrl?: string;
+  /** Counts a voucher nobody signed against the caller's unsigned limit; a Response (429) replaces the plain error. */
+  unsignedVoucher?: (c: Context, err: UnsignedVoucherError) => Response | null;
 };
 
 type Who = { merchant: MerchantRow; actor: AuthedActor };
 
 /** Mounts every gateway route (GATEWAY.md sections 8, 13 and 14) on the node's Hono app. */
 export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): void {
-  const net = networkFor(g.chainId);
   const a = d.access;
   const audit = (who: AuthedActor, action: string, o: { merchantId?: string | null; target?: string | null; meta?: Record<string, unknown> } = {}) => d.auth.audit.write(auditActor(who), action, o);
 
@@ -236,17 +205,6 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   };
 
   // ================================================================ platform (platform roles, or the recovery key)
-
-  const checkPayoutProof = async (merchantId: string, proof: z.output<typeof payoutProofSchema>) => {
-    const age = g.now() - proof.timestamp;
-    if (age > PAYOUT_PROOF_MAX_AGE_SECONDS || age < -60) throw new ApiError(400, "PAYOUT_PROOF_EXPIRED", `the signed timestamp must be within ${PAYOUT_PROOF_MAX_AGE_SECONDS}s`);
-    // Bound to this node's chain and hub, so a proof signed for another node is refused here.
-    const message = payoutChangeMessage(merchantId, proof.payout, proof.timestamp, { chainId: g.chainId, hub: g.chain.hub });
-    // EOA signature, or ERC-1271 for a contract payout wallet.
-    const ok = (await verifyMessage({ address: proof.payout, message, signature: proof.signature }).catch(() => false)) ||
-      (await g.chain.public.verifyMessage({ address: proof.payout, message, signature: proof.signature }).catch(() => false));
-    if (!ok) throw new ApiError(400, "PAYOUT_PROOF_INVALID", "the signature does not prove control of the new payout wallet", { message });
-  };
 
   const platformJson = () => ({
     ...g.merchants.platformJson(),
@@ -301,9 +259,9 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     const b = await body(c, createMerchantSchema);
     if (b.fee_plan_id) a.platform(c, "pricing.manage");
     // The proof names the merchant id, which does not exist yet: a new merchant signs with the literal "new".
-    await checkPayoutProof("new", b.payout);
+    const proof = await g.verifyPayoutProof("new", b.payout);
     const m = g.db.tx(() => {
-      const m = g.merchants.create({ ...b, payout: b.payout.payout, signature: b.payout.signature, signedAt: b.payout.timestamp });
+      const m = g.merchants.create({ ...b, payout: b.payout.payout, proof });
       audit(who, "business.created", { merchantId: m.id, target: m.id, meta: { name: m.name, payout: m.payout } });
       return m;
     });
@@ -327,16 +285,16 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     });
     return c.json(g.merchants.profileJson(m));
   });
-  // Payout change: the platform owner or the business's Admin, with a signature of the new wallet (PRODUCT.md 4.7).
+  // Payout change: the platform owner or the business's Admin, with a NEP-413 signature by a full-access key of the new account.
   app.post("/v1/merchants/:id/payout", async (c) => {
     const { merchant: m, actor } = a.business(c, "payout.change", c.req.param("id"));
     a.verified(actor);
     a.stepUp(actor);
     const id = m.id;
     const proof = await body(c, payoutProofSchema);
-    await checkPayoutProof(id, proof);
+    const record = await g.verifyPayoutProof(id, proof);
     const { merchant, old } = g.db.tx(() => {
-      const out = g.merchants.changePayout(id, proof.payout, proof.signature, proof.timestamp);
+      const out = g.merchants.changePayout(id, proof.payout, record);
       g.webhooks.emit(id, "merchant.payout_changed", id, null, { ...merchantJson(out.merchant, g.ctx), previous_payout: out.old });
       audit(actor, "payout.changed", { merchantId: id, target: id, meta: { from: m.payout_set === 0 ? null : out.old, to: out.merchant.payout } });
       return out;
@@ -479,7 +437,6 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     if (l.collect_name && !b.name) throw new ApiError(400, "NAME_REQUIRED", "this link asks for a name");
     const m = g.merchants.merchant(l.merchant_id);
     const amount = g.links.amountFor(l, b.amount ?? null);
-    await g.screen("checkout", { merchantId: m.id, payout: m.payout, linkId: l.id, amount });
     const p = await g.payments.create(m, {
       amount,
       method: b.method ?? null,
@@ -489,7 +446,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
       customer_email: b.email ?? null,
       customer_name: b.name ?? null,
     });
-    return c.json({ ...(await g.checkoutView(p)), checkout_url: g.payments.json(p).checkout_url }, 201);
+    return c.json({ ...g.checkoutView(p), checkout_url: g.payments.json(p).checkout_url }, 201);
   });
 
   app.get("/v1/links/:id", (c) => {
@@ -525,7 +482,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
         audit(who.actor, needsApproval ? "refund.requested" : "refund.issued", { merchantId: who.merchant.id, target: r.id, meta: { payment_id: r.payment_id, amount: r.amount } });
         return r;
       });
-      return { status: 201, body: { ...g.refunds.json(r), authorization: needsApproval ? null : g.refunds.authorizationFor(r) } };
+      return { status: 201, body: { ...g.refunds.json(r), transfer: needsApproval ? null : g.refunds.transferFor(r) } };
     });
   });
   app.get("/v1/refunds", (c) => {
@@ -535,8 +492,8 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   app.get("/v1/refunds/:id", (c) => {
     const id = idParam(c, "refund");
     const r = g.refunds.get(ownerOf(c, "payments.read", refundOwner(id)?.merchant_id).merchant.id, id);
-    const signable = r.status === "pending" && !r.tx_hash && r.approval !== "requested";
-    return c.json({ ...g.refunds.json(r), authorization: signable ? g.refunds.authorizationFor(r) : null });
+    
+    return c.json({ ...g.refunds.json(r), transfer: g.refunds.transferFor(r) });
   });
   app.patch("/v1/refunds/:id", async (c) => {
     const id = idParam(c, "refund");
@@ -552,7 +509,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
       audit(who.actor, "refund.approved", { merchantId: who.merchant.id, target: r.id, meta: { payment_id: r.payment_id, amount: r.amount } });
       return r;
     });
-    return c.json({ ...g.refunds.json(r), authorization: g.refunds.authorizationFor(r) });
+    return c.json({ ...g.refunds.json(r), transfer: g.refunds.transferFor(r) });
   });
   app.post("/v1/refunds/:id/submit", async (c) => {
     const id = idParam(c, "refund");
@@ -612,6 +569,35 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   app.get("/v1/webhooks/:id/deliveries", (c) => c.json(g.webhooks.deliveries(dev(c).merchant.id, idParam(c, "webhookEndpoint"), limitOf(c), cursorOf(c))));
   app.post("/v1/webhook-deliveries/:id/retry", async (c) => c.json(await g.webhooks.retry(dev(c).merchant.id, idParam(c, "delivery"))));
 
+  // Platform alert endpoints (no business): budget.refused for every refusal on this node (decision 8). Budgets are the
+  // platform's agents scope, so the agents permissions guard them.
+  const alerts = (c: Context, mutate: boolean) => a.platform(c, mutate ? "agents.manage" : "agents.read");
+  app.post("/v1/platform/webhooks", async (c) => {
+    const who = alerts(c, true);
+    const out = await g.webhooks.create(null, await body(c, createWebhookSchema));
+    audit(who, "webhook.created", { target: out.id, meta: { url: out.url, scope: "platform" } });
+    return c.json(out, 201);
+  });
+  app.get("/v1/platform/webhooks", (c) => (alerts(c, false), c.json({ items: g.webhooks.endpoints(null).map((e) => g.webhooks.json(e)) })));
+  app.get("/v1/platform/webhooks/:id", (c) => (alerts(c, false), c.json(g.webhooks.json(g.webhooks.endpoint(null, idParam(c, "webhookEndpoint"))))));
+  app.get("/v1/platform/webhooks/:id/secret", (c) => (alerts(c, true), c.json({ secret: g.webhooks.endpoint(null, idParam(c, "webhookEndpoint")).secret })));
+  app.patch("/v1/platform/webhooks/:id", async (c) => {
+    alerts(c, true);
+    return c.json(await g.webhooks.update(null, idParam(c, "webhookEndpoint"), await body(c, updateWebhookSchema)));
+  });
+  app.delete("/v1/platform/webhooks/:id", (c) => {
+    const who = alerts(c, true);
+    g.db.tx(() => {
+      g.webhooks.remove(null, idParam(c, "webhookEndpoint"));
+      audit(who, "webhook.deleted", { target: c.req.param("id"), meta: { scope: "platform" } });
+    });
+    return c.json({ id: c.req.param("id"), deleted: true });
+  });
+  app.post("/v1/platform/webhooks/:id/rotate-secret", (c) => (alerts(c, true), c.json(g.webhooks.rotateSecret(null, idParam(c, "webhookEndpoint")))));
+  app.post("/v1/platform/webhooks/:id/test", async (c) => (alerts(c, true), c.json(await g.webhooks.test(null, idParam(c, "webhookEndpoint")))));
+  app.get("/v1/platform/webhooks/:id/deliveries", (c) => (alerts(c, false), c.json(g.webhooks.deliveries(null, idParam(c, "webhookEndpoint"), limitOf(c), cursorOf(c)))));
+  app.post("/v1/platform/webhook-deliveries/:id/retry", async (c) => (alerts(c, true), c.json(await g.webhooks.retry(null, idParam(c, "delivery")))));
+
   // Intake screening (section 13.1): decisions for the Blocked page, and the business's blocked wallets.
   app.get("/v1/screening/decisions", (c) => {
     // Platform actors without Merchant-Id see every business's decisions.
@@ -626,10 +612,11 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   });
   app.delete("/v1/screening/deny-list/:address", (c) => {
     const who = caller(c, "screening.manage");
-    const address = parse(c.req.param("address"), zAddress, "invalid address");
+    const address = parse(c.req.param("address"), zAccount, "invalid account");
     if (!g.screening.allow(who.merchant.id, address)) throw new ApiError(404, "NOT_FOUND", "address is not on the deny list");
     return c.json({ address, deleted: true });
   });
+
 
   // ================================================================ public checkout (no auth, per-IP limited)
 
@@ -638,13 +625,8 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     if (!p) throw new ApiError(404, "NOT_FOUND", "payment not found");
     return p;
   };
-  /** Screens the payout before a deposit address is shown (section 13.1). */
-  const viewOf = async (p: PaymentRow) => {
-    if (!isTerminalish(p)) await g.screen("checkout", { merchantId: p.merchant_id, payout: p.payout, paymentId: p.id });
-    return g.checkoutView(p);
-  };
 
-  app.get("/v1/checkout/:id", async (c) => c.json(await viewOf(publicPayment(c))));
+  app.get("/v1/checkout/:id", (c) => c.json(g.checkoutView(publicPayment(c))));
 
   app.get("/v1/checkout/:id/quote", (c) => {
     const p = publicPayment(c);
@@ -652,46 +634,19 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     const q = g.payments.quote(g.merchants.merchant(p.merchant_id), BigInt(p.amount), method);
     return c.json({ payment_id: p.id, method, amount: q.amount.toString(), surcharge: q.surcharge.toString(), amount_due: q.amount_due.toString() });
   });
-  // Node extra: a person picking a method re-quotes the open payment (section 14.1), so the page shows the right total.
+  // A person picking the wallet re-quotes the open payment, so the page shows the right total and the terms to sign.
   app.post("/v1/checkout/:id/method", async (c) => {
     const p = publicPayment(c);
-    const { method } = await body(c, z.object({ method: z.enum(["wallet", "deposit", "hsp"]) }));
-    return c.json(await g.checkoutView(g.payments.requote(p, method)));
+    const { method } = await body(c, z.object({ method: z.enum(["wallet"]) }));
+    return c.json(g.checkoutView(g.payments.requote(p, method)));
   });
 
-  app.post("/v1/checkout/:id/authorize", async (c) => {
+  // The payer's wallet sent the checkout transaction: the node asks the hub now. The hash is kept for display only.
+  app.post("/v1/checkout/:id/wallet", async (c) => {
     const p = publicPayment(c);
-    const b = await body(c, authorizeSchema);
-    const out = await g.authorize(p.id, b.payer, b.signature);
-    return c.json({ status: out.payment.status, txHash: out.txHash, tx_hash: out.txHash, payment: await g.checkoutView(out.payment) });
-  });
-
-  // HSP (section 17): prepare returns HSP's EIP-712 data for the payer to sign, submit sends the signature through HSP,
-  // and the status route reports HSP's status next to the payment's. The payment turns paid only when the deposit
-  // watcher sees the transfer in its forwarder.
-  const hspRail = () => {
-    if (!g.hsp) throw new ApiError(404, "HSP_NOT_CONFIGURED", "HSP payments are not set up on this server");
-    return g.hsp;
-  };
-  app.post("/v1/checkout/:id/hsp/prepare", async (c) => {
-    const p = publicPayment(c);
-    const { payer } = await body(c, hspPrepareSchema);
-    return c.json(await hspRail().prepare(p.id, payer, p.description ?? g.merchants.merchant(p.merchant_id).name));
-  });
-  app.post("/v1/checkout/:id/hsp/submit", async (c) => {
-    const p = publicPayment(c);
-    const b = await body(c, hspSubmitSchema);
-    const out = await hspRail().submit(p.id, b.payer, b.signature);
-    return c.json({ status: out.payment.status, hsp: out.hsp, payment: await g.checkoutView(out.payment) });
-  });
-  app.get("/v1/checkout/:id/hsp", (c) => {
-    const p = publicPayment(c);
-    return c.json({ payment_id: p.id, status: p.status, amount_due: p.amount_due, amount_paid: p.amount_paid, flow_id: p.hsp_flow_id, hsp: hspRail().checkout(p) });
-  });
-  // Merchant view of the method: whether HSP can take payments now and under which reporting name.
-  app.get("/v1/hsp/status", (c) => {
-    caller(c, "payments.read");
-    return c.json(g.hsp ? { configured: true, merchant_name: g.hsp.merchantName, ...g.hsp.availability() } : { configured: false, state: "off" });
+    const b = await body(c, walletSentSchema);
+    const row = await g.walletSent(p, b.tx_hash ?? null);
+    return c.json({ status: row.status, recorded: g.payments.credits(row.id).some((x) => x.method === "wallet"), payment: g.checkoutView(row) });
   });
 
   app.post("/v1/checkout/:id/email", async (c) => {
@@ -707,7 +662,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
 
   app.get("/v1/checkout/:id/events", async (c) => {
     const p = publicPayment(c);
-    const first = await viewOf(p);
+    const first = g.checkoutView(p);
     return streamSSE(c, async (stream) => {
       let wake: (() => void) | null = null;
       let latest: PaymentRow | null = null;
@@ -739,7 +694,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
           if (latest && !closed) {
             const row: PaymentRow = latest;
             latest = null;
-            await stream.writeSSE({ event: "status", data: JSON.stringify(await g.checkoutView(row)) });
+            await stream.writeSSE({ event: "status", data: JSON.stringify(g.checkoutView(row)) });
           }
         }
       } finally {
@@ -749,66 +704,69 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     });
   });
 
-  // ================================================================ x402 (section 5)
+  // ================================================================ x402 v2: agents pay links and payments with vouchers
 
-  /** 402 with PAYMENT-REQUIRED; the JSON body repeats it and carries the full error object, like the SDK paywall. */
-  const paymentRequired = (c: Context, pr: ReturnType<Gateway["requirements"]>, error?: { code: string; message: string; details?: Record<string, unknown> }) => {
-    c.header(HEADER_REQUIRED, encodeHeader(error ? { ...pr, error: error.code } : pr));
-    return c.json({ ...pr, ...(error ? { error } : {}) }, 402);
+  type Problem = { code: string; message: string; details?: Record<string, unknown>; refusal?: Refusal };
+
+  /**
+   * 402 with PAYMENT-REQUIRED (and, after a failed payment, PAYMENT-RESPONSE with `success: false`). The JSON body
+   * repeats the requirements and carries the full error object, like the SDK paywall.
+   */
+  const paymentRequired = (c: Context, pr: PaymentRequiredV2, problem: Problem, attempted: boolean) => {
+    c.header(HEADER_REQUIRED, encodeHeader({ ...pr, error: problem.code }));
+    if (attempted) c.header(HEADER_RESPONSE, encodeHeader(paymentFailure(g.network, problem.code, problem.refusal)));
+    const { refusal, ...error } = problem;
+    return c.json({ ...pr, error, ...(refusal ? { refusal } : {}) }, 402);
   };
-  const paid = (c: Context, p: PaymentRow, txHash: Hex | null, extra: Record<string, unknown> = {}) => {
-    const receipt = {
-      success: true,
-      network: net.caip2,
-      paymentId: p.id,
-      status: p.status,
-      txHash,
-      transaction: txHash,
-      payer: p.payer,
-      ...extra,
-    };
-    c.header(HEADER_RESPONSE, encodeHeader(receipt));
+
+  const paid = (c: Context, p: PaymentRow, payer: PublicKey, results: Array<{ receipt: Parameters<typeof paymentSuccess>[2][number]; position: Parameters<typeof paymentSuccess>[3][number] }>) => {
+    c.header(HEADER_RESPONSE, encodeHeader(paymentSuccess(g.network, payer, results.map((r) => r.receipt), results.map((r) => r.position))));
+    const last = results[results.length - 1]!;
     return c.json({
       payment_id: p.id,
       status: p.status,
       amount_due: p.amount_due,
       amount_paid: p.amount_paid,
       order_hash: p.order_hash,
-      tx_hash: txHash,
       checkout_url: g.payments.json(p).checkout_url,
       proof_url: `${g.ctx.checkoutBaseUrl}/receipt/${p.id}`,
+      // receipt and position keep agent clients working: they verify the clearing receipt of the voucher they signed.
+      receipt: last.receipt,
+      position: last.position,
+      receipts: results.map((r) => r.receipt),
     });
   };
 
-  type Signed = { kind: "exact"; exact: ExactPayload } | { kind: "voucher"; vouchers: VoucherPayload[] };
-  const signedPayment = (c: Context): Signed | null => {
-    const header = c.req.header(HEADER_SIGNATURE);
-    if (!header) return null;
-    const raw = decodeHeader<unknown>(header);
-    const exact = exactSchema.safeParse(raw);
-    if (exact.success && (exact.data.scheme === "exact" || exact.data.accepted?.scheme === "exact")) {
-      const a = exact.data.payload.authorization;
-      return { kind: "exact", exact: { from: a.from, authorization: a, signature: exact.data.payload.signature } };
+  /** Accepts the vouchers of a parsed PAYMENT-SIGNATURE for payment `p`, answering 200 or a 402 with the refusal. */
+  const settleVouchers = async (c: Context, p: PaymentRow, signed: ParsedPayment, requirements: () => PaymentRequiredV2) => {
+    try {
+      const out = await g.payVouchers(p, signed.vouchers);
+      if (out.ok) return paid(c, out.payment, signed.payer, out.receipts);
+      const d = out.denial;
+      return paymentRequired(c, requirements(), { code: d.rule, message: d.message, details: d.details, refusal: d.refusal }, true);
+    } catch (err) {
+      if (err instanceof UnsignedVoucherError) {
+        const limited = d.unsignedVoucher?.(c, err);
+        if (limited) return limited;
+      }
+      if (err instanceof ApiError && (err.status === 402 || err.status === 403 || err.status === 409)) {
+        return paymentRequired(c, requirements(), { code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) }, true);
+      }
+      throw err;
     }
-    const vouchers = voucherListSchema.safeParse(raw);
-    if (vouchers.success) {
-      if (vouchers.data.some((v) => v.network !== net.caip2)) throw new ApiError(400, "NETWORK_MISMATCH", `network must be ${net.caip2}`);
-      return { kind: "voucher", vouchers: vouchers.data.map((v) => v.payload) };
-    }
-    throw new ApiError(400, "INVALID_PAYMENT", "PAYMENT-SIGNATURE is neither an x402 exact nor a payminto-voucher payment");
   };
 
-  const settleVouchers = async (c: Context, p: PaymentRow, vouchers: VoucherPayload[], requirements: () => ReturnType<Gateway["requirements"]>) => {
-    const out = await g.payVouchers(p, vouchers);
-    if (!out.ok) return paymentRequired(c, requirements(), out.denial);
-    const last = out.receipts[out.receipts.length - 1]!;
-    // receipt and position keep AgentClient.fetch working: it verifies the clearing receipt of the voucher it signed.
-    return paid(c, out.payment, null, { receipt: last.receipt, position: last.position, receipts: out.receipts.map((r) => r.receipt) });
-  };
-
-  const x402Error = (c: Context, err: unknown, requirements: () => ReturnType<Gateway["requirements"]>) => {
-    if (err instanceof ApiError && err.status === 402) return paymentRequired(c, requirements(), { code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) });
-    throw err;
+  /**
+   * The PAYMENT-SIGNATURE of this request, checked against what the gateway offers now. A retry of vouchers a payment
+   * already accepted skips the check (nothing is offered once it is paid) and gets the receipts it was given.
+   */
+  const signedPayment = (c: Context, requirements: () => PaymentRequiredV2, replayOf: (vouchers: VoucherInput[]) => boolean = () => false) => {
+    const parsed = parsePaymentSignature(c.req.header(HEADER_SIGNATURE), g.network);
+    if (!parsed) return null;
+    if (!replayOf(parsed.vouchers) && !requirements().accepts.some((r) => sameRequirement(r, parsed.accepted))) {
+      throw new ApiError(402, "REQUIREMENT_MISMATCH", "the accepted requirement is not one this resource offers now; request a fresh 402");
+    }
+    return parsed;
   };
 
   app.on(["GET", "POST"], "/v1/pay/l/:slug", async (c) => {
@@ -817,92 +775,43 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     const amountRaw = c.req.query("amount");
     const amount = g.links.amountFor(l, amountRaw === undefined ? null : parse(amountRaw, zAmount, "amount must be a positive integer of base units"));
     const resource = `${linkUrl(g.ctx.checkoutBaseUrl, l.slug)}${amountRaw ? `?amount=${amount}` : ""}`;
-    const signed = signedPayment(c);
-    const requirements = (exactPayment: PaymentRow | null = null, hspPayment: PaymentRow | null = exactPayment) =>
-      g.requirements({ merchant: m, amount, payment: null, exactPayment, hspPayment, resource, description: l.title });
-    // Drafts are keyed by link and requester, so repeated probes from one client reuse one payment.
-    const requester = `${d.clientIp(c)}\n${c.req.header("user-agent") ?? ""}`;
-    if (!signed) {
-      await g.screen("x402", { merchantId: m.id, payout: m.payout, linkId: l.id, amount });
-      // exact pays a payment's own forwarder, so the 402 needs one: an invisible draft (section 15).
-      let exactPayment: PaymentRow | null = null;
-      let hspPayment: PaymentRow | null = null;
-      try {
-        g.payments.quote(m, amount, "x402");
-        exactPayment = await g.draftFor(l, m, amount, "x402", requester);
-      } catch (err) {
-        if (!(err instanceof ApiError)) throw err;
-      }
-      // HSP needs a payment too; the x402 draft serves both, else one quoted for HSP.
-      hspPayment = exactPayment;
-      if (!hspPayment && g.hsp) {
-        try {
-          g.payments.quote(m, amount, "hsp");
-          hspPayment = await g.draftFor(l, m, amount, "hsp", requester);
-        } catch (err) {
-          if (!(err instanceof ApiError)) throw err;
-        }
-      }
-      return paymentRequired(c, requirements(exactPayment, hspPayment), { code: "PAYMENT_REQUIRED", message: `pay ${l.title}` });
-    }
-    if (signed.kind === "exact") {
-      const p = g.paymentByDepositAddress(signed.exact.authorization.to);
-      if (!p || p.link_id !== l.id) return paymentRequired(c, requirements(), { code: "PAY_TO_MISMATCH", message: "payTo is not a payment of this link; request a fresh 402" });
-      try {
-        const out = await g.payExact(p, signed.exact);
-        return paid(c, out.payment, out.txHash);
-      } catch (err) {
-        return x402Error(c, err, () => requirements(p));
-      }
-    }
-    // A retry of vouchers already accepted goes back to their payment and gets the same receipts.
-    const p = g.paymentForVouchers(l.id, signed.vouchers) ?? (await g.draftFor(l, m, amount, "voucher", requester));
+    const requirements = () => g.requirements({ merchant: m, amount, payment: null, resource, description: l.title });
+    let signed;
     try {
-      return await settleVouchers(c, p, signed.vouchers, () => requirements());
+      signed = signedPayment(c, requirements, (vs) => g.paymentForVouchers(l.id, vs) !== undefined);
     } catch (err) {
-      return x402Error(c, err, () => requirements());
+      if (err instanceof ApiError && err.status === 402) return paymentRequired(c, requirements(), { code: err.code, message: err.message }, true);
+      throw err;
     }
+    if (!signed) return paymentRequired(c, requirements(), { code: "PAYMENT_REQUIRED", message: `pay ${l.title}` }, false);
+    // A retry of vouchers already accepted goes back to their payment and gets the same receipts. Drafts are keyed by
+    // link and requester, so repeated attempts from one client reuse one payment.
+    const requester = `${d.clientIp(c)}\n${c.req.header("user-agent") ?? ""}`;
+    const p = g.paymentForVouchers(l.id, signed.vouchers) ?? (await g.draftFor(l, m, amount, requester));
+    return settleVouchers(c, p, signed, requirements);
   });
 
   app.on(["GET", "POST"], "/v1/pay/:id", async (c) => {
-    let p = publicPayment(c);
+    const p = publicPayment(c);
     const m = g.merchants.merchant(p.merchant_id);
     const resource = g.payments.json(p).checkout_url;
     const requirements = () => {
       const cur = g.payments.row(p.id)!;
-      return g.requirements({ merchant: m, amount: BigInt(cur.amount), payment: cur, exactPayment: exactFor(cur), hspPayment: cur, resource, description: cur.description ?? m.name });
+      return g.requirements({ merchant: m, amount: BigInt(cur.amount), payment: cur, resource, description: cur.description ?? m.name });
     };
-    /** exact is offered when the payment is x402-quoted, or can be re-quoted to x402 (open and untouched). */
-    const exactFor = (cur: PaymentRow): PaymentRow | null => (cur.quote_method === "x402" ? cur : null);
-    const signed = signedPayment(c);
-    if (!signed) {
-      await g.screen("x402", { merchantId: m.id, payout: p.payout, paymentId: p.id });
-      if (p.quote_method !== "x402" && p.status === "open" && p.amount_paid === "0") {
-        try {
-          p = g.payments.requote(p, "x402");
-        } catch (err) {
-          if (!(err instanceof ApiError)) throw err;
-        }
-      }
-      return paymentRequired(c, requirements(), { code: "PAYMENT_REQUIRED", message: `pay ${p.id}` });
-    }
+    let signed;
     try {
-      if (signed.kind === "exact") {
-        const out = await g.payExact(p, signed.exact);
-        return paid(c, out.payment, out.txHash);
-      }
-      return await settleVouchers(c, p, signed.vouchers, requirements);
+      signed = signedPayment(c, requirements, (vs) => g.acceptedVouchers(p.id, vs));
     } catch (err) {
-      return x402Error(c, err, requirements);
+      if (err instanceof ApiError && err.status === 402) return paymentRequired(c, requirements(), { code: err.code, message: err.message }, true);
+      throw err;
     }
+    if (!signed) return paymentRequired(c, requirements(), { code: "PAYMENT_REQUIRED", message: `pay ${p.id}` }, false);
+    return settleVouchers(c, p, signed, requirements);
   });
 
-  // ================================================================ service directory (section 13.4)
+  // ================================================================ service directory
 
   app.get("/.well-known/payminto.json", (c) => c.json(g.directory()));
   app.get("/v1/directory", (c) => c.json(g.directory()));
-}
-
-function isTerminalish(p: PaymentRow): boolean {
-  return p.status === "paid" || p.status === "overpaid" || p.status === "underpaid" || p.status === "canceled" || p.status === "expired";
 }

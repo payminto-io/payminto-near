@@ -9,29 +9,27 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Abi, Address } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { depositFactoryAbi, depositFactoryBytecode, payoutChangeMessage, paymentRouterAbi, paymentRouterBytecode } from "@payminto/protocol";
 import { startNode, type ClearingNode } from "../src/server.ts";
 import { createLogger } from "../src/logger.ts";
 import { hashPassword, passwordProblem, verifyPassword } from "../src/auth/passwords.ts";
 import { sendSmtp } from "../src/auth/mailer.ts";
 import type { GatewayConfig } from "../src/config.ts";
-import { ANVIL_KEYS, deployClearing, startAnvil, tempDir, testConfig, type Anvil } from "./helpers.ts";
+import { FakeNearRpc, payoutAccount, payoutProof, startFakeChain, tempDir, testConfig } from "./helpers.ts";
 
 const ADMIN = "test-admin-token-123";
 const DASH = "http://localhost:3000";
-const PAYOUT = privateKeyToAccount(ANVIL_KEYS[6]);
-const PAYOUT_B = privateKeyToAccount(ANVIL_KEYS[5]);
-const FEES = privateKeyToAccount(ANVIL_KEYS[7]).address;
+const PAYOUT = payoutAccount("payout.testnet", 66);
+const PAYOUT_B = payoutAccount("payout-b.testnet", 65);
+const rpc = new FakeNearRpc().addKey(PAYOUT.account, PAYOUT.key.publicKey).addKey(PAYOUT_B.account, PAYOUT_B.key.publicKey);
+const FEES = "fees.testnet";
 const OWNER_PW = "owner-correct-horse-42";
 const PW = "a-long-enough-passphrase-9";
 
-let anvil: Anvil;
+let fakeChain: ReturnType<typeof startFakeChain>;
 let node: ClearingNode;
-let hub: Address;
+let hub: string;
 let gatewayCfg: GatewayConfig;
-let token: Address;
+let token: string;
 const logs: string[] = [];
 const tmp = tempDir("payminto-accounts-");
 const tmp2 = tempDir("payminto-accounts-limits-");
@@ -92,7 +90,8 @@ const setupCodeFromLogs = () => {
 const outboxLink = (to: string, kind: string) =>
   node.services.db.get<{ link: string }>("SELECT link FROM outbox_emails WHERE to_addr = ? AND kind = ? ORDER BY id DESC LIMIT 1", to, kind)?.link ?? null;
 const tokenOf = (link: string | null) => link!.split("/").pop()!;
-const scope = () => ({ chainId: 31337, hub });
+// The gateway binds payout proofs to the EVM-era placeholder scope until payouts move to NEAR accounts (Node stream).
+const scope = () => ({ network: fakeChain.network, hub: fakeChain.hub });
 const nowSec = () => Math.floor(Date.now() / 1000);
 
 let owner: Browser;
@@ -103,7 +102,7 @@ async function newBusiness(name: string, payout = PAYOUT_B): Promise<string> {
   const ts = nowSec();
   const r = await owner.post("/v1/merchants", {
     name,
-    payout: { payout: payout.address, timestamp: ts, signature: await payout.signMessage({ message: payoutChangeMessage("new", payout.address, ts, scope()) }) },
+    payout: payoutProof(payout, "new", scope(), ts),
   });
   expect(r.status).toBe(201);
   return r.json.id;
@@ -120,32 +119,24 @@ async function member(by: Browser, merchantId: string, email: string, role: "adm
 }
 
 beforeAll(async () => {
-  anvil = await startAnvil();
-  ({ hub, token } = await deployClearing(anvil));
-  const factory = await anvil.deploy(depositFactoryAbi as Abi, depositFactoryBytecode);
-  const router = await anvil.deploy(paymentRouterAbi as Abi, paymentRouterBytecode);
+  fakeChain = startFakeChain();
+  ({ hub, token } = { hub: fakeChain.hub, token: fakeChain.token });
   gatewayCfg = {
-    seedPayout: PAYOUT.address,
+    seedPayout: PAYOUT.account,
     platformName: "Acme Platform",
     feeRecipient: FEES,
-    paymentRouter: router,
     checkoutBaseUrl: DASH,
-    depositFactory: factory,
-    depositFactoryBlock: 0n,
-    forwarderImplementation: null,
     checkoutTtlSec: 1800,
     webhookAllowPrivate: true,
     watchIntervalMs: 2000,
-    screenMinPayerNonce: 0,
   };
   const logger = createLogger({ level: "info", sink: (l) => logs.push(l) });
-  node = await startNode(testConfig({ rpcUrl: anvil.rpcUrl, hub, token, dbPath: tmp.dbPath, adminToken: ADMIN, gateway: gatewayCfg }), { logger, port: 0, workers: false });
+  node = await startNode(testConfig({ hub, token, dbPath: tmp.dbPath, adminToken: ADMIN, gateway: gatewayCfg }), { logger, port: 0, workers: false, chain: fakeChain, nearRpc: rpc });
   owner = new Browser(() => node.url);
 }, 120_000);
 
 afterAll(async () => {
   await node?.stop();
-  anvil?.stop();
   tmp.cleanup();
   tmp2.cleanup();
 });
@@ -180,7 +171,7 @@ describe("first-run setup and the recovery key", () => {
   it("prints a one-time setup code and reports setup as needed", async () => {
     expect(setupCodeFromLogs()).toMatch(/^([A-Z2-7]{4}-){12}[A-Z2-7]{4}$/);
     const info = await owner.get("/v1/setup");
-    expect(info.json).toMatchObject({ needed: true, platform_name: "Acme Platform", network: { chain_id: 31337 }, payout_default: PAYOUT.address, fee_wallet: FEES });
+    expect(info.json).toMatchObject({ needed: true, platform_name: "Acme Platform", network: { id: "near:sandbox" }, payout_default: PAYOUT.account, fee_wallet: FEES });
     // The code is stored hashed only.
     const code = setupCodeFromLogs()!;
     expect(JSON.stringify(node.services.db.all("SELECT * FROM auth_tokens"))).not.toContain(code.replace(/-/g, ""));
@@ -283,6 +274,10 @@ describe("sign-in, sessions and CSRF", () => {
     const ctl = new AbortController();
     const sse = await fetch(`${node.url}/v1/events`, { headers: { cookie: b.cookie! }, signal: ctl.signal });
     expect(sse.status).toBe(200);
+    // no-transform: a proxy in front (the dashboard's Next.js server) must not compress or buffer the stream, or the
+    // browser sees no event until the connection closes.
+    expect(sse.headers.get("cache-control")).toBe("no-cache, no-transform");
+    expect(sse.headers.get("content-type")).toMatch(/^text\/event-stream/);
     ctl.abort();
     // Public routes ignore the session cookie, so they need no CSRF header.
     b.csrf = null;
@@ -480,20 +475,20 @@ describe("invites, roles and isolation", () => {
       ["viewer cannot refund", viewerA, "POST", "/v1/refunds", { paymentId: payA, amount: "1" }, 403],
       ["viewer cannot read webhooks", viewerA, "GET", "/v1/webhooks", undefined, 403],
       ["viewer reads blocked wallets", viewerA, "GET", "/v1/screening/deny-list", undefined, 200],
-      ["viewer cannot block a wallet", viewerA, "POST", "/v1/screening/deny-list", { address: PAYOUT_B.address }, 403],
+      ["viewer cannot block a wallet", viewerA, "POST", "/v1/screening/deny-list", { address: PAYOUT_B.account }, 403],
       ["viewer cannot read the activity log", viewerA, "GET", "/v1/audit", undefined, 403],
       ["staff creates a link", staffA, "POST", "/v1/links", { title: "Staff link", amount: "1000000" }, 201],
       ["staff cannot invite", staffA, "POST", "/v1/invites", { emails: ["z@z.test"], role: "viewer" }, 403],
       ["staff cannot read API keys", staffA, "GET", "/v1/api-keys", undefined, 403],
-      ["staff cannot change methods", staffA, "PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "x402", enabled: false }] }, 403],
+      ["staff cannot change methods", staffA, "PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "voucher", enabled: false }] }, 403],
       ["staff reads members", staffA, "GET", "/v1/members", undefined, 200],
-      ["admin toggles a method", adminA, "PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "x402", enabled: true }] }, 200],
-      ["admin cannot set method fees", adminA, "PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "x402", fee_bps: 10 }] }, 403],
+      ["admin toggles a method", adminA, "PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "voucher", enabled: true }] }, 200],
+      ["admin cannot set method fees", adminA, "PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "voucher", fee_bps: 10 }] }, 403],
       ["admin reads webhooks", adminA, "GET", "/v1/webhooks", undefined, 200],
       ["admin reads the activity log", adminA, "GET", "/v1/audit", undefined, 200],
       ["admin cannot list businesses", adminA, "GET", "/v1/merchants", undefined, 403],
       ["admin cannot read pricing", adminA, "GET", "/v1/fee-plans", undefined, 403],
-      ["admin cannot read budgets", adminA, "GET", "/v1/mandates", undefined, 403],
+      ["admin cannot read budgets", adminA, "GET", "/v1/budgets", undefined, 403],
       ["admin cannot run a settlement", adminA, "POST", "/v1/settlements", {}, 403],
       ["admin cannot read the outbox", adminA, "GET", "/v1/platform/outbox", undefined, 403],
       ["admin cannot read platform earnings", adminA, "GET", "/v1/platform/fees", undefined, 403],
@@ -502,7 +497,7 @@ describe("invites, roles and isolation", () => {
       ["api key cannot create keys", keyA, "POST", "/v1/api-keys", {}, 401],
       ["api key cannot read businesses", keyA, "GET", "/v1/merchants", undefined, 401],
       ["owner reads earnings", owner, "GET", "/v1/platform/fees", undefined, 200],
-      ["owner reads budgets", owner, "GET", "/v1/mandates", undefined, 200],
+      ["owner reads budgets", owner, "GET", "/v1/budgets", undefined, 200],
     ];
     for (const [label, who, method, path, b, want] of checks) {
       const r = typeof who === "string" ? await bearer(method, path, who, b) : await who.req(method, path, b, H);
@@ -526,7 +521,7 @@ describe("invites, roles and isolation", () => {
     expect((await pa.patch("/v1/platform", { name: "Mine" })).status).toBe(403);
     expect((await pa.get("/v1/payments")).json.items.length).toBeGreaterThanOrEqual(2);
     const ts = nowSec();
-    const proof = { payout: PAYOUT.address, timestamp: ts, signature: await PAYOUT.signMessage({ message: payoutChangeMessage(merchantB, PAYOUT.address, ts, scope()) }) };
+    const proof = payoutProof(PAYOUT, merchantB, scope(), ts);
     expect((await pa.post(`/v1/merchants/${merchantB}/payout`, proof)).json.error.code).toBe("FORBIDDEN");
     expect((await owner.get("/v1/platform/team")).json.items.map((t: { email: string }) => t.email)).toEqual(["owner@acme.test", "padmin@acme.test"]);
     const ownerId = auth().userByEmail("owner@acme.test")!.id;
@@ -558,15 +553,15 @@ describe("invites, roles and isolation", () => {
     expect((await staffA.patch(`/v1/links/${mine.id}`, { title: "Mine 2" }, { "merchant-id": merchantA })).json.title).toBe("Mine 2");
     expect((await staffA.patch(`/v1/links/${theirs.id}`, { title: "Nope" }, { "merchant-id": merchantA })).status).toBe(403);
     // A refund request needs a paid payment: credit one directly (the chain path is covered by gateway.test.ts).
-    node.services.db.run("UPDATE payments SET status = 'paid', amount_paid = amount, payer = ? WHERE id = ?", PAYOUT_B.address, payA);
+    node.services.db.run("UPDATE payments SET status = 'paid', amount_paid = amount, payer = ? WHERE id = ?", PAYOUT_B.account, payA);
     const req = await staffA.post("/v1/refunds", { paymentId: payA, amount: "500000", note: "customer asked by phone" }, { "merchant-id": merchantA });
     expect(req.status).toBe(201);
-    expect(req.json).toMatchObject({ approval: "requested", authorization: null, note: "customer asked by phone" });
-    expect((await adminA.post(`/v1/refunds/${req.json.id}/submit`, { txHash: `0x${"ab".repeat(32)}` })).json.error.code).toBe("REFUND_APPROVAL_REQUIRED");
+    expect(req.json).toMatchObject({ approval: "requested", transfer: null, note: "customer asked by phone" });
+    expect((await adminA.post(`/v1/refunds/${req.json.id}/submit`, { txHash: "refund-tx-0001" })).json.error.code).toBe("REFUND_APPROVAL_REQUIRED");
     expect((await staffA.post(`/v1/refunds/${req.json.id}/approve`, {}, { "merchant-id": merchantA })).status).toBe(403);
     const ok = await adminA.post(`/v1/refunds/${req.json.id}/approve`);
     expect(ok.json.approval).toBe("approved");
-    expect(ok.json.authorization).toBeTruthy();
+    expect(ok.json.transfer).toMatchObject({ receiverId: token, actions: [{ params: { methodName: "ft_transfer", args: { receiver_id: PAYOUT_B.account, amount: "500000" } } }] });
     expect((await adminA.patch(`/v1/refunds/${req.json.id}`, { note: "approved after call" })).json.note).toBe("approved after call");
     // The internal note never reaches the public checkout.
     expect(JSON.stringify((await new Browser(() => node.url).get(`/v1/checkout/${payA}`)).json)).not.toContain("approved after call");
@@ -575,7 +570,7 @@ describe("invites, roles and isolation", () => {
   });
 
   it("resolves a record's business on the platform view, so a bare detail URL works without Merchant-Id", async () => {
-    node.services.db.run("UPDATE payments SET status = 'paid', amount_paid = amount, payer = ? WHERE id = ?", PAYOUT.address, payB);
+    node.services.db.run("UPDATE payments SET status = 'paid', amount_paid = amount, payer = ? WHERE id = ?", PAYOUT.account, payB);
     // Another business's Admin cannot refund it: their own business is used, where the payment does not exist.
     expect((await adminA.post("/v1/refunds", { paymentId: payB, amount: "100000" })).status).toBe(404);
     const r = await owner.post("/v1/refunds", { paymentId: payB, amount: "100000" });
@@ -617,20 +612,25 @@ describe("invites, roles and isolation", () => {
     expect(text.json.groups.find((g: { type: string }) => g.type === "payment").items[0].id).toBe(payA);
     const ref = await adminA.get("/v1/search?q=A-1001&types=payment");
     expect(ref.json.groups[0].items[0].matched.field).toBe("reference");
-    const dep = (await adminA.get(`/v1/payments/${payA}`)).json.deposit_address as string;
-    const byAddr = await adminA.get(`/v1/search?q=${dep.toLowerCase()}`);
-    expect(byAddr.json.detected).toBe("address");
-    expect(byAddr.json.groups[0].items[0]).toMatchObject({ id: payA, matched: { field: "deposit_address" } });
-    // A transaction hash on a credit.
-    const tx = `0x${"cd".repeat(32)}`;
+    // The hub's payment id of the checkout terms.
+    const checkoutId = (await adminA.get(`/v1/payments/${payA}`)).json.checkout_id as string;
+    const byCheckout = await adminA.get(`/v1/search?q=${checkoutId}&types=payment`);
+    expect(byCheckout.json.detected).toBe("tx_hash");
+    expect(byCheckout.json.groups[0].items[0]).toMatchObject({ id: payA, matched: { field: "checkout_id" } });
+    // A NEAR transaction hash on a credit, and the paying account.
+    const tx = "8vHxbKWRZtLJdD5Wmv4cCzQbYnU1ckqmVYp9oG6cWWLx";
     node.services.db.run(
-      "INSERT INTO payment_credits (payment_id, method, payer, amount, tx_hash, log_index, status, created_at) VALUES (?, 'deposit', ?, '1', ?, 0, 'confirmed', ?)",
+      "INSERT INTO payment_credits (payment_id, method, payer, amount, tx_hash, checkout_id, status, created_at) VALUES (?, 'wallet', ?, '1', ?, ?, 'confirmed', ?)",
       payA,
-      PAYOUT_B.address,
+      "shopper.testnet",
       tx,
+      "ef".repeat(32),
       new Date().toISOString(),
     );
-    expect((await adminA.get(`/v1/search?q=${tx.toUpperCase().replace("0X", "0x")}`)).json.groups[0].items[0]).toMatchObject({ id: payA, matched: { field: "tx_hash" } });
+    expect((await adminA.get(`/v1/search?q=${tx}`)).json.groups[0].items[0]).toMatchObject({ id: payA, matched: { field: "tx_hash" } });
+    const byAccount = await adminA.get("/v1/search?q=shopper.testnet&types=payment");
+    expect(byAccount.json.detected).toBe("address");
+    expect(byAccount.json.groups[0].items[0]).toMatchObject({ id: payA, matched: { field: "payer" } });
     expect((await adminB.get(`/v1/search?q=${tx}`)).json.groups).toEqual([]);
     // Amount: 2.5 USDC.
     expect((await adminA.get("/v1/search?q=2.5&types=payment")).json.groups[0].items[0].id).toBe(payA);
@@ -736,7 +736,7 @@ describe("password reset, sign-up and the outbox", () => {
     // The Admin proves a payout wallet, then payments work.
     const mid = s.json.memberships[0].merchant_id;
     const ts = nowSec();
-    const proof = { payout: PAYOUT_B.address, timestamp: ts, signature: await PAYOUT_B.signMessage({ message: payoutChangeMessage(mid, PAYOUT_B.address, ts, scope()) }) };
+    const proof = payoutProof(PAYOUT_B, mid, scope(), ts);
     expect((await f.post(`/v1/merchants/${mid}/payout`, proof)).json.payout_set).toBe(true);
     expect((await f.post("/v1/payments", { amount: "1000000" })).status).toBe(201);
     // Decline path.
@@ -764,7 +764,7 @@ describe("password reset, sign-up and the outbox", () => {
     expect(all.json.items.every((i: { action: string }) => i.action.startsWith("auth."))).toBe(true);
     expect(all.json.next_cursor).toBeTruthy();
     const payout = await owner.get("/v1/audit?action=payout.changed");
-    expect(payout.json.items[0].summary).toMatch(/changed the payout wallet to 0x/);
+    expect(payout.json.items[0].summary).toMatch(/changed the payout account to \S+/);
     expect(payout.json.items[0].actor).toMatchObject({ type: "user", email: "founder@gamma.test" });
     const csv = await owner.get("/v1/audit?format=csv&action=invite.sent");
     expect(csv.headers.get("content-type")).toMatch(/text\/csv/);
@@ -789,10 +789,10 @@ describe("carry-over API changes", () => {
     expect(cleared.json.expires_at).toBeNull();
 
     // The public link shows the customer-borne fee per method, and a quote for a fixed amount; no platform economics.
-    await owner.req("PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "deposit", fee_fixed: "50000", bearer: "customer" }, { method: "wallet", fee_bps: 30, bearer: "merchant" }] });
+    await owner.req("PUT", `/v1/merchants/${merchantA}/methods`, { methods: [{ method: "voucher", fee_fixed: "50000", bearer: "customer" }, { method: "wallet", enabled: true }] });
     const pub = (await new Browser(() => node.url).get(`/v1/links/public/${cleared.json.slug}`)).json;
-    const dep = pub.methods.find((m: { method: string }) => m.method === "deposit");
-    expect(dep).toMatchObject({ enabled: true, surcharge_bps: 0, surcharge_fixed: "50000", quote: { amount: "1000000", surcharge: "50000", amount_due: "1050000" } });
+    const voucher = pub.methods.find((m: { method: string }) => m.method === "voucher");
+    expect(voucher).toMatchObject({ enabled: true, surcharge_bps: 0, surcharge_fixed: "50000", quote: { amount: "1000000", surcharge: "50000", amount_due: "1050000" } });
     expect(pub.methods.find((m: { method: string }) => m.method === "wallet")).toMatchObject({ surcharge_bps: 0, surcharge_fixed: "0", quote: { amount_due: "1000000" } });
     expect(JSON.stringify(pub)).not.toMatch(/platform_fee|net_amount|fee_recipient/);
 
@@ -803,14 +803,14 @@ describe("carry-over API changes", () => {
     expect((await owner.get("/v1/auth/session")).json.platform.name).toBe("Acme Payments");
 
     const info = (await owner.get("/v1/info")).json;
-    expect(info.network.rpc_url).toBe(anvil.rpcUrl);
+    expect(info.network.rpc_url).toBe("http://127.0.0.1:1");
 
-    await owner.post("/v1/screening/deny-list", { address: PAYOUT_B.address }, { "merchant-id": merchantA });
+    await owner.post("/v1/screening/deny-list", { address: PAYOUT_B.account }, { "merchant-id": merchantA });
     const view = await new Browser(() => node.url).get(`/v1/payments`);
     expect(view.status).toBe(401);
-    await expect(node.services.gateway!.screening.check({ merchantId: merchantA, stage: "authorize", payout: PAYOUT.address, payer: PAYOUT_B.address })).rejects.toThrow();
+    expect(() => node.services.gateway!.screening.check({ merchantId: merchantA, stage: "voucher", payout: PAYOUT.account, payer: PAYOUT_B.account })).toThrow(/blocks this payer/);
     const dec = (await owner.get("/v1/screening/decisions", { "merchant-id": merchantA })).json.items[0];
-    expect(dec.message).toBe("This wallet is on your blocked list");
+    expect(dec).toMatchObject({ rule: "PAYER_DENIED", stage: "voucher", payer: PAYOUT_B.account, message: "This account is on your blocked list" });
 
     const wh = await owner.post("/v1/webhooks", { url: "http://127.0.0.1:9/hook", events: ["*"] }, { "merchant-id": merchantA });
     expect(wh.status).toBe(201);
@@ -829,7 +829,6 @@ describe("auth rate limits and break-glass", () => {
   it("limits auth requests per IP and accepts the recovery key after setup with break-glass, audited", async () => {
     n2 = await startNode(
       testConfig({
-        rpcUrl: anvil.rpcUrl,
         hub,
         token,
         dbPath: tmp2.dbPath,
@@ -837,7 +836,7 @@ describe("auth rate limits and break-glass", () => {
         gateway: gatewayCfg,
         auth: { scryptLogN: 12, rateLimitPerMin: 3, breakGlass: true, dashboardUrl: "https://pay.example.com" },
       }),
-      { logger: createLogger({ sink: () => {} }), port: 0, workers: false },
+      { logger: createLogger({ sink: () => {} }), port: 0, workers: false, chain: fakeChain, nearRpc: rpc },
     );
     const b = new Browser(() => n2.url, "https://pay.example.com");
     const setup = await b.post("/v1/setup", { code: ADMIN, name: "O", email: "o@example.com", password: OWNER_PW });

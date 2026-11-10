@@ -4,25 +4,32 @@
  * payminto-agent ops "<question>"      ops agent: answers from the merchant MCP server (business API key)
  * payminto-agent serve                 agent service: POST /v1/runs hands the buyer agent a task over HTTP
  * payminto-agent serve-skill market-brief
- *                                      seller agent: the HashKey market brief, sold per call behind the paywall
+ *                                      seller agent: the NEAR market brief, sold per call behind the paywall
+ * payminto-agent market work           seller agent on the NEAR AI Agent Market: takes jobs, buys its inputs through
+ *                                      its Budget under a ceiling per job, and lists their receipts (--dry-run needs
+ *                                      no account)
  *
  * Progress goes to stderr; stdout carries the answer and spend report (or JSON with --json).
  */
+import { AgentKeyFileError, defaultAgentKeyPath, writeAgentKeyFile } from "@payminto/sdk";
 import { runBuyerTask, runOpsTask } from "./agents.ts";
 import { AgentConfigError, limitsFromEnv, MissingApiKeyError, modelFromEnv, parseMcpSpec, serviceConfig } from "./config.ts";
 import type { McpServerSpec } from "./mcp.ts";
+import { marketWork } from "./market.ts";
 import { renderRun, type RunEvent, type RunLimits, type RunResult } from "./runtime.ts";
 import { serveMarketBrief } from "./serve-skill.ts";
 import { createAgentService, listen } from "./service.ts";
 
 const USAGE = `Usage:
+  payminto-agent keygen [--out <path>] [--force]
   payminto-agent run "<task>" [--json] [--max-spend <base units>] [--max-turns <n>] [--mcp <url|command>]
   payminto-agent ops "<question>" [--json] [--max-turns <n>]
   payminto-agent serve
   payminto-agent serve-skill market-brief
+  payminto-agent market work [--dry-run] [--ceiling <usdc>] [--assignment <file.json>] [--receipts-dir <dir>] [--once] [--json]
 
 Environment: see apps/agent/README.md (PAYMINTO_AGENT_PROVIDER, ANTHROPIC_API_KEY or the provider's key, PAYMINTO_AGENT_MODEL,
-PAYMINTO_AGENT_BASE_URL, NODE_URL, AGENT_KEY, MANDATE_ID, ...).`;
+PAYMINTO_AGENT_BASE_URL, NODE_URL, AGENT_KEY_FILE, BUDGET_ID, ...).`;
 
 const err = (s: string) => process.stderr.write(`${s}\n`);
 const log = (s: string) => err(`[payminto-agent] ${s}`);
@@ -71,11 +78,45 @@ function limitsOf(f: Flags, base: RunLimits): Partial<RunLimits> {
   return { ...base, ...(f.maxSpend !== undefined ? { maxSpendAtomic: f.maxSpend } : {}), ...(f.maxTurns ? { maxTurns: f.maxTurns } : {}) };
 }
 
+/**
+ * Writes a new agent key (mode 0600, directory 0700) and prints only its public key on stdout, for the owner to put in
+ * a Budget. The secret never reaches stdout, stderr or any environment variable.
+ */
+function keygen(argv: string[]): number {
+  let out: string | undefined;
+  let force = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--force") force = true;
+    else if (a === "--out") {
+      out = argv[++i];
+      if (!out) throw new AgentConfigError(["--out: needs a path"]);
+    } else throw new AgentConfigError([`keygen: unknown argument ${a}`]);
+  }
+  try {
+    const k = writeAgentKeyFile(out ?? defaultAgentKeyPath(process.env), { force });
+    process.stdout.write(`${k.publicKey}\n`);
+    log(`agent key written to ${k.path} (mode 0600). Put the public key above in the agent's Budget; the wallet reads the file through AGENT_KEY_FILE.`);
+    return 0;
+  } catch (e) {
+    if (e instanceof AgentKeyFileError) throw new AgentConfigError([`keygen: ${e.message}`]);
+    throw e;
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
     process.stdout.write(`${USAGE}\n`);
     return cmd ? 0 : 2;
+  }
+  if (cmd === "keygen") return keygen(rest);
+  if (cmd === "market") {
+    const stop = new AbortController();
+    process.once("SIGINT", () => stop.abort());
+    process.once("SIGTERM", () => stop.abort());
+    // INIT_CWD is where `pnpm agent ...` was typed: receipt files go under it, where the proof command looks for them.
+    return marketWork(rest, process.env, { out: (s) => process.stdout.write(`${s}\n`), log, signal: stop.signal, cwd: process.env.INIT_CWD ?? process.cwd() });
   }
   const f = parseFlags(rest);
   const { effort, ...base } = limitsFromEnv(process.env);
@@ -113,7 +154,7 @@ async function main(argv: string[]): Promise<number> {
     const skill = f.positional[0];
     if (skill !== "market-brief") throw new AgentConfigError([`serve-skill: unknown skill ${skill ?? "(none)"}; the available skill is market-brief`]);
     const s = await serveMarketBrief(process.env, log);
-    log(`HashKey market brief on ${s.url} (provider ${s.providerId}, seller ${s.seller}, price ${s.price} base units)`);
+    log(`NEAR market brief on ${s.url} (provider ${s.providerId}, seller ${s.seller}, price ${s.price} base units)`);
     await new Promise<void>((r) => abort.signal.addEventListener("abort", () => r(), { once: true }));
     await s.close();
     return 0;

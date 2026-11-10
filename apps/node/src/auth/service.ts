@@ -1,4 +1,3 @@
-import { zeroAddress } from "viem";
 import type { Database } from "../db/database.ts";
 import { ApiError } from "../errors.ts";
 import type { Logger } from "../logger.ts";
@@ -37,7 +36,6 @@ export type AuthSettings = {
   rotateGraceSec: number;
   stepUpSec: number;
   platformName: string;
-  chainId: number;
 };
 
 export const DEFAULT_SESSION = {
@@ -774,7 +772,7 @@ export class AuthService {
   #approve(req: SignupRequestRow, by: AuditActor | null, client: Client) {
     if (!this.merchants) throw new ApiError(409, "GATEWAY_DISABLED", "businesses need the gateway");
     const user = this.user(req.user_id)!;
-    const m = this.merchants.create({ name: req.business_name, payout: zeroAddress, payoutUnset: true, signature: null, signedAt: null, support_email: user.email });
+    const m = this.merchants.create({ name: req.business_name, payout: null, proof: null, support_email: user.email });
     this.#db.run("INSERT INTO memberships (user_id, merchant_id, role, created_at) VALUES (?, ?, 'admin', ?)", user.id, m.id, nowIso());
     this.#db.run("UPDATE users SET status = 'active', last_business_id = ?, updated_at = ? WHERE id = ?", m.id, nowIso(), user.id);
     this.#db.run("UPDATE signup_requests SET status = 'approved', merchant_id = ?, decided_at = ?, decided_by = ? WHERE id = ?", m.id, nowIso(), by?.id ?? "system", req.id);

@@ -1,31 +1,29 @@
-import { getAddress, type Address, type Hex } from "viem";
-import { explorerTx, type Policy } from "@payminto/protocol";
+import { explorerTx, type AccountId as Address, type Id32 as Hex, type Network, type Policy, type PublicKey, type Sig64 } from "@payminto/protocol";
 import type { Database } from "./db/database.ts";
 
 // ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
 
-export type MandateRow = {
+export type BudgetRow = {
   id: Hex;
   owner: Address;
-  agent: Address;
-  token: Address;
-  total_cap: string;
-  valid_after: number;
-  valid_until: number;
-  payees_root: Hex;
+  /** The agent's ed25519 public key. */
+  agent: PublicKey;
+  settler: Address;
+  cap: string;
+  /** Unix milliseconds, as the hub stores it. */
+  valid_until_ms: number;
   policy_hash: Hex;
   salt: Hex;
-  owner_signature: Hex;
   policy: string;
   payees: string;
   label: string;
   status: "pending" | "open" | "revoked";
-  open_tx_hash: Hex | null;
+  open_tx_hash: string | null;
   revoked_at: string | null;
   revoked_by: string | null;
-  revoke_tx_hash: Hex | null;
+  revoke_tx_hash: string | null;
   created_at: string;
 };
 
@@ -44,30 +42,74 @@ export type ProviderRow = {
 export type CallRow = {
   seq: number;
   call_id: Hex;
-  mandate_id: Hex;
-  agent: Address;
+  budget_id: Hex;
+  agent: PublicKey;
   payee: Address;
   provider_id: string;
   amount: string;
   cumulative: string;
   request_hash: Hex;
-  agent_signature: Hex;
+  agent_signature: Sig64;
   timestamp: number;
+  /** `nodeDigest` of this call, which the node signed. Not a Merkle leaf: the leaf needs the batch id. */
   leaf: Hex;
-  node_signature: Hex;
+  node_signature: Sig64;
   status: "accepted" | "settling" | "settled";
   batch_seq: number | null;
   proof: string | null;
   accepted_at: string;
+  /** 0 for the first or only voucher of a request; later vouchers of a split request count up (migration 002). */
+  request_part: number;
+  /** Set when the payee settled this call itself on the hub (`settle_own`): settled, in no batch, with no Merkle proof. */
+  seller_settlement_seq: number | null;
 };
+
+/** What a payee settled itself on the hub for one (Budget, payee) pair, as the node found and booked it (migration 003). */
+export type SellerSettlementRow = {
+  seq: number;
+  id: string;
+  budget_id: Hex;
+  payee: Address;
+  previous: string;
+  cumulative: string;
+  delta: string;
+  uncleared: string;
+  calls: number;
+  detected_at: string;
+};
+
+export function sellerSettlementJson(r: SellerSettlementRow) {
+  return {
+    id: r.id,
+    budgetId: r.budget_id,
+    payee: r.payee,
+    /** The settled position before and after, atomic units. */
+    previous: r.previous,
+    cumulative: r.cumulative,
+    /** What the hub moved from the Budget's escrow to the payee's credit. */
+    amount: r.delta,
+    /** The part of `amount` above what this node had accepted: a voucher the agent signed that the node never cleared. */
+    uncleared: r.uncleared,
+    calls: r.calls,
+  };
+}
+export type SellerSettlementJson = ReturnType<typeof sellerSettlementJson>;
+
+/** How a settled call was settled: in one of this node's batches, or by its payee with `settle_own`. Null until settled. */
+export type SettledBy = "batch" | "seller" | null;
+
+export function settledByOf(r: Pick<CallRow, "status" | "seller_settlement_seq">): SettledBy {
+  if (r.status !== "settled") return null;
+  return r.seller_settlement_seq !== null ? "seller" : "batch";
+}
 
 export type DenialRow = {
   seq: number;
   id: string;
   rule: string;
   message: string;
-  mandate_id: Hex;
-  agent: Address | null;
+  budget_id: Hex;
+  agent: PublicKey | null;
   payee: Address;
   provider_id: string;
   amount: string;
@@ -76,12 +118,18 @@ export type DenialRow = {
   details: string;
   timestamp: number;
   at: string;
-  /** How many identical denials this row stands for (migration 002). */
+  /** How many identical denials this row stands for. */
   repeats: number;
   last_seen: number | null;
+  /**
+   * The refused voucher's signature by the Budget's agent key (migration 004). Null only on rows recorded before the
+   * node checked the signature first: those are never signed or returned to an agent as the node's record.
+   */
+  agent_signature: Sig64 | null;
 };
 
-export type BatchStatus = "building" | "cosigning" | "submitted" | "included" | "confirmed" | "failed";
+/** `unknown`: the send failed without a verdict; its calls are queued again and the batch is adopted if the hub has it. */
+export type BatchStatus = "building" | "submitted" | "confirmed" | "failed" | "unknown";
 
 export type BatchRow = {
   seq: number;
@@ -97,38 +145,30 @@ export type BatchRow = {
   projected_gross: string;
   projected_net: string;
   reconciled: number | null;
-  tx_hash: Hex | null;
-  block_number: number | null;
-  gas_used: string | null;
-  gas_price: string | null;
+  tx_hash: string | null;
   error: string | null;
   trigger: string;
   created_at: string;
   submitted_at: string | null;
   confirmed_at: string | null;
-  l1_fee: string | null;
-  included_at: string | null;
-  block_hash: Hex | null;
-  tx_nonce: number | null;
-  raw_tx: Hex | null;
-  replacements: number;
-  attestation_uid: Hex | null;
-  attestation_tx: Hex | null;
 };
 
 export type BatchClaimRow = {
   batch_seq: number;
   idx: number;
-  mandate_id: Hex;
-  agent: Address;
+  budget_id: Hex;
+  agent: PublicKey;
   payee: Address;
   cumulative: string;
   previous: string;
   delta: string;
+  amount: string;
+  request_hash: Hex;
   calls: number;
-  agent_signature: Hex;
-  payee_proof: string;
+  agent_signature: Sig64;
 };
+
+export type BatchNetRow = { batch_seq: number; account: Address; debit: string; credit: string };
 
 export type NetTransferRow = {
   batch_seq: number;
@@ -136,38 +176,8 @@ export type NetTransferRow = {
   from_addr: Address;
   to_addr: Address;
   amount: string;
-  log_index: number | null;
 };
 
-/** PENDING = waiting for the debtor co-signature; COSIGNED = signed, not yet settled through HSP. */
-export type HspStatus = "PENDING" | "COSIGNED" | "UNSIGNED" | "SUBMITTED" | "ACCEPT" | "REJECT" | "SETTLED" | "FAILED";
-
-export type HspRow = {
-  id: Hex;
-  batch_seq: number;
-  transfer_idx: number;
-  payer: Address;
-  recipient: Address;
-  token: Address;
-  amount: string;
-  deadline: number;
-  body: string;
-  required_caps: string;
-  calls: string;
-  signer_proof: Hex | null;
-  status: HspStatus;
-  satisfied_caps: string | null;
-  receipt: string | null;
-  coordinator_id: string | null;
-  coordinator_status: string | null;
-  tx_hash: Hex | null;
-  log_index: number | null;
-  error: string | null;
-  attempts: number;
-  next_attempt_at: number | null;
-  created_at: string;
-  updated_at: string;
-};
 
 export type LedgerEntryRow = {
   id: number;
@@ -189,7 +199,7 @@ export function callJson(r: CallRow, batchId: Hex | null = null) {
   return {
     id: r.call_id,
     seq: r.seq,
-    mandateId: r.mandate_id,
+    budgetId: r.budget_id,
     agent: r.agent,
     payee: r.payee,
     providerId: r.provider_id,
@@ -199,6 +209,8 @@ export function callJson(r: CallRow, batchId: Hex | null = null) {
     timestamp: r.timestamp,
     createdAt: r.accepted_at,
     status: r.status,
+    /** "batch" or "seller" once settled. A call its payee settled itself has no batch and no Merkle proof. */
+    settledBy: settledByOf(r),
     batchId,
     leaf: r.leaf,
   };
@@ -210,7 +222,7 @@ export function denialJson(r: DenialRow) {
     id: r.id,
     rule: r.rule,
     message: r.message,
-    mandateId: r.mandate_id,
+    budgetId: r.budget_id,
     agent: r.agent,
     payee: r.payee,
     providerId: r.provider_id,
@@ -239,41 +251,40 @@ export function providerPublicJson(r: ProviderRow, calls24h: number) {
   };
 }
 
-export function mandateStatus(r: MandateRow, nowSec: number): "pending" | "open" | "revoked" | "expired" {
-  if (r.status === "open" && nowSec > r.valid_until) return "expired";
+export function budgetStatus(r: BudgetRow, nowSec: number): "pending" | "open" | "revoked" | "expired" {
+  if (r.status === "open" && nowSec * 1000 > r.valid_until_ms) return "expired";
   return r.status;
 }
 
 export type Spend = { settled: string; pending: string; total: string; today: string; remaining: string };
 
-export function mandateSummaryJson(
-  r: MandateRow,
+export function budgetSummaryJson(
+  r: BudgetRow,
   spend: Spend,
   callCount: number,
   nowSec: number,
-  funds: { balance: bigint; allowance: bigint } | null = null,
+  funds: { escrow: bigint; credit: bigint } | null = null,
 ) {
   return {
     id: r.id,
     label: r.label,
-    status: mandateStatus(r, nowSec),
-    /** The signed on-chain mandate (MandateJson). */
-    mandate: {
+    status: budgetStatus(r, nowSec),
+    /** The Budget terms as the hub hashes them. `validUntil` is Unix milliseconds. */
+    budget: {
       owner: r.owner,
-      agent: r.agent,
-      token: r.token,
-      totalCap: r.total_cap,
-      validAfter: String(r.valid_after),
-      validUntil: String(r.valid_until),
-      payeesRoot: r.payees_root,
+      agentPk: r.agent,
+      settler: r.settler,
+      cap: r.cap,
+      validUntil: String(r.valid_until_ms),
+      payees: JSON.parse(r.payees) as Address[],
       policyHash: r.policy_hash,
       salt: r.salt,
     },
     owner: r.owner,
     agent: r.agent,
-    token: r.token,
-    totalCap: r.total_cap,
-    expiresAt: new Date(r.valid_until * 1000).toISOString(),
+    settler: r.settler,
+    cap: r.cap,
+    expiresAt: new Date(r.valid_until_ms).toISOString(),
     payees: JSON.parse(r.payees) as Address[],
     policy: JSON.parse(r.policy) as Policy,
     openTxHash: r.open_tx_hash,
@@ -281,14 +292,14 @@ export function mandateSummaryJson(
     createdAt: r.created_at,
     spend,
     calls: callCount,
-    /** Last observed agent wallet balance and hub allowance (atomic units); null until first read. */
-    agentBalance: funds ? funds.balance.toString() : null,
-    agentAllowance: funds ? funds.allowance.toString() : null,
+    /** Last observed escrow, and the owner's withdrawable credit (atomic units); null until first read. */
+    escrow: funds ? funds.escrow.toString() : null,
+    ownerCredit: funds ? funds.credit.toString() : null,
   };
 }
-export type MandateSummaryJson = ReturnType<typeof mandateSummaryJson>;
+export type BudgetSummaryJson = ReturnType<typeof budgetSummaryJson>;
 
-export function batchSummaryJson(r: BatchRow, chainId: number) {
+export function batchSummaryJson(r: BatchRow, network: Network) {
   return {
     id: r.batch_id,
     seq: r.seq,
@@ -306,55 +317,16 @@ export function batchSummaryJson(r: BatchRow, chainId: number) {
     compression: r.status === "confirmed" && r.transfers > 0 ? r.calls / r.transfers : null,
     reconciled: r.reconciled === null ? null : r.reconciled === 1,
     txHash: r.tx_hash,
-    explorerUrl: r.tx_hash ? explorerTx(chainId, r.tx_hash) : null,
-    blockNumber: r.block_number,
-    gasUsed: r.gas_used,
-    /** OP Stack L1 data fee paid by the settlement transaction (wei); null until included or off OP Stack chains. */
-    l1Fee: r.l1_fee,
-    /** Same-nonce fee bumps sent before the transaction was included. */
-    replacements: r.replacements,
+    explorerUrl: r.tx_hash ? explorerTx(network, r.tx_hash) : null,
     error: r.error,
     trigger: r.trigger,
     createdAt: r.created_at,
     submittedAt: r.submitted_at,
-    /** One confirmation; `confirmedAt` follows once the block is at or below the configured finality head. */
-    includedAt: r.included_at,
     confirmedAt: r.confirmed_at,
-    /** EAS attestation of the confirmed batch, when EAS_ATTEST=true. */
-    attestation: r.attestation_uid
-      ? { uid: r.attestation_uid, txHash: r.attestation_tx, explorerUrl: r.attestation_tx ? explorerTx(chainId, r.attestation_tx) : null }
-      : null,
   };
 }
 export type BatchSummaryJson = ReturnType<typeof batchSummaryJson>;
 
-export function hspJson(r: HspRow, batchId: Hex) {
-  return {
-    paymentId: r.id,
-    batchId,
-    transferIndex: r.transfer_idx,
-    payer: r.payer,
-    recipient: r.recipient,
-    token: r.token,
-    amount: r.amount,
-    deadline: r.deadline,
-    status: r.status,
-    cosigned: r.signer_proof !== null,
-    /** Why the record is not (yet) ACCEPT/SETTLED, when known. */
-    reason: r.error,
-    requiredCapabilities: JSON.parse(r.required_caps) as string[],
-    satisfiedCapabilities: r.satisfied_caps ? (JSON.parse(r.satisfied_caps) as string[]) : [],
-    receipt: r.receipt ? (JSON.parse(r.receipt) as Record<string, unknown>) : null,
-    coordinatorId: r.coordinator_id,
-    coordinatorStatus: r.coordinator_status,
-    txHash: r.tx_hash,
-    logIndex: r.log_index,
-    attempts: r.attempts,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-  };
-}
-export type HspJson = ReturnType<typeof hspJson>;
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -376,27 +348,27 @@ export class Store {
     this.db.run("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value);
   }
 
-  // mandates
-  mandate(id: string): MandateRow | undefined {
-    return this.db.get<MandateRow>("SELECT * FROM mandates WHERE id = ?", id.toLowerCase());
+  // budgets
+  budget(id: string): BudgetRow | undefined {
+    return this.db.get<BudgetRow>("SELECT * FROM budgets WHERE id = ?", id.toLowerCase());
   }
-  mandates(): MandateRow[] {
-    return this.db.all<MandateRow>("SELECT * FROM mandates ORDER BY created_at DESC");
+  budgets(): BudgetRow[] {
+    return this.db.all<BudgetRow>("SELECT * FROM budgets ORDER BY created_at DESC");
   }
 
-  spendOf(m: MandateRow, nowSec: number): Spend {
+  spendOf(m: BudgetRow, nowSec: number): Spend {
     const pos = this.db.get<{ total: string; settled: string }>(
-      "SELECT bigsum(cumulative) AS total, bigsum(settled) AS settled FROM positions WHERE mandate_id = ?",
+      "SELECT bigsum(cumulative) AS total, bigsum(settled) AS settled FROM positions WHERE budget_id = ?",
       m.id,
     )!;
     const today = this.db.get<{ s: string }>(
-      "SELECT bigsum(amount) AS s FROM calls WHERE mandate_id = ? AND timestamp > ?",
+      "SELECT bigsum(amount) AS s FROM calls WHERE budget_id = ? AND timestamp > ?",
       m.id,
       nowSec - 86_400,
     )!.s;
     const total = BigInt(pos.total);
     const settled = BigInt(pos.settled);
-    const cap = BigInt(m.total_cap);
+    const cap = BigInt(m.cap);
     return {
       settled: settled.toString(),
       pending: (total - settled).toString(),
@@ -406,21 +378,21 @@ export class Store {
     };
   }
 
-  callCount(mandateId: string): number {
-    return this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM calls WHERE mandate_id = ?", mandateId)!.n;
+  callCount(budgetId: string): number {
+    return this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM calls WHERE budget_id = ?", budgetId)!.n;
   }
 
-  mandateSummary(m: MandateRow, nowSec: number): MandateSummaryJson {
-    return mandateSummaryJson(m, this.spendOf(m, nowSec), this.callCount(m.id), nowSec, this.funds(m.agent, m.token));
+  budgetSummary(m: BudgetRow, nowSec: number): BudgetSummaryJson {
+    return budgetSummaryJson(m, this.spendOf(m, nowSec), this.callCount(m.id), nowSec, this.budgetFunds(m.id));
   }
 
   /** Daily accepted spend for the last `days` days (UTC), oldest first. */
-  spendSeries(mandateId: string, nowSec: number, days = 14): Array<{ day: string; amount: string; calls: number }> {
+  spendSeries(budgetId: string, nowSec: number, days = 14): Array<{ day: string; amount: string; calls: number }> {
     const dayStart = Math.floor(nowSec / 86_400) * 86_400;
     const from = dayStart - (days - 1) * 86_400;
     const rows = this.db.all<{ d: number; amount: string; calls: number }>(
-      "SELECT (timestamp / 86400) * 86400 AS d, bigsum(amount) AS amount, COUNT(*) AS calls FROM calls WHERE mandate_id = ? AND timestamp >= ? GROUP BY d",
-      mandateId.toLowerCase(),
+      "SELECT (timestamp / 86400) * 86400 AS d, bigsum(amount) AS amount, COUNT(*) AS calls FROM calls WHERE budget_id = ? AND timestamp >= ? GROUP BY d",
+      budgetId.toLowerCase(),
       from,
     );
     const byDay = new Map(rows.map((r) => [r.d, r]));
@@ -432,12 +404,12 @@ export class Store {
   }
 
   /** Accepted spend per minute for the last `minutes` minutes, oldest first, so a live demo shows its curve. */
-  spendRecent(mandateId: string, nowSec: number, minutes = 30): Array<{ at: string; amount: string; calls: number }> {
+  spendRecent(budgetId: string, nowSec: number, minutes = 30): Array<{ at: string; amount: string; calls: number }> {
     const end = Math.floor(nowSec / 60) * 60;
     const from = end - (minutes - 1) * 60;
     const rows = this.db.all<{ m: number; amount: string; calls: number }>(
-      "SELECT (timestamp / 60) * 60 AS m, bigsum(amount) AS amount, COUNT(*) AS calls FROM calls WHERE mandate_id = ? AND timestamp >= ? GROUP BY m",
-      mandateId.toLowerCase(),
+      "SELECT (timestamp / 60) * 60 AS m, bigsum(amount) AS amount, COUNT(*) AS calls FROM calls WHERE budget_id = ? AND timestamp >= ? GROUP BY m",
+      budgetId.toLowerCase(),
       from,
     );
     const byMinute = new Map(rows.map((r) => [r.m, r]));
@@ -455,18 +427,19 @@ export class Store {
   providerByKeyHash(hash: string): ProviderRow | undefined {
     return this.db.get<ProviderRow>("SELECT * FROM providers WHERE api_key_hash = ?", hash);
   }
+  /** The paid services agents can call. The gateway's own rows (category `gateway`), which merchant payments clear against, are not services. */
   providers(): ProviderRow[] {
-    return this.db.all<ProviderRow>("SELECT * FROM providers ORDER BY created_at, id");
+    return this.db.all<ProviderRow>("SELECT * FROM providers WHERE category <> 'gateway' ORDER BY created_at, id");
   }
   providerCalls24h(id: string, nowSec: number): number {
     return this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM calls WHERE provider_id = ? AND timestamp > ?", id, nowSec - 86_400)!.n;
   }
 
   // positions
-  position(mandateId: string, payee: Address): { cumulative: bigint; settled: bigint } {
+  position(budgetId: string, payee: Address): { cumulative: bigint; settled: bigint } {
     const r = this.db.get<{ cumulative: string; settled: string }>(
-      "SELECT cumulative, settled FROM positions WHERE mandate_id = ? AND payee = ?",
-      mandateId,
+      "SELECT cumulative, settled FROM positions WHERE budget_id = ? AND payee = ?",
+      budgetId,
       payee,
     );
     return { cumulative: BigInt(r?.cumulative ?? "0"), settled: BigInt(r?.settled ?? "0") };
@@ -486,14 +459,14 @@ export class Store {
     return callJson(r, this.batchIdOfSeq(r.batch_seq));
   }
 
-  listCalls(f: { mandateId?: string; payee?: string; status?: string; providerId?: string; batchSeq?: number; limit: number; cursor?: number }): {
+  listCalls(f: { budgetId?: string; payee?: string; status?: string; providerId?: string; batchSeq?: number; limit: number; cursor?: number }): {
     items: CallJson[];
     nextCursor: string | null;
   } {
     const where: string[] = [];
     const params: Array<string | number> = [];
-    if (f.mandateId) (where.push("c.mandate_id = ?"), params.push(f.mandateId.toLowerCase()));
-    if (f.payee) (where.push("c.payee = ?"), params.push(getAddress(f.payee)));
+    if (f.budgetId) (where.push("c.budget_id = ?"), params.push(f.budgetId.toLowerCase()));
+    if (f.payee) (where.push("c.payee = ?"), params.push(f.payee));
     if (f.status) (where.push("c.status = ?"), params.push(f.status));
     if (f.providerId) (where.push("c.provider_id = ?"), params.push(f.providerId));
     if (f.batchSeq !== undefined) (where.push("c.batch_seq = ?"), params.push(f.batchSeq));
@@ -512,11 +485,23 @@ export class Store {
   }
 
   // denials
-  listDenials(f: { limit: number; mandateId?: string }): DenialJson[] {
-    const rows = f.mandateId
-      ? this.db.all<DenialRow>("SELECT * FROM denials WHERE mandate_id = ? ORDER BY seq DESC LIMIT ?", f.mandateId.toLowerCase(), f.limit)
+  listDenials(f: { limit: number; budgetId?: string }): DenialJson[] {
+    const rows = f.budgetId
+      ? this.db.all<DenialRow>("SELECT * FROM denials WHERE budget_id = ? ORDER BY seq DESC LIMIT ?", f.budgetId.toLowerCase(), f.limit)
       : this.db.all<DenialRow>("SELECT * FROM denials ORDER BY seq DESC LIMIT ?", f.limit);
     return rows.map(denialJson);
+  }
+
+  /**
+   * The refusals of one request of a Budget that the node recorded for a voucher the agent signed, newest first.
+   * What an agent reads to confirm a refusal a seller relayed.
+   */
+  refusalsOf(f: { budgetId: string; requestHash: string; payee?: string; cumulative?: string; limit: number }): DenialRow[] {
+    const where = ["budget_id = ?", "request_hash = ?", "agent_signature IS NOT NULL"];
+    const params: Array<string | number> = [f.budgetId.toLowerCase(), f.requestHash.toLowerCase()];
+    if (f.payee !== undefined) (where.push("payee = ?"), params.push(f.payee));
+    if (f.cumulative !== undefined) (where.push("cumulative = ?"), params.push(f.cumulative));
+    return this.db.all<DenialRow>(`SELECT * FROM denials WHERE ${where.join(" AND ")} ORDER BY seq DESC LIMIT ?`, ...params, f.limit);
   }
 
   // batches
@@ -530,33 +515,18 @@ export class Store {
   batchClaims(seq: number): BatchClaimRow[] {
     return this.db.all<BatchClaimRow>("SELECT * FROM batch_claims WHERE batch_seq = ? ORDER BY idx", seq);
   }
+  batchNet(seq: number): BatchNetRow[] {
+    return this.db.all<BatchNetRow>("SELECT * FROM batch_net WHERE batch_seq = ? ORDER BY account", seq);
+  }
   netTransfers(seq: number): NetTransferRow[] {
     return this.db.all<NetTransferRow>("SELECT * FROM net_transfers WHERE batch_seq = ? ORDER BY idx", seq);
   }
-  hspOfBatch(seq: number): HspRow[] {
-    return this.db.all<HspRow>("SELECT * FROM hsp_payments WHERE batch_seq = ? ORDER BY transfer_idx", seq);
-  }
-  hsp(id: string): HspRow | undefined {
-    return this.db.get<HspRow>("SELECT * FROM hsp_payments WHERE id = ?", id.toLowerCase());
-  }
-  hspJsonOf(r: HspRow): HspJson {
-    return hspJson(r, this.batchIdOfSeq(r.batch_seq)!);
-  }
-  updateHsp(id: Hex, fields: Partial<Omit<HspRow, "id">>): HspRow {
-    const keys = Object.keys(fields) as Array<keyof typeof fields>;
-    const sets = [...keys.map((k) => `${k} = ?`), "updated_at = ?"].join(", ");
-    const values = keys.map((k) => fields[k] as string | number | null);
-    this.db.run(`UPDATE hsp_payments SET ${sets} WHERE id = ?`, ...values, nowIso(), id);
-    return this.hsp(id)!;
-  }
-
-  batchDetailJson(b: BatchRow, chainId: number) {
-    const hsp = new Map(this.hspOfBatch(b.seq).map((h) => [h.transfer_idx, h]));
+  batchDetailJson(b: BatchRow, network: Network) {
     return {
-      ...batchSummaryJson(b, chainId),
+      ...batchSummaryJson(b, network),
       claimList: this.batchClaims(b.seq).map((c) => ({
         index: c.idx,
-        mandateId: c.mandate_id,
+        budgetId: c.budget_id,
         agent: c.agent,
         payee: c.payee,
         cumulative: c.cumulative,
@@ -564,17 +534,8 @@ export class Store {
         delta: c.delta,
         calls: c.calls,
       })),
-      netTransfers: this.netTransfers(b.seq).map((t) => {
-        const h = hsp.get(t.idx);
-        return {
-          index: t.idx,
-          from: t.from_addr,
-          to: t.to_addr,
-          amount: t.amount,
-          logIndex: t.log_index,
-          hsp: h ? hspJson(h, b.batch_id) : null,
-        };
-      }),
+      netTransfers: this.netTransfers(b.seq).map((t) => ({ index: t.idx, from: t.from_addr, to: t.to_addr, amount: t.amount })),
+      net: this.batchNet(b.seq).map((n) => ({ account: n.account, debit: n.debit, credit: n.credit })),
       callList: this.listCalls({ batchSeq: b.seq, limit: 1000 }).items,
     };
   }
@@ -585,47 +546,44 @@ export class Store {
     this.db.run(`UPDATE batches SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE seq = ?`, ...values, seq);
   }
 
-  // funds
-  funds(address: Address, token: Address): { balance: bigint; allowance: bigint; refreshedAt: number } | null {
-    const r = this.db.get<{ balance: string; allowance: string; refreshed_at: number }>(
-      "SELECT balance, allowance, refreshed_at FROM wallet_funds WHERE address = ? AND token = ?",
-      getAddress(address),
-      getAddress(token),
-    );
-    return r ? { balance: BigInt(r.balance), allowance: BigInt(r.allowance), refreshedAt: r.refreshed_at } : null;
+  // seller settlements
+  sellerSettlement(seq: number): SellerSettlementRow | undefined {
+    return this.db.get<SellerSettlementRow>("SELECT * FROM seller_settlements WHERE seq = ?", seq);
   }
-  setFunds(address: Address, token: Address, balance: bigint, allowance: bigint): void {
+
+  // funds
+  budgetFunds(budgetId: string): { escrow: bigint; credit: bigint; refreshedAt: number } | null {
+    const r = this.db.get<{ escrow: string; credit: string; refreshed_at: number }>("SELECT escrow, credit, refreshed_at FROM budget_funds WHERE budget_id = ?", budgetId);
+    return r ? { escrow: BigInt(r.escrow), credit: BigInt(r.credit), refreshedAt: r.refreshed_at } : null;
+  }
+  setBudgetFunds(budgetId: string, escrow: bigint, credit: bigint, refreshedAtMs: number = Date.now()): void {
     this.db.run(
-      `INSERT INTO wallet_funds (address, token, balance, allowance, refreshed_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (address, token) DO UPDATE SET balance = excluded.balance, allowance = excluded.allowance, refreshed_at = excluded.refreshed_at`,
-      getAddress(address),
-      getAddress(token),
-      balance.toString(),
-      allowance.toString(),
-      Date.now(),
+      `INSERT INTO budget_funds (budget_id, escrow, credit, refreshed_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (budget_id) DO UPDATE SET escrow = excluded.escrow, credit = excluded.credit, refreshed_at = excluded.refreshed_at`,
+      budgetId,
+      escrow.toString(),
+      credit.toString(),
+      refreshedAtMs,
     );
   }
 
-  /** Accepted-unsettled debits of an agent wallet across all its mandates in one token. */
-  agentOutstanding(agent: Address, token: Address): bigint {
-    const r = this.db.get<{ total: string; settled: string }>(
-      `SELECT bigsum(p.cumulative) AS total, bigsum(p.settled) AS settled
-       FROM positions p JOIN mandates m ON m.id = p.mandate_id WHERE m.agent = ? AND m.token = ?`,
-      getAddress(agent),
-      getAddress(token),
-    )!;
+  /** Accepted-unsettled spending of one Budget: what its escrow must still cover. */
+  budgetOutstanding(budgetId: string): bigint {
+    const r = this.db.get<{ total: string; settled: string }>("SELECT bigsum(cumulative) AS total, bigsum(settled) AS settled FROM positions WHERE budget_id = ?", budgetId)!;
     return BigInt(r.total) - BigInt(r.settled);
   }
 
-  /** Agents with unsettled spend, for the funds refresher. */
-  agentsWithOutstanding(token: Address): Address[] {
-    return this.db
-      .all<{ agent: Address }>(
-        `SELECT DISTINCT m.agent AS agent FROM positions p JOIN mandates m ON m.id = p.mandate_id
-         WHERE m.token = ? AND p.cumulative != p.settled`,
-        getAddress(token),
-      )
-      .map((r) => r.agent);
+  /** Accepted-unsettled amounts payable to an account, from every Budget on this node. */
+  incomingOutstanding(account: Address): bigint {
+    const r = this.db.get<{ total: string; settled: string }>("SELECT bigsum(cumulative) AS total, bigsum(settled) AS settled FROM positions WHERE payee = ?", account)!;
+    return BigInt(r.total) - BigInt(r.settled);
+  }
+
+  /** Budgets with unsettled spend, for the funds refresher. */
+  budgetsWithOutstanding(): Array<Pick<BudgetRow, "id" | "owner">> {
+    return this.db.all<Pick<BudgetRow, "id" | "owner">>(
+      `SELECT DISTINCT m.id AS id, m.owner AS owner FROM positions p JOIN budgets m ON m.id = p.budget_id WHERE p.cumulative != p.settled`,
+    );
   }
 
   unsettledCallCount(): number {

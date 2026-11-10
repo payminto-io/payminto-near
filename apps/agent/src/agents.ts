@@ -36,7 +36,7 @@ async function runWith(system: string, server: () => McpServerSpec, o: AgentTask
 }
 
 /**
- * Buyer agent (plan 5.1): runs a task with the Payminto wallet MCP server bound to one mandate, under a per-task
+ * Buyer agent (plan 5.1): runs a task with the Payminto wallet MCP server bound to one budget, under a per-task
  * spend ceiling. Every call it buys comes back in the spend report with its receipt.
  */
 export function runBuyerTask(o: AgentTaskOptions): Promise<RunResult> {

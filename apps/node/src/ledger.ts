@@ -1,15 +1,16 @@
-import { getAddress, type Address } from "viem";
+import type { AccountId } from "@payminto/protocol";
 import type { Database } from "./db/database.ts";
 import { nowIso, type LedgerEntryRow } from "./store.ts";
 
-export type JournalKind = "call.accepted" | "batch.settled";
+/** `seller.settled`: a payee settled its own voucher on the hub (`settle_own`), outside any batch of this node. */
+export type JournalKind = "call.accepted" | "batch.settled" | "seller.settled";
 export type Posting = { account: string; debit?: bigint; credit?: bigint; memo?: string };
 
 export const accounts = {
-  agentPayable: (a: Address) => `agent:${getAddress(a)}:payable`,
-  agentWallet: (a: Address) => `agent:${getAddress(a)}:wallet`,
-  providerReceivable: (a: Address) => `provider:${getAddress(a)}:receivable`,
-  providerWallet: (a: Address) => `provider:${getAddress(a)}:wallet`,
+  ownerPayable: (a: AccountId) => `owner:${a}:payable`,
+  ownerEscrow: (a: AccountId) => `owner:${a}:escrow`,
+  providerReceivable: (a: AccountId) => `provider:${a}:receivable`,
+  providerCredit: (a: AccountId) => `provider:${a}:credit`,
 };
 
 export class UnbalancedJournalError extends Error {}

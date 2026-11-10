@@ -162,7 +162,7 @@ export function summarize(actor: { type: AuditActorType; id: string | null; emai
     case "business.suspended":
       return `${who} suspended the business ${m("name") || target || ""}`.trim();
     case "payout.changed":
-      return `${who} changed the payout wallet to ${short(meta.to)}`;
+      return `${who} changed the payout account to ${short(meta.to)}`;
     case "pricing.changed":
       return `${who} changed pricing (${m("what") || target || ""})`;
     case "platform.updated":
@@ -183,10 +183,22 @@ export function summarize(actor: { type: AuditActorType; id: string | null; emai
       return `${who} issued a refund on ${m("payment_id")}`;
     case "settlement.run":
       return `${who} ran a settlement`;
+    case "payout.run":
+      return `${who} ran a payout of hub credit`;
     case "recovery_key.used":
       return `The recovery key was used: ${target ?? ""}`.trim();
     case "outbox.viewed":
       return `${who} viewed the email outbox`;
+    case "payee.approved":
+      return `${who} approved the payee ${m("payee")} for a Budget`;
+    case "payee.denied":
+      return `${who} denied the payee ${m("payee")} for a Budget`;
+    case "payee.approval_withdrawn":
+      return `${who} withdrew the decision about the payee ${m("payee")}`;
+    case "payee.block_overridden":
+      return `${who} approved the payee ${m("payee")} although the payee check blocks it`;
+    case "payee.reported":
+      return `${who} reported the account ${m("account")}`;
     default:
       return `${who}: ${action}`;
   }

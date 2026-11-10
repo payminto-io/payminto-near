@@ -1,4 +1,4 @@
-import { getAddress, isAddress } from "viem";
+import { isAccountId, isPublicKey } from "@payminto/protocol";
 import { formatAmount } from "@payminto/protocol";
 import type { Database } from "./db/database.ts";
 import { customerId, parseCustomerId, type CustomerService } from "./gateway/customers.ts";
@@ -39,12 +39,17 @@ export function ftsQuery(q: string): string | null {
   return words.length ? words.map((w) => `"${w}"*`).join(" ") : null;
 }
 
+/**
+ * What a query looks like. `tx_hash`: a NEAR transaction hash (base58) or a 32-byte id (Budget, checkout, batch).
+ * `address`: a named NEAR account (`alice.testnet`) or an ed25519 public key (an agent). Amounts are tested before
+ * accounts, because a bare number is also a valid NEAR account id.
+ */
 export function detect(q: string): Detected {
   if (/^(pay|plink|re|mer)_[a-z2-7]{24}$/.test(q) || /^cus_[A-Za-z0-9_-]+$/.test(q)) return "id";
-  if (/^0x[0-9a-fA-F]{64}$/.test(q)) return "tx_hash";
-  if (/^0x[0-9a-fA-F]{40}$/.test(q)) return "address";
+  if (/^[0-9a-fA-F]{64}$/.test(q) || /^[1-9A-HJ-NP-Za-km-z]{43,44}$/.test(q)) return "tx_hash";
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(q)) return "email";
   if (/^\d{1,12}(\.\d{1,6})?$/.test(q)) return "amount";
+  if (isPublicKey(q) || (q.includes(".") && isAccountId(q.toLowerCase()))) return "address";
   return "text";
 }
 
@@ -136,29 +141,30 @@ export class SearchService {
     if (d === "id") {
       if (q.startsWith("pay_")) rows = this.#db.all<Row>(`SELECT ${cols}, 'id' AS field, p.id AS snippet FROM payments p WHERE p.id = ? AND p.draft = 0 AND ${scope.sql}`, q, ...scope.params);
     } else if (d === "tx_hash") {
+      // A NEAR transaction hash (reported by a wallet, or a batch's), or a 32-byte id: the payment's checkout id.
       rows = this.#db.all<Row>(
         `SELECT DISTINCT ${cols}, 'tx_hash' AS field, c.tx_hash AS snippet FROM payment_credits c JOIN payments p ON p.id = c.payment_id
-         WHERE lower(c.tx_hash) = ? AND p.draft = 0 AND ${scope.sql} LIMIT ?`,
+         WHERE c.tx_hash = ? AND p.draft = 0 AND ${scope.sql}
+         UNION SELECT ${cols}, 'tx_hash' AS field, p.wallet_tx_hash AS snippet FROM payments p WHERE p.wallet_tx_hash = ? AND p.draft = 0 AND ${scope.sql}
+         UNION SELECT ${cols}, 'checkout_id' AS field, p.checkout_id AS snippet FROM payments p WHERE p.checkout_id = ? AND p.draft = 0 AND ${scope.sql}
+         LIMIT ?`,
+        q,
+        ...scope.params,
+        q,
+        ...scope.params,
         q.toLowerCase(),
         ...scope.params,
         cap,
       );
     } else if (d === "address") {
       const a = q.toLowerCase();
-      const cs = getAddress(q);
       rows = this.#db.all<Row>(
         `SELECT ${cols}, 'payer' AS field, p.payer AS snippet FROM payments p WHERE lower(p.payer) = ? AND p.draft = 0 AND ${scope.sql}
          UNION SELECT ${cols}, 'payer' AS field, c.payer AS snippet FROM payment_credits c JOIN payments p ON p.id = c.payment_id WHERE lower(c.payer) = ? AND p.draft = 0 AND ${scope.sql}
-         UNION SELECT ${cols}, 'deposit_address' AS field, p.deposit_address AS snippet FROM payments p WHERE p.deposit_address = ? AND p.draft = 0 AND ${scope.sql}
-         UNION SELECT ${cols}, 'deposit_address' AS field, f.address AS snippet FROM payment_forwarders f JOIN payments p ON p.id = f.payment_id WHERE f.address = ? AND p.draft = 0 AND ${scope.sql}
          ORDER BY created_at DESC LIMIT ?`,
         a,
         ...scope.params,
         a,
-        ...scope.params,
-        cs,
-        ...scope.params,
-        cs,
         ...scope.params,
         cap,
       );
@@ -331,27 +337,27 @@ export class SearchService {
   }
 
   #budgets(q: string, d: Detected, limit: number) {
-    type Row = { id: string; label: string; status: string; total_cap: string; agent: string; owner: string; field: string; snippet: string };
+    type Row = { id: string; label: string; status: string; cap: string; agent: string; owner: string; field: string; snippet: string };
     let rows: Row[] = [];
-    const cols = "id, label, status, total_cap, agent, owner";
-    if (d === "tx_hash") rows = this.#db.all<Row>(`SELECT ${cols}, 'id' AS field, id AS snippet FROM mandates WHERE id = ?`, q.toLowerCase());
-    else if (d === "address" && isAddress(q, { strict: false })) {
-      const cs = getAddress(q);
+    const cols = "id, label, status, cap, agent, owner";
+    if (d === "tx_hash") rows = this.#db.all<Row>(`SELECT ${cols}, 'id' AS field, id AS snippet FROM budgets WHERE id = ?`, q.toLowerCase());
+    else if (d === "address") {
+      // Agents are public keys (case-sensitive base58); owners are account ids (lowercase).
       rows = this.#db.all<Row>(
-        `SELECT ${cols}, 'agent' AS field, agent AS snippet FROM mandates WHERE agent = ? UNION SELECT ${cols}, 'owner' AS field, owner AS snippet FROM mandates WHERE owner = ? LIMIT ?`,
-        cs,
-        cs,
+        `SELECT ${cols}, 'agent' AS field, agent AS snippet FROM budgets WHERE agent = ? UNION SELECT ${cols}, 'owner' AS field, owner AS snippet FROM budgets WHERE owner = ? LIMIT ?`,
+        q,
+        q.toLowerCase(),
         MAX_TOTAL + 1,
       );
     } else if (d === "text") {
-      rows = this.#db.all<Row>(`SELECT ${cols}, 'label' AS field, label AS snippet FROM mandates WHERE label LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`, `%${likeEscape(q)}%`, MAX_TOTAL + 1);
+      rows = this.#db.all<Row>(`SELECT ${cols}, 'label' AS field, label AS snippet FROM budgets WHERE label LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`, `%${likeEscape(q)}%`, MAX_TOTAL + 1);
     }
     return this.#page(rows, limit, (r) => ({
       id: r.id,
       type: "budget",
       title: r.label,
-      subtitle: `${r.status === "open" ? "Active" : r.status === "revoked" ? "Stopped" : "Pending"} - limit ${this.#money(r.total_cap)} - agent ${short(r.agent)}`,
-      href: `/mandates/${r.id}`,
+      subtitle: `${r.status === "open" ? "Active" : r.status === "revoked" ? "Stopped" : "Pending"} - limit ${this.#money(r.cap)} - agent ${short(r.agent)}`,
+      href: `/budgets/${r.id}`,
       status: r.status,
       matched: { field: r.field, snippet: short(r.snippet) },
       merchant_id: null,
@@ -362,7 +368,7 @@ export class SearchService {
     type Row = { id: string; name: string; payee: string; price_atomic: string; resource: string; field: string; snippet: string };
     let rows: Row[] = [];
     const cols = "id, name, payee, price_atomic, resource";
-    if (d === "address" && isAddress(q, { strict: false })) rows = this.#db.all<Row>(`SELECT ${cols}, 'payee' AS field, payee AS snippet FROM providers WHERE payee = ? AND category != 'gateway'`, getAddress(q));
+    if (d === "address") rows = this.#db.all<Row>(`SELECT ${cols}, 'payee' AS field, payee AS snippet FROM providers WHERE payee = ? AND category != 'gateway'`, q.toLowerCase());
     else if (d === "text") {
       const like = `%${likeEscape(q)}%`;
       rows = this.#db.all<Row>(

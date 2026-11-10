@@ -1,38 +1,26 @@
-import { isAddressEqual, recoverMessageAddress, type Address, type Hex } from "viem";
-import { clearingHubAbi } from "@payminto/protocol";
-import type { ChainClient } from "./chain.ts";
+import { nodeDigest, verifyDigest, type AccountId, type Id32, type NodeAttestation, type PublicKey, type ReceiptFields, type Sig64 } from "@payminto/protocol";
+import type { Chain } from "@payminto/chain";
 
 /**
  * Whether a receipt is proven on chain as cleared by this node.
- * ClearingHub.settleBatch is permissionless, so verifyReceipt alone only says "the leaf is under some stored root":
- * anyone settling real vouchers could have stored a root of made-up receipts. A proof therefore counts only when
- * this node's operator settled the batch and signed the leaf. Returns null when the chain cannot be read.
+ * The chain proves only that the settler committed to a root, so a proof counts only when this node settled the batch,
+ * the node's acceptance signature checks out, and the hub verifies the Merkle proof. Returns null when the chain cannot be read.
  */
 export async function receiptVerifiedOnchain(
-  chain: Pick<ChainClient, "public" | "hub" | "operator">,
-  batchId: Hex,
-  leaf: Hex,
-  nodeSignature: Hex,
-  proof: Hex[],
+  chain: Pick<Chain, "batch" | "verifyReceipt">,
+  operator: AccountId,
+  nodeKey: PublicKey,
+  batchId: Id32,
+  fields: ReceiptFields,
+  attestation: NodeAttestation,
+  nodeSignature: Sig64,
+  proof: Id32[],
 ): Promise<boolean | null> {
-  const signer = await recoverMessageAddress({ message: { raw: leaf }, signature: nodeSignature }).catch(() => null);
-  if (!signer || !isAddressEqual(signer, chain.operator.address)) return false;
+  if (!verifyDigest(nodeKey, nodeDigest(attestation), nodeSignature)) return false;
   try {
-    const batch = (await chain.public.readContract({ address: chain.hub, abi: clearingHubAbi, functionName: "batches", args: [batchId] })) as readonly [
-      Hex,
-      Address,
-      Address,
-      bigint | number,
-      bigint,
-      bigint,
-    ];
-    if (!isAddressEqual(batch[2], chain.operator.address)) return false;
-    return (await chain.public.readContract({
-      address: chain.hub,
-      abi: clearingHubAbi,
-      functionName: "verifyReceipt",
-      args: [batchId, leaf, proof],
-    })) as boolean;
+    const batch = await chain.batch(batchId);
+    if (!batch || batch.settler !== operator) return false;
+    return await chain.verifyReceipt(batchId, fields, proof);
   } catch {
     return null;
   }

@@ -2,9 +2,11 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Each package keeps its own module cache: the default is one folder at the repository root, which every
+    // package resets at startup, so packages run in parallel deleted it under each other (`pnpm -r test`).
+    fsModuleCachePath: "node_modules/.vitest-cache",
     testTimeout: 60_000,
     hookTimeout: 60_000,
-    // The HashKey Chain fork suite needs network access and runs on its own: `pnpm test:fork` (FORK=1).
-    exclude: ["**/node_modules/**", "test/fork/**"],
+    exclude: ["**/node_modules/**"],
   },
 });

@@ -7,7 +7,7 @@
  *   GET  /v1/health                                      liveness (no token)
  *
  * Every /v1/runs call needs `Authorization: Bearer $AGENT_SERVICE_TOKEN`. Runs execute one at a time: they share one
- * mandate, and a per-task spend ceiling is only meaningful when no other task spends from it at the same moment.
+ * budget, and a per-task spend ceiling is only meaningful when no other task spends from it at the same moment.
  * Run records live in memory (the newest AGENT_SERVICE_MAX_RUNS); receipts are durable in the wallet's own store.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";

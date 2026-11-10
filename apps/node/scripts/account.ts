@@ -33,8 +33,8 @@ if (!existsSync(dbPath)) {
 }
 const db = new Database(dbPath);
 try {
-  const applied = new Set(db.all<{ version: number }>("SELECT version FROM schema_migrations").map((r) => r.version));
-  if (!applied.has(7)) throw new Error("this database has no accounts yet (start the node once to apply migration 007)");
+  const applied = new Set(db.all<{ name: string }>("SELECT name FROM schema_migrations").map((r) => r.name));
+  if (!applied.has("001_near.sql")) throw new Error("this database has no accounts yet (start the node once to create the schema)");
   const dashboardUrl = (process.env.PUBLIC_DASHBOARD_URL ?? process.env.PUBLIC_CHECKOUT_URL ?? "http://localhost:3000").replace(/\/+$/, "");
   const auth = new AuthService({
     db,
@@ -55,7 +55,6 @@ try {
       rotateGraceSec: DEFAULT_SESSION.rotateGraceSec,
       stepUpSec: DEFAULT_SESSION.stepUpSec,
       platformName: process.env.PLATFORM_NAME ?? "Payminto",
-      chainId: 0,
     },
   });
   const link = auth.ownerResetLink(flag("--email")!);

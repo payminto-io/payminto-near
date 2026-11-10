@@ -2,8 +2,10 @@ import { serve } from "@hono/node-server";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createApi, type NodeServices } from "./api.ts";
+import { keypairFromSeed, networkFor, type Chain } from "@payminto/protocol";
+import { NearRpcChain } from "@payminto/chain/node";
 import { ChainClient } from "./chain.ts";
-import { agentsConfigOf, dashboardUrlOf, defaultConfirmTag, LIVE_CHAIN_IDS, redactedConfig, type Config } from "./config.ts";
+import { agentsConfigOf, dashboardUrlOf, DEFAULT_UNSIGNED_LIMIT, LIVE_NETWORKS, redactedConfig, type Config } from "./config.ts";
 import { AgentsModule } from "./agents/index.ts";
 import type { ModelLayer } from "./agents/models.ts";
 import type { OpsToolFactory } from "./agents/ops-tools.ts";
@@ -13,20 +15,21 @@ import { DEFAULT_SCRYPT_LOG_N } from "./auth/passwords.ts";
 import { AuthService, DEFAULT_SESSION } from "./auth/service.ts";
 import { CustomerService } from "./gateway/customers.ts";
 import { SearchService } from "./search.ts";
-import { BatchAttester, verifyBatchAttestation } from "./eas.ts";
 import { Database } from "./db/database.ts";
 import { EventBus } from "./events.ts";
 import { Gateway } from "./gateway/index.ts";
 import { FundsTracker } from "./funds.ts";
-import { CoordinatorHspAdapter } from "./hsp/coordinator.ts";
-import { LocalHspAdapter } from "./hsp/local.ts";
-import type { HspPort } from "./hsp/port.ts";
+import { hubReadinessProblems } from "./hub-readiness.ts";
 import { Ledger } from "./ledger.ts";
 import { createLogger, type Logger } from "./logger.ts";
-import { MandateService } from "./mandates.ts";
+import { BudgetService } from "./budgets.ts";
 import { Metrics } from "./metrics.ts";
 import { TokenBuckets } from "./ratelimit.ts";
 import { pruneTable } from "./retention.ts";
+import { Mutex } from "./mutex.ts";
+import { NearRpc, type AccessKeyReader, type TxReader } from "./near-rpc.ts";
+import { createPayeeService, type PayeeCheckSources } from "./payees/index.ts";
+import { PayoutService } from "./payouts.ts";
 import { SettlementService } from "./settlement.ts";
 import { Store } from "./store.ts";
 import { VoucherService } from "./vouchers.ts";
@@ -42,44 +45,39 @@ export type ClearingNode = {
 
 export type CreateNodeOptions = {
   logger?: Logger;
-  /** Override the HSP port (tests, or the official @hsp/sdk later). */
-  hsp?: HspPort;
-  /** Run background workers (auto-settle, funds refresh, revocation scan, HSP retry, gateway workers). Default true. */
+  /** The chain to use instead of NEAR RPC (tests and `DEMO_CHAIN=fake` pass a FakeChain). */
+  chain?: Chain;
+  /**
+   * The node-local NEAR RPC reads (access keys, transaction contents). Defaults to RPC_URL when no chain is injected,
+   * and to none with an injected chain: payout proofs are then refused and refunds are checked for finality only.
+   */
+  nearRpc?: (AccessKeyReader & TxReader) | null;
+  /** What the payee check reads. Defaults to RPC_URL when no chain is injected, and to none (check off) with an injected chain. */
+  payeeCheck?: PayeeCheckSources | null;
+  /** Run background workers (auto-settle, funds refresh, revocation scan, payouts, gateway workers). Default true. */
   workers?: boolean;
   /** Listen on this port instead of config.port (0 = random). */
   port?: number;
-  /** HTTP client for the HSP Coordinator (tests use a fake coordinator). */
-  fetch?: typeof fetch;
   /** Merchant AI agents: replaces parts of the model layer (tests use a scripted model). */
   models?: Partial<ModelLayer>;
   /** Merchant AI agents: HTTP client for model providers (tests point it at mock servers). */
   modelFetch?: typeof fetch;
   /** Merchant AI agents: replaces the ops agents' merchant tools (tests). */
   agentTools?: OpsToolFactory;
+  /**
+   * The clock the clearing core reads, in milliseconds (tests move it instead of sleeping). It decides policy windows,
+   * when a Budget's funds were read and how old that snapshot is, so all three always agree. Default `Date.now`.
+   */
+  clockMs?: () => number;
 };
 
 /** Builds every service, checks the chain and database agree with the config, recovers interrupted batches, and listens. */
 export async function startNode(config: Config, opts: CreateNodeOptions = {}): Promise<ClearingNode> {
   const log = opts.logger ?? createLogger({ level: config.logLevel, base: { service: "clearing-node" } });
-  const chain = new ChainClient({
-    chainId: config.chainId,
-    rpcUrl: config.rpcUrl,
-    rpcFallbackUrls: config.rpcFallbackUrls,
-    hub: config.hub,
-    token: config.token,
-    operatorKey: config.operatorKey,
-    confirmTag: config.confirmTag ?? defaultConfirmTag(config.chainId),
-    tx: config.tx,
-    rpcRetries: config.rpcRetries,
-  });
-
-  const rpcChainId = await chain.public.getChainId();
-  if (rpcChainId !== config.chainId) throw new Error(`RPC_URL serves chain ${rpcChainId}, expected CHAIN_ID ${config.chainId}`);
-  if (!(await chain.isContract(config.hub))) throw new Error(`No contract at HUB_ADDRESS ${config.hub} on chain ${config.chainId}`);
-  if (!(await chain.isContract(config.token))) throw new Error(`No contract at TOKEN_ADDRESS ${config.token} on chain ${config.chainId}`);
-  const attester = config.easAttest ? new BatchAttester(chain) : null;
-  if (attester) await attester.assertAvailable();
-  let hspRegistry: Awaited<ReturnType<CoordinatorHspAdapter["init"]>> | null = null;
+  const seam = opts.chain ?? new NearRpcChain({ hub: config.hub, token: config.token, network: config.network, rpcUrl: config.rpcUrl, operator: config.operator, operatorKey: config.operatorKey });
+  const chain = new ChainClient(seam, keypairFromSeed(Buffer.from(config.nodeSigningSeed, "hex")));
+  // RPC reads the Chain seam does not carry (payout proof keys, refund transactions). An injected chain brings its own or none.
+  const rpc: (AccessKeyReader & TxReader) | null = opts.chain ? (opts.nearRpc ?? null) : (opts.nearRpc ?? new NearRpc(config.rpcUrl));
 
   const db = new Database(config.dbPath);
   let started = false;
@@ -88,48 +86,25 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
     const store = new Store(db);
     // A database belongs to exactly one (chain, hub, token); mixing them would corrupt positions.
     for (const [key, value] of [
-      ["chain_id", String(config.chainId)],
+      ["network", config.network],
       ["hub", chain.hub],
       ["token", chain.token],
     ] as const) {
       const existing = store.getMeta(key);
       if (existing === undefined) store.setMeta(key, value);
-      else if (existing.toLowerCase() !== value.toLowerCase()) {
+      else if (existing !== value) {
         throw new Error(`Database ${config.dbPath} belongs to ${key}=${existing}, not ${value}. Use a different DB_PATH.`);
       }
     }
 
     const events = new EventBus(db);
     const ledger = new Ledger(db);
-    const funds = new FundsTracker(store, chain, events, log.child({ component: "funds" }));
-    let hsp: HspPort;
-    if (opts.hsp) hsp = opts.hsp;
-    else if (config.hsp.mode === "coordinator") {
-      const coordinator = new CoordinatorHspAdapter({
-        url: config.hsp.coordinatorUrl!,
-        apiKey: config.hsp.apiKey!,
-        chainName: config.hsp.chainName,
-        verifyingContract: config.hsp.verifyingContractPinned ? config.hsp.verifyingContract : undefined,
-        requiredCapabilities: config.hsp.requiredCapabilities,
-        fetch: opts.fetch,
-      });
-      // Resolves the registry name and verifyingContract by chain id; refuses to start on a pin mismatch.
-      hspRegistry = await coordinator.init(config.chainId);
-      hsp = coordinator;
-    } else {
-      hsp = new LocalHspAdapter({
-        chainId: config.chainId,
-        hub: config.hub,
-        verifyingContract: config.hsp.verifyingContract,
-        publicClient: chain.public,
-        adapterAccount: chain.operator,
-        verifyAttestation: attester
-          ? (uid, batchId) => verifyBatchAttestation(chain, uid, { batchId, attester: chain.operator.address, hub: chain.hub })
-          : undefined,
-      });
-    }
+    const clockMs = opts.clockMs ?? (() => Date.now());
+    const funds = new FundsTracker(store, chain, events, log.child({ component: "funds" }), clockMs);
+    const payees = createPayeeService(config, { injectedChain: !!opts.chain, sources: opts.payeeCheck }, { db, events, log: log.child({ component: "payees" }), operator: chain.operator, token: chain.token, dashboardUrl: dashboardUrlOf(config) });
     const vouchers = new VoucherService({
       db,
+      payees,
       store,
       chain,
       ledger,
@@ -137,43 +112,50 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
       funds,
       log: log.child({ component: "vouchers" }),
       denialDedupSec: config.denials.dedupWindowSec,
+      fundsMaxAgeMs: config.fundsMaxAgeMs,
+      clockMs,
     });
-    const mandates = new MandateService({ db, store, chain, events, log: log.child({ component: "mandates" }), fromBlock: config.deployBlock });
-    const settlement = new SettlementService({
-      db,
-      store,
-      chain,
-      ledger,
-      events,
-      funds,
-      hsp,
-      log,
-      cosignTimeoutSec: config.hsp.cosignTimeoutSec,
-      attester,
+    const budgets = new BudgetService({ db, store, chain, events, log: log.child({ component: "budgets" }) });
+    funds.onRevokedOnChain = (id) => budgets.revokedOnChain(id);
+    // Every hub write goes out from one operator key, one at a time.
+    const writes = new Mutex();
+    const metrics = new Metrics();
+    const settlement = new SettlementService({ db, store, chain, ledger, events, funds, log, writes, metrics });
+    const payouts = new PayoutService({ db, chain, events, log, writes });
+    // Net creditors of a confirmed batch are queued for payout in the transaction that books the batch.
+    settlement.confirmHooks.push(({ seq }) => {
+      for (const n of store.batchNet(seq)) if (BigInt(n.credit) > 0n) payouts.enqueue(n.account);
     });
-    const token = { address: chain.token, ...(await chain.tokenMeta()) };
+    // A payee that settled its own voucher holds the amount as hub credit: queued for payout like any creditor.
+    settlement.sellerSettledHooks.push(({ payee }) => payouts.enqueue(payee));
+    const net = networkFor(config.network);
+    const token = { address: chain.token, symbol: net.token.symbol, decimals: net.token.decimals };
     const limiters = {
       provider: new TokenBuckets(config.rateLimit.provider),
       ip: new TokenBuckets(config.rateLimit.ip),
+      unsigned: new TokenBuckets(config.rateLimit.unsigned ?? DEFAULT_UNSIGNED_LIMIT),
     };
     // Payminto Gateway (docs/GATEWAY.md), on when the config has a gateway section.
     const gateway = config.gateway
       ? await Gateway.create({
           config: config.gateway,
-          chainId: config.chainId,
+          network: config.network,
           db,
           chain,
           vouchers,
           settlement,
-          attester,
+          payouts,
           log: log.child({ component: "gateway" }),
           token,
           publicUrl: config.publicUrl,
+          accessKeys: rpc,
+          txs: rpc,
         })
       : null;
+    // Decision 8: refusal webhooks go out through the gateway's outbox, in the transaction that records the refusal.
+    if (gateway) vouchers.onDenial = (n) => gateway.refused(n);
     // Accounts (docs/PRODUCT.md sections 4 and 10).
     const audit = new AuditLog(db);
-    const metrics = new Metrics();
     const mailer = new Mailer({ db, log: log.child({ component: "email" }), smtp: config.auth?.smtp ?? null });
     const auth = new AuthService({
       db,
@@ -195,14 +177,13 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
         rotateGraceSec: DEFAULT_SESSION.rotateGraceSec,
         stepUpSec: DEFAULT_SESSION.stepUpSec,
         platformName: config.gateway?.platformName ?? "Payminto",
-        chainId: config.chainId,
       },
     });
     const customers = gateway ? new CustomerService(db) : null;
     // Merchant AI agents (docs/AGENTS.md), on with the gateway: they belong to its businesses.
     const agentsConfig = agentsConfigOf(config);
-    if (agentsConfig.enabled && LIVE_CHAIN_IDS.includes(config.chainId) && agentsConfig.usingDevKey) {
-      throw new Error(`AGENT_SECRETS_KEY: required on chain ${config.chainId} while agents are on; the documented dev key is refused`);
+    if (agentsConfig.enabled && LIVE_NETWORKS.includes(config.network) && agentsConfig.usingDevKey) {
+      throw new Error(`AGENT_SECRETS_KEY: required on ${config.network} while agents are on; the documented dev key is refused`);
     }
     const agents =
       gateway && agentsConfig.enabled
@@ -230,8 +211,11 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
       ledger,
       events,
       vouchers,
-      mandates,
+      budgets,
+      funds,
+      payees,
       settlement,
+      payouts,
       log,
       token,
       sseClosers: new Set(),
@@ -246,11 +230,19 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
     const app = createApi(services);
 
     await settlement.recover();
+    payouts.recover();
+    // What the hub requires of a settler, read from the hub: this node's receipt key registered for its account, and
+    // enough prepaid storage balance for a batch. See hub-readiness.ts.
+    for (const p of await hubReadinessProblems(chain).catch((err: unknown) => (log.warn("hub readiness could not be checked", { err }), []))) {
+      log.error(`hub readiness: ${p.message}`, { check: p.check });
+      metrics.inc("payminto_operator_alerts_total", "Conditions only the operator can resolve, by kind. Alert on any increase.", { kind: "hub_readiness" });
+    }
     const prune = () => {
       const denials = pruneTable(db, "denials", config.denials.maxRows);
       const evts = pruneTable(db, "events", config.eventsMaxRows);
       limiters.provider.prune();
       limiters.ip.prune();
+      limiters.unsigned.prune();
       if (denials || evts) log.info("pruned old rows", { denials, events: evts });
     };
     prune();
@@ -272,10 +264,9 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
     };
     if (opts.workers !== false) {
       every(config.fundsRefreshSec * 1000, "funds refresh", () => funds.sweep());
-      every(15_000, "revocation scan", () => mandates.scanRevocations());
-      every(15_000, "hsp retry", () => settlement.retryHsp());
-      // About one block: promotes included batches once the CONFIRM_TAG head passes them, and handles reorgs.
-      every(2_000, "finality", () => settlement.trackFinality());
+      // What payees settled themselves on the hub is booked between settlements too, so exposure is not overstated.
+      every(config.fundsRefreshSec * 1000, "settled position sync", () => settlement.syncSettled());
+      every(15_000, "revocation scan", () => budgets.scanRevocations());
       every(60_000, "retention", async () => prune());
       gateway?.start({ watchMs: config.gateway!.watchIntervalMs });
       agents?.start();
@@ -284,6 +275,7 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
           if (store.unsettledCallCount() >= config.settleMinCalls) await settlement.settle("interval");
         });
       }
+      if ((config.payoutIntervalSec ?? 0) > 0) every(config.payoutIntervalSec! * 1000, "payouts", () => payouts.run("interval"));
     }
 
     // A port that is taken (EADDRINUSE) rejects here, so the caller can stop cleanly or pick another port.
@@ -304,10 +296,8 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
     started = true;
     log.info("clearing node listening", {
       url,
-      operator: chain.operator.address,
+      operator: chain.operator,
       migrationsApplied: applied,
-      confirmTag: chain.confirmTag,
-      hspRegistry,
       config: redactedConfig(config),
     });
 
@@ -323,10 +313,11 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
           setTimeout(() => server.closeAllConnections?.(), 2_000).unref();
         });
         // Let an in-flight settlement finish booking what the chain already did, and gateway workers finish their tick.
-        await Promise.race([settlement.idle(), new Promise((r) => setTimeout(r, 60_000).unref())]);
+        await Promise.race([Promise.all([settlement.idle(), payouts.idle()]), new Promise((r) => setTimeout(r, 60_000).unref())]);
         // Agent runs in flight go back to the queue (their attempt given back) and their run keys are revoked.
         await agents?.stop();
         await gateway?.stop();
+        await payees.close();
         db.close();
         log.info("stopped");
       })());

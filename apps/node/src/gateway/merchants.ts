@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import { getAddress, isAddressEqual, type Address, type Hex } from "viem";
 import {
   newFeePlanId,
+  type AccountId,
+  type PublicKey,
   newMerchantId,
   PAYMENT_METHODS,
   type FeePlan,
@@ -30,7 +31,7 @@ export type FeePlanRow = {
 export type PlatformRow = {
   id: 1;
   name: string;
-  fee_recipient: Address | null;
+  fee_recipient: AccountId | null;
   default_fee_plan_id: string;
   signup_mode: "off" | "approval" | "open";
   require_2fa_platform: number;
@@ -43,13 +44,14 @@ export type MerchantRow = {
   name: string;
   slug: string;
   status: "active" | "suspended";
-  payout: Address;
+  /** The NEAR account checkout payments credit; null until an Admin proves one (payout_set = 0). */
+  payout: AccountId | null;
   support_email: string | null;
   brand_color: string | null;
   logo_url: string | null;
   fee_plan_id: string;
   provider_id: string | null;
-  /** 0 for a business created by sign-up until it proves a payout wallet (payout is the zero address meanwhile). */
+  /** 0 for a business created by sign-up until it proves a payout account (payout is null meanwhile). */
   payout_set: number;
   created_at: string;
   updated_at: string;
@@ -125,47 +127,36 @@ function slugify(name: string): string {
   );
 }
 
-/** Platform, fee plans, merchants and their payment methods (GATEWAY.md section 14). */
+/** Seeded by migrations/001_near.sql. */
+export const ZERO_FEE_PLAN_ID = "fp_zero";
+
+/** A verified NEP-413 payout proof as stored with the payout change. */
+export type PayoutProofRecord = { signature: string; publicKey: PublicKey; signedAt: number };
+
+/** Platform, fee plans, merchants and their payment methods. */
+
 export class MerchantService {
   readonly #db: Database;
   readonly #ctx: ModelContext;
-  readonly #token: Address;
-  readonly #factory: Address;
-  readonly #router: Address;
+  readonly #checkoutKey: PublicKey;
 
-  constructor(o: { db: Database; ctx: ModelContext; factory: Address; router: Address }) {
+  constructor(o: { db: Database; ctx: ModelContext; checkoutKey: PublicKey }) {
     this.#db = o.db;
     this.#ctx = o.ctx;
-    this.#token = o.ctx.token;
-    this.#factory = o.factory;
-    this.#router = o.router;
+    this.#checkoutKey = o.checkoutKey;
   }
 
   /**
-   * First-boot seeding and env sync: the Standard (0.5 %) and No fee plans, the platform row (fee recipient is env-only,
-   * like the payout used to be), and the default merchant when GATEWAY_PAYOUT_ADDRESS is set and no merchant exists yet.
+   * First-boot seeding and env sync: the platform row on the zero fee plan from 001_near.sql (fee recipient is env-only),
+   * and the default merchant when GATEWAY_PAYOUT_ACCOUNT is set and no merchant exists yet.
    */
-  seed(o: { platformName: string; feeRecipient: Address | null; seedPayout: Address | null }): { defaultMerchant: MerchantRow | null; seedPayoutIgnored: boolean } {
+  seed(o: { platformName: string; feeRecipient: AccountId | null; seedPayout: AccountId | null }): { defaultMerchant: MerchantRow | null; seedPayoutIgnored: boolean } {
     return this.#db.tx(() => {
       const now = nowIso();
-      if (!this.#db.get("SELECT 1 FROM fee_plans LIMIT 1")) {
-        this.#db.run(
-          "INSERT INTO fee_plans (id, name, platform_fee_bps, platform_fee_fixed, min_fee, max_fee, created_at, updated_at) VALUES (?, 'Standard', 50, '0', '0', NULL, ?, ?)",
-          newFeePlanId(),
-          now,
-          now,
-        );
-        this.#db.run(
-          "INSERT INTO fee_plans (id, name, platform_fee_bps, platform_fee_fixed, min_fee, max_fee, created_at, updated_at) VALUES (?, 'No fee', 0, '0', '0', NULL, ?, ?)",
-          newFeePlanId(),
-          now,
-          now,
-        );
-      }
       const platform = this.platformRow();
       if (!platform) {
-        // Without a fee recipient no fee can be collected, so the default plan charges nothing.
-        const plan = this.#db.get<{ id: string }>("SELECT id FROM fee_plans WHERE name = ? ORDER BY created_at LIMIT 1", o.feeRecipient ? "Standard" : "No fee")!;
+        // The operator take rate is roadmap: every business starts on the zero plan the schema seeds.
+        const plan = { id: ZERO_FEE_PLAN_ID };
         this.#db.run(
           "INSERT INTO platform (id, name, fee_recipient, default_fee_plan_id, updated_at) VALUES (1, ?, ?, ?, ?)",
           o.platformName,
@@ -180,10 +171,10 @@ export class MerchantService {
       let seedPayoutIgnored = false;
       const first = this.#db.get<MerchantRow>("SELECT * FROM merchants ORDER BY created_at, id LIMIT 1") ?? null;
       if (!first && o.seedPayout) {
-        defaultMerchant = this.create({ name: o.platformName, payout: o.seedPayout, signature: null, signedAt: null });
+        defaultMerchant = this.create({ name: o.platformName, payout: o.seedPayout, proof: null });
       } else {
         defaultMerchant = first;
-        if (first && o.seedPayout && !isAddressEqual(first.payout, o.seedPayout)) seedPayoutIgnored = true;
+        if (first && o.seedPayout && first.payout !== o.seedPayout) seedPayoutIgnored = true;
       }
       return { defaultMerchant, seedPayoutIgnored };
     });
@@ -202,10 +193,10 @@ export class MerchantService {
       name: p.name,
       fee_recipient: p.fee_recipient,
       default_fee_plan_id: p.default_fee_plan_id,
-      chain_id: this.#ctx.chainId,
-      token: this.#token,
-      deposit_factory: this.#factory,
-      payment_router: this.#router,
+      network: this.#ctx.network,
+      hub: this.#ctx.hub,
+      token: this.#ctx.token,
+      checkout_key: this.#checkoutKey,
       checkout_base_url: this.#ctx.checkoutBaseUrl,
       signup_mode: p.signup_mode ?? "off",
       require_2fa_platform: p.require_2fa_platform === 1,
@@ -250,7 +241,7 @@ export class MerchantService {
 
   #requireRecipientFor(nonZero: boolean) {
     if (nonZero && !this.platformRow()?.fee_recipient) {
-      throw new ApiError(409, "FEE_RECIPIENT_REQUIRED", "set PLATFORM_FEE_ADDRESS before configuring a non-zero fee");
+      throw new ApiError(409, "FEE_RECIPIENT_REQUIRED", "set PLATFORM_FEE_ACCOUNT before configuring a non-zero fee");
     }
   }
 
@@ -316,16 +307,15 @@ export class MerchantService {
 
   create(b: {
     name: string;
-    payout: Address;
+    /** Null for a business created by sign-up: no payout account until an Admin proves one. */
+    payout: AccountId | null;
     slug?: string;
     support_email?: string | null;
     brand_color?: string | null;
     logo_url?: string | null;
     fee_plan_id?: string;
-    signature: Hex | null;
-    signedAt: number | null;
-    /** A business created by sign-up: no payout wallet until an Admin proves one. */
-    payoutUnset?: boolean;
+    /** The verified NEP-413 proof; null for the seed payout from GATEWAY_PAYOUT_ACCOUNT. */
+    proof: PayoutProofRecord | null;
   }): MerchantRow {
     return this.#db.tx(() => {
       const plan = b.fee_plan_id ? this.feePlan(b.fee_plan_id) : this.feePlan(this.platformRow()!.default_fee_plan_id);
@@ -343,26 +333,26 @@ export class MerchantService {
         id,
         b.name,
         slug,
-        getAddress(b.payout),
+        b.payout,
         b.support_email ?? null,
         b.brand_color ?? null,
         b.logo_url ?? null,
         plan.id,
-        b.payoutUnset ? 0 : 1,
+        b.payout === null ? 0 : 1,
         now,
         now,
       );
       for (const method of PAYMENT_METHODS) {
-        // HSP depends on outside access, so a business turns it on itself (Settings > Payment methods).
-        this.#db.run("INSERT INTO merchant_methods (merchant_id, method, enabled, updated_at) VALUES (?, ?, ?, ?)", id, method, method === "hsp" ? 0 : 1, now);
+        this.#db.run("INSERT INTO merchant_methods (merchant_id, method, enabled, updated_at) VALUES (?, ?, ?, ?)", id, method, 1, now);
       }
-      if (!b.payoutUnset) {
+      if (b.payout !== null) {
         this.#db.run(
-          "INSERT INTO merchant_payout_changes (merchant_id, old_payout, new_payout, signature, signed_at, at) VALUES (?, NULL, ?, ?, ?, ?)",
+          "INSERT INTO merchant_payout_changes (merchant_id, old_payout, new_payout, signature, public_key, signed_at, at) VALUES (?, NULL, ?, ?, ?, ?, ?)",
           id,
-          getAddress(b.payout),
-          b.signature,
-          b.signedAt,
+          b.payout,
+          b.proof?.signature ?? null,
+          b.proof?.publicKey ?? null,
+          b.proof?.signedAt ?? null,
           now,
         );
         this.#ensureProvider(id);
@@ -389,19 +379,20 @@ export class MerchantService {
     return this.merchant(id);
   }
 
-  /** Records a verified payout change; the caller checked the EIP-191 proof. New payments use the new payout. */
-  changePayout(id: string, newPayout: Address, signature: Hex, signedAt: number): { merchant: MerchantRow; old: Address } {
+  /** Records a verified payout change; the caller checked the NEP-413 proof and the key. New payments use the new payout. */
+  changePayout(id: string, newPayout: AccountId, proof: PayoutProofRecord): { merchant: MerchantRow; old: AccountId | null } {
     return this.#db.tx(() => {
       const cur = this.merchant(id);
       const now = nowIso();
-      this.#db.run("UPDATE merchants SET payout = ?, provider_id = NULL, payout_set = 1, updated_at = ? WHERE id = ?", getAddress(newPayout), now, id);
+      this.#db.run("UPDATE merchants SET payout = ?, provider_id = NULL, payout_set = 1, updated_at = ? WHERE id = ?", newPayout, now, id);
       this.#db.run(
-        "INSERT INTO merchant_payout_changes (merchant_id, old_payout, new_payout, signature, signed_at, at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO merchant_payout_changes (merchant_id, old_payout, new_payout, signature, public_key, signed_at, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         id,
-        cur.payout_set === 0 ? null : cur.payout,
-        getAddress(newPayout),
-        signature,
-        signedAt,
+        cur.payout,
+        newPayout,
+        proof.signature,
+        proof.publicKey,
+        proof.signedAt,
         now,
       );
       this.#ensureProvider(id);
@@ -411,11 +402,11 @@ export class MerchantService {
 
   payoutHistory(id: string) {
     return this.#db
-      .all<{ old_payout: Address | null; new_payout: Address; signature: Hex | null; signed_at: number | null; at: string }>(
-        "SELECT old_payout, new_payout, signature, signed_at, at FROM merchant_payout_changes WHERE merchant_id = ? ORDER BY seq DESC",
+      .all<{ old_payout: AccountId | null; new_payout: AccountId; signature: string | null; public_key: PublicKey | null; signed_at: number | null; at: string }>(
+        "SELECT old_payout, new_payout, signature, public_key, signed_at, at FROM merchant_payout_changes WHERE merchant_id = ? ORDER BY seq DESC",
         id,
       )
-      .map((r) => ({ old_payout: r.old_payout, new_payout: r.new_payout, proven: r.signature !== null, signed_at: r.signed_at, changed_at: r.at }));
+      .map((r) => ({ old_payout: r.old_payout, new_payout: r.new_payout, proven: r.signature !== null, public_key: r.public_key, signed_at: r.signed_at, changed_at: r.at }));
   }
 
   methods(merchantId: string): MethodRow[] {
@@ -470,10 +461,10 @@ export class MerchantService {
   profileJson(r: MerchantRow): MerchantProfile & Record<string, unknown> {
     return {
       ...merchantJson(r, this.#ctx),
-      chain_id: this.#ctx.chainId,
-      token: this.#token,
-      deposit_factory: this.#factory,
-      payment_router: this.#router,
+      network: this.#ctx.network,
+      hub: this.#ctx.hub,
+      token: this.#ctx.token,
+      checkout_key: this.#checkoutKey,
       checkout_base_url: this.#ctx.checkoutBaseUrl,
       fee_plan: feePlanJson(this.feePlan(r.fee_plan_id)),
       methods: this.methods(r.id).map(methodJson),
@@ -500,14 +491,15 @@ export class MerchantService {
 
   #ensureProvider(merchantId: string): string {
     const m = this.#db.get<MerchantRow>("SELECT * FROM merchants WHERE id = ?", merchantId)!;
+    if (m.payout === null) throw new ApiError(409, "PAYOUT_REQUIRED", "this business has no payout account yet; an Admin must prove one first");
     const p = this.#providerFor(m.payout, m.name);
     this.#db.run("UPDATE merchants SET provider_id = ? WHERE id = ?", p.id, merchantId);
     return p.id;
   }
 
   /** Gateway provider records never have a usable API key: the node accepts their vouchers itself. */
-  #providerFor(payee: Address, name: string): ProviderRow {
-    const existing = this.#db.get<ProviderRow>("SELECT * FROM providers WHERE payee = ? AND category = 'gateway' ORDER BY created_at LIMIT 1", getAddress(payee));
+  #providerFor(payee: AccountId, name: string): ProviderRow {
+    const existing = this.#db.get<ProviderRow>("SELECT * FROM providers WHERE payee = ? AND category = 'gateway' ORDER BY created_at LIMIT 1", payee);
     if (existing) return existing;
     const id = `prv_${randomBytes(6).toString("hex")}`;
     this.#db.run(
@@ -516,7 +508,7 @@ export class MerchantService {
       id,
       name,
       "Payminto Gateway payments (priced per payment)",
-      getAddress(payee),
+      payee,
       this.#ctx.checkoutBaseUrl,
       createHash("sha256").update(randomBytes(32)).digest("hex"),
       nowIso(),

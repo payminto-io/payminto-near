@@ -4,7 +4,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { MERCHANT_INSTRUCTIONS, MERCHANT_TOOLS, MerchantDesk, type MerchantToolResult } from "@payminto/sdk";
 import { McpConfigError } from "./config.ts";
-import { serveMcpHttp, type McpHttp } from "./http.ts";
+import { serveMcpHttp, type McpHttp, type McpHttpOptions } from "./http.ts";
+import { HttpTokenError, httpTokenSchema, httpTokenSource, resolveHttpToken, type HttpTokenSource } from "./http-token.ts";
 
 export const MERCHANT_SERVER_NAME = "payminto-merchant";
 export const MERCHANT_SERVER_VERSION = "0.1.0";
@@ -23,16 +24,26 @@ const envSchema = z.object({
   MERCHANT_ID: z.string().regex(/^mer_[A-Za-z0-9]+$/, "must be a business id (mer_...)").optional(),
   MCP_HTTP_PORT: z.string().regex(/^\d+$/).default("3335").transform(Number),
   MCP_HTTP_HOST: z.string().default("127.0.0.1"),
+  /** The bearer token HTTP clients must send. Unset, one is generated into MCP_HTTP_TOKEN_FILE. */
+  MCP_HTTP_TOKEN: httpTokenSchema.optional(),
+  /** Where a generated token is kept (mode 0600). Defaults to $PAYMINTO_DATA_DIR/mcp/merchant-http-token. */
+  MCP_HTTP_TOKEN_FILE: z.string().min(1).optional(),
+  PAYMINTO_DATA_DIR: z.string().min(1).optional(),
 });
 
-export type MerchantMcpConfig = { nodeUrl: string; apiKey: string; merchantId: string | undefined; http: { port: number; host: string } };
+export type MerchantMcpConfig = { nodeUrl: string; apiKey: string; merchantId: string | undefined; http: { port: number; host: string; token: HttpTokenSource } };
 
 /** Parses the environment. Errors name the variable, never its value (MERCHANT_API_KEY is a secret). */
 export function loadMerchantConfig(env: Record<string, string | undefined> = process.env): MerchantMcpConfig {
   const parsed = envSchema.safeParse(env);
   if (!parsed.success) throw new McpConfigError(parsed.error.issues.map((i) => `${i.path.join(".") || "env"}: ${i.message}`));
   const e = parsed.data;
-  return { nodeUrl: e.NODE_URL.replace(/\/+$/, ""), apiKey: e.MERCHANT_API_KEY, merchantId: e.MERCHANT_ID, http: { port: e.MCP_HTTP_PORT, host: e.MCP_HTTP_HOST } };
+  return {
+    nodeUrl: e.NODE_URL.replace(/\/+$/, ""),
+    apiKey: e.MERCHANT_API_KEY,
+    merchantId: e.MERCHANT_ID,
+    http: { port: e.MCP_HTTP_PORT, host: e.MCP_HTTP_HOST, token: httpTokenSource(e, "merchant-http-token") },
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -62,8 +73,8 @@ export function createMerchantMcpServer(desk: MerchantDesk): McpServer {
 // ---------------------------------------------------------------------------------------------------------------------
 // Process entry (`payminto-mcp --merchant`)
 
-/** Streamable HTTP for the merchant server, the same stateless transport and loopback guard as the wallet server. */
-export function startMerchantMcpHttp(desk: MerchantDesk, opts: { port: number; host: string }): Promise<McpHttp> {
+/** Streamable HTTP for the merchant server: the same stateless transport, bearer token and loopback guard as the wallet server. */
+export function startMerchantMcpHttp(desk: MerchantDesk, opts: McpHttpOptions): Promise<McpHttp> {
   return serveMcpHttp(() => createMerchantMcpServer(desk), opts, () => ({ ok: true, server: MERCHANT_SERVER_NAME, merchant_id: desk.business.id }));
 }
 
@@ -91,9 +102,18 @@ export async function runMerchantMcp(mode: "stdio" | "http", log: (msg: string) 
   }
   let stopHttp: (() => Promise<void>) | null = null;
   if (mode === "http") {
-    const h = await startMerchantMcpHttp(desk, config.http);
+    let token;
+    try {
+      token = resolveHttpToken(config.http.token);
+    } catch (err) {
+      if (!(err instanceof HttpTokenError)) throw err;
+      log(`MCP_HTTP_TOKEN_FILE: ${err.message}`);
+      process.exit(2);
+    }
+    const h = await startMerchantMcpHttp(desk, { port: config.http.port, host: config.http.host, token: token.token });
     stopHttp = h.close;
     log(`merchant server on Streamable HTTP ${h.url} for ${desk.business.name} (${desk.business.id})`);
+    log(token.path ? `bearer token ${token.generated ? "generated in" : "read from"} ${token.path} (mode 0600); clients send it as Authorization: Bearer <token>` : "bearer token from MCP_HTTP_TOKEN");
   } else {
     await createMerchantMcpServer(desk).connect(new StdioServerTransport());
     log(`merchant server on stdio for ${desk.business.name} (${desk.business.id})`);

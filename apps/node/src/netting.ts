@@ -1,29 +1,28 @@
-import { getAddress, type Address } from "viem";
+import type { AccountId } from "@payminto/protocol";
 
-export type ClaimFlow = { agent: Address; payee: Address; delta: bigint };
-export type NetTransfer = { from: Address; to: Address; amount: bigint };
+export type ClaimFlow = { owner: AccountId; payee: AccountId; delta: bigint };
+export type NetTransfer = { from: AccountId; to: AccountId; amount: bigint };
 export type NettingProjection = { transfers: NetTransfer[]; gross: bigint; net: bigint; parties: number };
 
 /**
- * Off-chain mirror of ClearingHub.settleBatch netting: same party insertion order (agent, then payee, per claim),
- * same greedy two-pointer match of debtors to creditors. Given the same claims in the same order it predicts
- * exactly the NetTransfer events the hub will emit, which the settlement worker reconciles after every batch.
+ * One debtor-to-creditor matching of a batch's net result, for display and books. The authoritative result is
+ * `computeNetting` in @payminto/chain, because the hub moves cash through escrow and credits and has no pairwise transfers.
+ * Parties are Budget owner accounts and payee accounts; order is first appearance, which keeps the output stable.
  */
 export function projectNetting(claims: readonly ClaimFlow[]): NettingProjection {
-  const parties: Address[] = [];
+  const parties: AccountId[] = [];
   const balances: bigint[] = [];
   const index = new Map<string, number>();
   let gross = 0n;
 
-  const credit = (who: Address, amount: bigint) => {
-    const key = who.toLowerCase();
-    const i = index.get(key);
+  const credit = (who: AccountId, amount: bigint) => {
+    const i = index.get(who);
     if (i !== undefined) {
       balances[i]! += amount;
       return;
     }
-    index.set(key, parties.length);
-    parties.push(getAddress(who));
+    index.set(who, parties.length);
+    parties.push(who);
     balances.push(amount);
   };
 
@@ -31,7 +30,7 @@ export function projectNetting(claims: readonly ClaimFlow[]): NettingProjection 
     if (c.delta < 0n) throw new Error("negative claim delta");
     if (c.delta === 0n) continue;
     gross += c.delta;
-    credit(c.agent, -c.delta);
+    credit(c.owner, -c.delta);
     credit(c.payee, c.delta);
   }
 
@@ -55,25 +54,25 @@ export function projectNetting(claims: readonly ClaimFlow[]): NettingProjection 
   return { transfers, gross, net, parties: count };
 }
 
-/** Net debit per debtor (positive amounts), for balance and allowance pre-checks. */
-export function netDebits(p: NettingProjection): Map<Address, bigint> {
-  const out = new Map<Address, bigint>();
+/** Net debit per debtor (positive amounts). */
+export function netDebits(p: NettingProjection): Map<AccountId, bigint> {
+  const out = new Map<AccountId, bigint>();
   for (const t of p.transfers) out.set(t.from, (out.get(t.from) ?? 0n) + t.amount);
   return out;
 }
 
-/** Gross obligations graph: one edge per (agent, payee) with the summed amount and call count. */
+/** Gross obligations graph: one edge per (owner, payee) with the summed amount and call count. */
 export function grossGraph(
-  flows: readonly { agent: Address; payee: Address; amount: bigint; calls: number }[],
-): { from: Address; to: Address; amount: bigint; calls: number }[] {
-  const m = new Map<string, { from: Address; to: Address; amount: bigint; calls: number }>();
+  flows: readonly { owner: AccountId; payee: AccountId; amount: bigint; calls: number }[],
+): { from: AccountId; to: AccountId; amount: bigint; calls: number }[] {
+  const m = new Map<string, { from: AccountId; to: AccountId; amount: bigint; calls: number }>();
   for (const f of flows) {
-    const key = `${f.agent.toLowerCase()}>${f.payee.toLowerCase()}`;
+    const key = `${f.owner}>${f.payee}`;
     const e = m.get(key);
     if (e) {
       e.amount += f.amount;
       e.calls += f.calls;
-    } else m.set(key, { from: getAddress(f.agent), to: getAddress(f.payee), amount: f.amount, calls: f.calls });
+    } else m.set(key, { from: f.owner, to: f.payee, amount: f.amount, calls: f.calls });
   }
   return [...m.values()];
 }

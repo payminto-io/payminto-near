@@ -69,22 +69,17 @@ describe("secret box", () => {
 });
 
 describe("agents config", () => {
-  const live = (over: Record<string, string>) => {
-    const dir = mkdtempSync(join(tmpdir(), "payminto-agents-config-"));
-    writeFileSync(
-      join(dir, "177.json"),
-      JSON.stringify({ chainId: 177, clearingHub: "0x5FbDB2315678afecb367f032d93F642f64180aa3", token: "0x5FbDB2315678afecb367f032d93F642f64180aa6", blockNumber: 1, depositFactory: "0x5FbDB2315678afecb367f032d93F642f64180aa4", paymentRouter: "0x5FbDB2315678afecb367f032d93F642f64180aa5" }),
-    );
-    return {
-      CHAIN_ID: "177",
-      DEPLOYMENTS_DIR: dir,
-      OPERATOR_KEY: `0x${"11".repeat(32)}`,
-      ADMIN_TOKEN: "x".repeat(40),
-      GATEWAY_PAYOUT_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-      PUBLIC_CHECKOUT_URL: "https://pay.example.com",
-      ...over,
-    };
-  };
+  const live = (over: Record<string, string>) => ({
+    NETWORK: "near:testnet",
+    HUB_ACCOUNT: "hub.payminto.testnet",
+    OPERATOR_ACCOUNT: "node.payminto.testnet",
+    OPERATOR_KEY: "ed25519:LnrbZDPq59Ywk2Ddy9zVxg7KVaDBPRpikn7V7A3ZWgEb2JK6JYLkQKJCbqyeji46k7svBPp5UsFu4v4mh1DGzTJ",
+    NODE_SIGNING_SEED: "22".repeat(32),
+    ADMIN_TOKEN: "x".repeat(40),
+    GATEWAY_PAYOUT_ACCOUNT: "shop.testnet",
+    PUBLIC_CHECKOUT_URL: "https://pay.example.com",
+    ...over,
+  });
   const problems = (env: Record<string, string>) => {
     try {
       loadConfig(env);
@@ -93,18 +88,18 @@ describe("agents config", () => {
       return (err as ConfigError).problems;
     }
   };
-  const local = { OPERATOR_KEY: `0x${"11".repeat(32)}`, ADMIN_TOKEN: "x".repeat(20), HUB_ADDRESS: "0x5FbDB2315678afecb367f032d93F642f64180aa3", TOKEN_ADDRESS: "0x5FbDB2315678afecb367f032d93F642f64180aa3" };
+  const local = { OPERATOR_KEY: "ed25519:LnrbZDPq59Ywk2Ddy9zVxg7KVaDBPRpikn7V7A3ZWgEb2JK6JYLkQKJCbqyeji46k7svBPp5UsFu4v4mh1DGzTJ", ADMIN_TOKEN: "x".repeat(20), HUB_ACCOUNT: "hub.sandbox", OPERATOR_ACCOUNT: "node.sandbox", NODE_SIGNING_SEED: "22".repeat(32) };
 
   it("is on locally with the gateway, using the documented dev key, and off without the gateway", () => {
-    const withGateway = loadConfig({ ...local, GATEWAY_ENABLED: "true", DEPOSIT_FACTORY_ADDRESS: local.HUB_ADDRESS, PAYMENT_ROUTER_ADDRESS: local.HUB_ADDRESS });
+    const withGateway = loadConfig({ ...local, GATEWAY_ENABLED: "true" });
     expect(withGateway.agents).toMatchObject({ enabled: true, usingDevKey: true, secretsKeyVersion: 1, workers: 2, maxPerMerchant: 1, pollMs: 1000, allowPrivateModelUrls: false });
     expect(loadConfig(local).agents!.enabled).toBe(false);
     expect(problems({ ...local, AGENTS_ENABLED: "true" })).toEqual([expect.stringMatching(/^AGENTS_ENABLED: .*gateway/)]);
   });
 
-  it("on HashKey Chain is off by default and refuses a missing or documented dev key when turned on", () => {
+  it("on NEAR testnet is off by default and refuses a missing or documented dev key when turned on", () => {
     expect(loadConfig(live({})).agents!.enabled).toBe(false);
-    expect(problems(live({ AGENTS_ENABLED: "true" }))).toEqual([expect.stringMatching(/^AGENT_SECRETS_KEY: required on chain 177/)]);
+    expect(problems(live({ AGENTS_ENABLED: "true" }))).toEqual([expect.stringMatching(/^AGENT_SECRETS_KEY: required on near:testnet/)]);
     expect(problems(live({ AGENTS_ENABLED: "true", AGENT_SECRETS_KEY: DEV_AGENT_SECRETS_KEY }))).toEqual([expect.stringMatching(/^AGENT_SECRETS_KEY: is the documented dev key/)]);
     const real = randomBytes(32).toString("base64");
     const ok = loadConfig(live({ AGENTS_ENABLED: "true", AGENT_SECRETS_KEY: real }));
@@ -162,7 +157,7 @@ describe("retry backoff", () => {
 
 describe("model layer", () => {
   it("serves the catalogue of @payminto/models, one entry per provider", () => {
-    expect(PROVIDERS.map((p) => p.id)).toEqual(["anthropic", "openai", "google", "openai_compatible", "replicate"]);
+    expect(PROVIDERS.map((p) => p.id)).toEqual(["anthropic", "openai", "google", "openai_compatible", "replicate", "nearai"]);
     expect(PROVIDERS.find((p) => p.id === "openai_compatible")).toMatchObject({ needsBaseUrl: true, keyOptional: true, defaultBaseUrl: null });
     for (const p of PROVIDERS) expect(Object.keys(p).sort()).toEqual(["defaultBaseUrl", "docsUrl", "id", "keyOptional", "name", "needsBaseUrl", "note", "presets", "suggestedModels"]);
   });

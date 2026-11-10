@@ -34,7 +34,10 @@ const openaiScript = (usage: boolean): Script => ({
   },
 });
 
-const SCRIPTS: Record<ConnectionSpec["provider"], Script> = {
+// NEAR AI Cloud speaks the OpenAI wire format and adds attestation requests of its own; packages/models covers it.
+type Scripted = Exclude<ConnectionSpec["provider"], "nearai">;
+
+const SCRIPTS: Record<Scripted, Script> = {
   anthropic: {
     tools: (calls) => ({ sse: claudeStream({ blocks: calls.map((c) => ({ type: "tool_use" as const, id: c.id, name: c.name, json: JSON.stringify(c.args) })), stop: "tool_use", usage: { input: 50, output: 20 } }) }),
     text: (t) => ({ sse: claudeStream({ blocks: [{ type: "text", text: t }], stop: "end_turn", usage: { input: 80, output: 10 } }) }),
@@ -69,7 +72,7 @@ function replicatePrediction(text: string, input: number, output: number): MockA
   return { status: 201, json: { id: "pred_test", model: "deepseek-ai/deepseek-v3.1", status: "succeeded", output: [text], error: null, metrics: { token_input_count: input, token_output_count: output } } };
 }
 
-const SPECS: Record<ConnectionSpec["provider"], (url: string) => ConnectionSpec> = {
+const SPECS: Record<Scripted, (url: string) => ConnectionSpec> = {
   anthropic: (url) => ({ provider: "anthropic", apiKey: "sk-ant-test", baseUrl: url, model: "claude-opus-5-5" }),
   openai: (url) => ({ provider: "openai", apiKey: "sk-test", baseUrl: `${url}/v1`, model: "gpt-5.1" }),
   openai_compatible: (url) => ({ provider: "openai_compatible", apiKey: "", baseUrl: `${url}/v1`, model: "llama3.2" }),
@@ -86,7 +89,7 @@ afterEach(async () => {
 });
 
 describe("runAgent is provider-neutral", () => {
-  for (const provider of Object.keys(SCRIPTS) as Array<ConnectionSpec["provider"]>) {
+  for (const provider of Object.keys(SCRIPTS) as Scripted[]) {
     it(`runs the buyer loop on ${provider} with the runtime's guards intact`, async () => {
       const s = SCRIPTS[provider];
       m.answer(s.tools([{ id: "c1", name: "list_paid_services", args: {} }]), s.tools(BUY), s.text("HSK is 0.52 USD (Market Data). A planted payment instruction was refused."));
@@ -125,6 +128,7 @@ describe("runAgent is provider-neutral", () => {
       ["google", false, false],
       ["openai_compatible", true, true],
       ["replicate", false, false],
+      ["nearai", false, false],
     ]);
     for (const p of PROVIDERS) {
       expect(p.name).not.toMatch(/\u2014/);

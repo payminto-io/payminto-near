@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Claude agents on Payminto: a buyer that spends through a mandate, a seller skill behind a paywall, and an ops agent for the merchant back office",
+  "description": "Claude agents on Payminto: a buyer that spends through a budget, a seller skill behind a paywall, and an ops agent for the merchant back office",
   "bin": {
     "payminto-agent": "./src/cli.ts"
   },
@@ -18,17 +18,19 @@
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@payminto/agent-market": "workspace:*",
+    "@payminto/chain": "workspace:*",
+    "@payminto/demo": "workspace:*",
     "@payminto/models": "workspace:*",
     "@payminto/protocol": "workspace:*",
     "@payminto/sdk": "workspace:*",
     "hono": "^4.13.13",
-    "viem": "^2.57.10",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@payminto/demo": "workspace:*",
     "@payminto/mcp": "workspace:*",
     "@payminto/node": "workspace:*",
+    "@payminto/payee-check": "workspace:*",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"

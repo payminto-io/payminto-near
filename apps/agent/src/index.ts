@@ -10,6 +10,7 @@ export {
   type RunOptions,
   type SpendReport,
   type Receipt,
+  type Unverified,
   type Refusal,
   type ToolCallLog,
   type TurnUsageLog,
@@ -54,4 +55,4 @@ export { marketBriefApp, discoverInputs, registerSeller, templateBrief, SKILL_NA
 export { serveMarketBrief, type RunningSeller } from "./serve-skill.ts";
 export { walletServerSpec, merchantServerSpec, limitsFromEnv, serviceConfig, parseMcpSpec, modelFromEnv, AgentConfigError, MissingApiKeyError, KEY_ENV, MCP_MAIN, REPO_ROOT } from "./config.ts";
 export { BUYER_SYSTEM, OPS_SYSTEM, MARKET_BRIEF_SYSTEM } from "./prompts.ts";
-export { scriptedModel, lastToolResults, messageText, toolJson, type ScriptedModel, type ScriptStep, type ScriptReply } from "./scripted.ts";
+export { scriptedModel, lastToolResults, messageText, toolJson, sellerData, SELLER_DATA_BEGIN, SELLER_DATA_END, type ScriptedModel, type ScriptStep, type ScriptReply } from "./scripted.ts";

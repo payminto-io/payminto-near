@@ -1,6 +1,6 @@
 import type { Context, Hono } from "hono";
 import { z } from "zod";
-import { networkFor } from "@payminto/protocol";
+import { networkFor, type Network } from "@payminto/protocol";
 import { ApiError } from "../errors.ts";
 import type { Metrics } from "../metrics.ts";
 import { TokenBuckets } from "../ratelimit.ts";
@@ -32,12 +32,12 @@ const inviteSchema = z.object({ emails: z.array(zEmail).min(1).max(50), role: z.
 const acceptSchema = z.object({ token: zToken, name: zName.optional(), password: zPassword.optional() });
 
 /** The pre-session routes skip the CSRF token (there is no session yet) but keep the Origin check. */
-export function mountAuth(app: Hono<any>, a: Access, o: { metrics: Metrics; limits: AuthLimits; chainId: number; tooMany: (c: Context, scope: string, retryAfterSec: number) => Response }) {
+export function mountAuth(app: Hono<any>, a: Access, o: { metrics: Metrics; limits: AuthLimits; network?: Network; tooMany: (c: Context, scope: string, retryAfterSec: number) => Response }) {
   const auth: AuthService = a.auth;
   const ipBucket = new TokenBuckets({ rps: o.limits.authPerMin / 60, burst: o.limits.authPerMin });
   const setupBucket = new TokenBuckets({ rps: o.limits.setupPerMin / 60, burst: o.limits.setupPerMin });
   const emailBucket = new TokenBuckets({ rps: o.limits.emailPerHour / 3600, burst: o.limits.emailPerHour });
-  const net = networkFor(o.chainId);
+  const net = networkFor(o.network ?? "near:sandbox");
   const client = (c: Context) => {
     const x = a.actor(c);
     return { ip: x.ip, userAgent: x.userAgent };
@@ -73,7 +73,7 @@ export function mountAuth(app: Hono<any>, a: Access, o: { metrics: Metrics; limi
     const info = auth.setupInfo();
     // Public: lets the sign-in page hide "Create an account" and the sign-up page say up front when sign-up is off.
     if (!info.needed) return c.json({ ...info, signup_mode: auth.signupMode() });
-    return c.json({ ...info, network: { chain_id: o.chainId, name: net.chain.name, testnet: !!net.chain.testnet } });
+    return c.json({ ...info, network: { id: net.network, name: net.name, testnet: net.testnet } });
   });
   app.post("/v1/setup/check", async (c) => {
     a.checkOrigin(c);

@@ -19,7 +19,10 @@ import { nowIso } from "../store.ts";
 import { deliveryJson, endpointJson, isoOf, type DeliveryRow, type EndpointRow, type GatewayEventRow, type ModelContext } from "./model.ts";
 import { checkWebhookUrl, guardedLookup, type UrlPolicy } from "./ssrf.ts";
 
-/** Events an endpoint may subscribe to: section 7, section 14's merchant.payout_changed, and agent runs (docs/AGENTS.md section 5). */
+/**
+ * Events a business endpoint may subscribe to: payments and refunds, merchant.payout_changed, agent runs
+ * (docs/AGENTS.md section 5), and budget.refused for refused agent payments to this business.
+ */
 export const SUBSCRIBABLE_EVENTS: readonly string[] = [
   ...WEBHOOK_EVENT_TYPES,
   "merchant.payout_changed",
@@ -28,6 +31,12 @@ export const SUBSCRIBABLE_EVENTS: readonly string[] = [
   "agent_run.cancelled",
   "agent_run.timed_out",
 ];
+
+/** Events a platform endpoint (no business) may subscribe to: clearing alerts for the node's Budgets. */
+export const PLATFORM_EVENTS: readonly string[] = ["budget.refused"];
+
+/** A business id, or null for the platform's own endpoints and events. */
+export type WebhookScope = string | null;
 
 export const DELIVERY_TIMEOUT_MS = 10_000;
 /** An endpoint whose every attempt failed for this long is disabled (no event is emitted for it). */
@@ -101,25 +110,26 @@ export class WebhookService {
 
   // ------------------------------------------------------------------ endpoints
 
-  endpoint(merchantId: string, id: string): EndpointRow {
-    const r = this.#db.get<EndpointRow>("SELECT * FROM webhook_endpoints WHERE id = ? AND merchant_id = ? AND deleted_at IS NULL", id, merchantId);
+  endpoint(merchantId: WebhookScope, id: string): EndpointRow {
+    const r = this.#db.get<EndpointRow>("SELECT * FROM webhook_endpoints WHERE id = ? AND merchant_id IS ? AND deleted_at IS NULL", id, merchantId);
     if (!r) throw new ApiError(404, "NOT_FOUND", "webhook endpoint not found");
     return r;
   }
 
-  endpoints(merchantId: string): EndpointRow[] {
-    return this.#db.all<EndpointRow>("SELECT * FROM webhook_endpoints WHERE merchant_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", merchantId);
+  endpoints(merchantId: WebhookScope): EndpointRow[] {
+    return this.#db.all<EndpointRow>("SELECT * FROM webhook_endpoints WHERE merchant_id IS ? AND deleted_at IS NULL ORDER BY created_at DESC", merchantId);
   }
 
-  #events(events: string[]): string {
+  #events(merchantId: WebhookScope, events: string[]): string {
     if (events.length === 0) throw new ApiError(400, "VALIDATION_ERROR", "events must list at least one event type or *");
     if (events.includes("*")) return JSON.stringify(["*"]);
-    const bad = events.filter((e) => !SUBSCRIBABLE_EVENTS.includes(e));
+    const allowed = merchantId === null ? PLATFORM_EVENTS : SUBSCRIBABLE_EVENTS;
+    const bad = events.filter((e) => !allowed.includes(e));
     if (bad.length) throw new ApiError(400, "VALIDATION_ERROR", `unknown event types: ${bad.join(", ")}`);
     return JSON.stringify([...new Set(events)]);
   }
 
-  async create(merchantId: string, b: { url: string; description?: string | null; events: string[] }) {
+  async create(merchantId: WebhookScope, b: { url: string; description?: string | null; events: string[] }) {
     await checkWebhookUrl(b.url, this.#policy);
     const id = newWebhookEndpointId();
     const now = nowIso();
@@ -129,7 +139,7 @@ export class WebhookService {
       merchantId,
       b.url,
       b.description ?? null,
-      this.#events(b.events),
+      this.#events(merchantId, b.events),
       newWebhookSecret(),
       now,
       now,
@@ -156,7 +166,7 @@ export class WebhookService {
     };
   }
 
-  async update(merchantId: string, id: string, b: { url?: string; description?: string | null; events?: string[]; active?: boolean }) {
+  async update(merchantId: WebhookScope, id: string, b: { url?: string; description?: string | null; events?: string[]; active?: boolean }) {
     const cur = this.endpoint(merchantId, id);
     if (b.url !== undefined) await checkWebhookUrl(b.url, this.#policy);
     // Re-enabling clears the auto-disable state, so the endpoint gets a fresh 3-day window.
@@ -167,7 +177,7 @@ export class WebhookService {
        WHERE id = ?`,
       b.url ?? cur.url,
       b.description === undefined ? cur.description : b.description,
-      b.events ? this.#events(b.events) : cur.events,
+      b.events ? this.#events(merchantId, b.events) : cur.events,
       b.active === undefined ? cur.active : b.active ? 1 : 0,
       nowIso(),
       reenable ? 1 : 0,
@@ -177,7 +187,7 @@ export class WebhookService {
     return this.json(this.endpoint(merchantId, id));
   }
 
-  remove(merchantId: string, id: string): void {
+  remove(merchantId: WebhookScope, id: string): void {
     this.endpoint(merchantId, id);
     this.#db.tx(() => {
       this.#db.run("UPDATE webhook_endpoints SET deleted_at = ?, active = 0, updated_at = ? WHERE id = ?", nowIso(), nowIso(), id);
@@ -185,7 +195,7 @@ export class WebhookService {
     });
   }
 
-  rotateSecret(merchantId: string, id: string) {
+  rotateSecret(merchantId: WebhookScope, id: string) {
     this.endpoint(merchantId, id);
     this.#db.run("UPDATE webhook_endpoints SET secret = ?, updated_at = ? WHERE id = ?", newWebhookSecret(), nowIso(), id);
     return this.json(this.endpoint(merchantId, id), true);
@@ -193,8 +203,18 @@ export class WebhookService {
 
   // ------------------------------------------------------------------ outbox
 
+  /** True when an active endpoint of this scope would receive `type`. */
+  hasSubscribers(merchantId: WebhookScope, type: string): boolean {
+    return this.#db
+      .all<{ events: string }>("SELECT events FROM webhook_endpoints WHERE merchant_id IS ? AND active = 1 AND deleted_at IS NULL", merchantId)
+      .some((e) => {
+        const events = JSON.parse(e.events) as string[];
+        return events.includes("*") || events.includes(type);
+      });
+  }
+
   /** Writes the event and one pending attempt per subscribed active endpoint. Must run inside the state-change tx. */
-  emit(merchantId: string, type: string, objectId: string, paymentId: string | null, object: unknown): string {
+  emit(merchantId: WebhookScope, type: string, objectId: string, paymentId: string | null, object: unknown): string {
     const id = newEventId();
     const created = this.#clock();
     const body = JSON.stringify({ id, type, created, livemode: this.#ctx.livemode, data: { object } });
@@ -211,7 +231,7 @@ export class WebhookService {
     );
     if (type === "ping") return id;
     let due = 0;
-    for (const e of this.#db.all<EndpointRow>("SELECT * FROM webhook_endpoints WHERE merchant_id = ? AND active = 1 AND deleted_at IS NULL", merchantId)) {
+    for (const e of this.#db.all<EndpointRow>("SELECT * FROM webhook_endpoints WHERE merchant_id IS ? AND active = 1 AND deleted_at IS NULL", merchantId)) {
       const events = JSON.parse(e.events) as string[];
       if (!events.includes("*") && !events.includes(type)) continue;
       this.#schedule(id, e, 1, created, false);
@@ -258,7 +278,7 @@ export class WebhookService {
     );
   }
 
-  deliveries(merchantId: string, endpointId: string, limit: number, cursor?: number) {
+  deliveries(merchantId: WebhookScope, endpointId: string, limit: number, cursor?: number) {
     this.endpoint(merchantId, endpointId);
     const rows = this.#db.all<DeliveryWithEvent>(
       `SELECT d.*, e.type AS event_type, e.body AS body FROM webhook_deliveries d JOIN gateway_events e ON e.id = d.event_id
@@ -270,7 +290,7 @@ export class WebhookService {
   }
 
   /** Manual resend: a new attempt row due now that does not continue the schedule. */
-  async retry(merchantId: string, deliveryId: string) {
+  async retry(merchantId: WebhookScope, deliveryId: string) {
     const d = this.#delivery(deliveryId);
     if (!d) throw new ApiError(404, "NOT_FOUND", "delivery not found");
     const e = this.endpoint(merchantId, d.endpoint_id);
@@ -281,7 +301,7 @@ export class WebhookService {
   }
 
   /** Sends a `ping` event to one endpoint now and returns the attempt. */
-  async test(merchantId: string, endpointId: string) {
+  async test(merchantId: WebhookScope, endpointId: string) {
     const e = this.endpoint(merchantId, endpointId);
     const id = this.#db.tx(() => {
       const eventId = this.emit(merchantId, "ping", e.id, null, endpointJson(e, this.#ctx));

@@ -1,0 +1,41 @@
+{
+  "name": "@payminto/relayer",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "type": "module",
+  "description": "Optional NEP-366 relayer: pays gas only for an allowed set of zero-deposit calls to the Payminto hub, so an owner with no NEAR can still stop an agent",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fake": "./src/fake.ts"
+  },
+  "bin": {
+    "payminto-revoke": "./src/cli/main.ts"
+  },
+  "scripts": {
+    "start": "node scripts/check-runtime.mjs && node --env-file-if-exists=.env src/main.ts",
+    "dev:fake": "node scripts/check-runtime.mjs && node scripts/dev-fake.ts",
+    "revoke": "node scripts/check-runtime.mjs && node src/cli/main.ts",
+    "test": "vitest run",
+    "test:sandbox": "PAYMINTO_SANDBOX=1 vitest run test/sandbox.test.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@payminto/chain": "workspace:*",
+    "@payminto/near-addons": "workspace:*",
+    "@scure/base": "2.4.0",
+    "hono": "^4.13.13",
+    "near-kit": "0.20.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

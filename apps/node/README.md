@@ -1,110 +1,192 @@
 # Payminto Clearing Node
 
-The self-hosted node that checks every agent voucher against its mandate, records it in a double-entry ledger, and clears batches of vouchers on the `ClearingHub` contract.
-It never holds user funds: settlement moves net amounts directly wallet to wallet through the hub.
-The build contract is `docs/SPEC.md` section 5; this file covers running and configuring it.
+The self-hosted node that checks every agent voucher against its Budget, records it in a double-entry ledger, nets calls between Budget owners, and settles batches through the clearing hub on NEAR.
+Budget funds are escrowed in the hub contract (unaudited, testnet by default); the node holds no funds and has no method that moves them.
+It also runs the Payminto Gateway: a hosted checkout paid from a NEAR wallet, and payment links agents pay by voucher.
+The design is `docs/superpowers/specs/2026-11-10-near-clearing-design.md`.
 
-## Run it locally
-
-From the repository root:
-
-```sh
-pnpm install
-scripts/dev-local.sh
-```
-
-The script starts `anvil` on port 8545 if nothing answers there, deploys `ClearingHub` and `MockStablecoin` with `forge script script/DeployLocal.s.sol` (anvil key 0), and starts the node with anvil key 9 as `OPERATOR_KEY` and `ADMIN_TOKEN=dev-admin-token`.
-It refuses to run against anything that is not chain 31337.
-Each deployment gets its own SQLite file under `apps/node/data/`, because a database is bound to one chain, hub and token and the node refuses to mix them.
-
-To run the node alone against an existing deployment:
+## Run it
 
 ```sh
 cp apps/node/.env.example apps/node/.env   # edit as needed
 pnpm --filter @payminto/node start         # or dev; both load apps/node/.env, shell variables win
 ```
 
-Node 22.18 or newer is required (type stripping and `node:sqlite`); `start` and `dev` check the runtime first and say so clearly.
-Production concerns (TLS, backups with `pnpm --filter @payminto/node backup`, upgrades, `/metrics`, key handling) are in `docs/OPERATIONS.md`.
-
-`dev` reads `contracts/deployments/<CHAIN_ID>.json` for `HUB_ADDRESS` and `TOKEN_ADDRESS` unless they are set.
-Stop with Ctrl-C or SIGTERM: the node stops accepting requests, closes SSE streams, lets an in-flight settlement finish booking, and closes the database.
+Node 22.18 or newer is required (type stripping and `node:sqlite`).
+`pnpm demo` runs the whole story locally without secrets.
+Production concerns (TLS, backups with `pnpm --filter @payminto/node backup`, `/metrics`, key handling) are in `docs/OPERATIONS.md`.
+Stop with Ctrl-C or SIGTERM: the node stops accepting requests, closes SSE streams, lets an in-flight settlement or payout finish booking, and closes the database.
 
 ## Configuration
 
 All variables are validated once at startup with zod.
 Errors name the variable and never print its value, and logs never contain keys or tokens.
+`apps/node/.env.example` lists every variable with its default; the important ones:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `PORT` | `8787` | HTTP port |
-| `HOST` | `127.0.0.1` | Bind address (the Docker image uses `0.0.0.0`) |
-| `CHAIN_ID` | `31337` | 31337, 133 or 177 |
-| `RPC_URL` | network default | JSON-RPC endpoint |
-| `RPC_FALLBACK_URLS` | network fallbacks on 133/177 | Comma-separated endpoints tried when `RPC_URL` fails; `none` disables |
-| `DEPLOY_BLOCK` | deployments file `blockNumber` | First block of the on-chain revocation scan; required on 133/177 without it |
-| `HUB_ADDRESS` | deployments file | ClearingHub address |
-| `TOKEN_ADDRESS` | deployments file, then network default | Settlement token |
-| `OPERATOR_KEY` | required | Signs receipts and HSP adapter receipts, submits `openMandate` and `settleBatch` (gas only); public anvil/hardhat keys are refused on 133/177 |
-| `ADMIN_TOKEN` | required (12+ chars) | Bearer token for admin routes, `/metrics`, the dashboard and SSE; 32+ chars and not `dev-admin-token` on 133/177 |
+| `NETWORK` | `near:sandbox` | `near:sandbox` or `near:testnet`; there is no mainnet node mode |
+| `RPC_URL` | network default | NEAR JSON-RPC; also used for access-key and refund-transaction reads |
+| `HUB_ACCOUNT` | required | The clearing hub contract |
+| `OPERATOR_ACCOUNT`, `OPERATOR_KEY` | required | The settler account and its function-call key, limited to `settle_batch` and `payout` |
+| `NODE_SIGNING_SEED` | required | Signs per-call receipts and checkout terms; the hub's `checkout_key` must be its public key |
+| `ADMIN_TOKEN` | required | Recovery key for admin routes before the first owner exists |
 | `DB_PATH` | `./data/clearing.db` | SQLite file (WAL mode) |
-| `SETTLE_INTERVAL_SEC` | `0` | Auto-settle period; 0 means manual only |
-| `SETTLE_MIN_CALLS` | `1` | Auto-settle skips below this many unsettled calls |
-| `PUBLIC_URL` | `http://localhost:8787` | Node URL advertised to agents in x402 requirements |
-| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated dashboard origins |
-| `HSP_MODE` | `local` | `local` (built-in adapter and verifier) or `coordinator` |
-| `HSP_COORDINATOR_URL`, `HSP_API_KEY` | unset | Required in `coordinator` mode |
-| `HSP_CHAIN_NAME` | unset | Coordinator mode: registry name used only when `GET /chains` has no entry for `CHAIN_ID` |
-| `HSP_VERIFYING_CONTRACT` | the hub (local mode) | Coordinator mode: pin checked against `GET /chains`; the node refuses to start on a mismatch |
-| `HSP_REQUIRED_CAPABILITIES` | empty | Coordinator mode: comma-separated capabilities committed to in every HSP mandate |
-| `CONFIRM_TAG` | `safe` on 133/177, `latest` on 31337 | Head (`latest`, `safe`, `finalized`) a settlement block must reach before the batch is confirmed and booked |
-| `TX_BUMP_AFTER_BLOCKS`, `TX_MAX_BUMPS` | `5`, `5` | Same-nonce replacement with fees +12.5 % when a transaction is not included after this many blocks |
-| `TX_INCLUSION_TIMEOUT_SEC` | `300` | The sender gives up waiting after this; the finality tracker keeps watching the batch |
-| `RPC_RETRIES` | `4` | Retries on network errors, timeouts, 429 and 5xx, with exponential backoff and jitter |
-| `EAS_ATTEST` | `false` | Attest every confirmed batch on the EAS predeploy (HashKey Chain only) |
-| `HSP_COSIGN_TIMEOUT_SEC` | `20` | How long a batch waits for debtor agents to co-sign HSP mandates |
-| `FUNDS_REFRESH_SEC` | `30` | Balance and allowance refresh period while calls are unsettled |
-| `DEPLOYMENTS_DIR` | `contracts/deployments` | Where `<chainId>.json` is read from |
-| `RATE_LIMIT_PROVIDER_RPS`, `RATE_LIMIT_PROVIDER_BURST` | `200`, `1000` | Token bucket per provider key on `POST /v1/vouchers` (0 rps disables) |
-| `RATE_LIMIT_IP_RPS`, `RATE_LIMIT_IP_BURST` | `100`, `1000` | Token bucket per client IP for requests without the admin token (0 rps disables) |
-| `TRUST_PROXY_HOPS` | `0` | Reverse proxies whose `X-Forwarded-For` entries are trusted for the client IP |
-| `DENIAL_DEDUP_SEC` | `60` | Identical denials within this window fold into one row with a `repeats` count |
-| `DENIALS_MAX_ROWS`, `EVENTS_MAX_ROWS` | `100000`, `200000` | Oldest denial and event rows beyond these are pruned every minute |
-| `BACKUP_DIR` | `./backups` | Output directory of `pnpm --filter @payminto/node backup` |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` (JSON lines on stdout) |
+| `SETTLE_INTERVAL_SEC`, `SETTLE_MIN_CALLS` | `0`, `1` | Auto-settle period (0 = manual) and the minimum number of unsettled calls |
+| `PAYOUT_INTERVAL_SEC` | `300` | Scheduled payouts of hub credit (0 = only `POST /v1/payouts`) |
+| `FUNDS_MAX_AGE_MS` | `10000` | Oldest hub snapshot (escrow, credit, revoked or not) a call may be decided on; 500 to 60000 |
+| `RATE_LIMIT_UNSIGNED_RPS`, `RATE_LIMIT_UNSIGNED_BURST` | `5`, `50` | Vouchers not signed by their Budget's agent key, per provider key or client IP; past the bucket the answer is 429 |
+| `GATEWAY_PAYOUT_ACCOUNT` | unset | Turns the gateway on and seeds the first business's payout account |
+| `PAYEE_CHECK` | `on` | The payee check: `on` or `off`. Off, vouchers are judged by the Budget alone |
+| `PAYEE_CHECK_INDEXER` | `nearblocks` on `near:testnet`, `off` on `near:sandbox` | Where account ages come from. A local chain has no indexer, and `nearblocks` is refused there |
+| `PAYEE_CHECK_INDEXER_KEY` | unset | Optional NearBlocks API key; the keyless tier is rate limited |
 
 ## How a call is cleared
 
-Policy is enforced twice: by the agent before signing and by the node before accepting; total cap, allowlist and expiry a third time on chain.
-Agents fetch the policy they enforce from the public `GET /v1/mandates/:id/policy` and verify it against the mandate hashes (see `packages/sdk/README.md`).
-
 1. The provider's paywall (`@payminto/sdk`) forwards the agent's voucher to `POST /v1/vouchers`.
-2. The node verifies the voucher signature (EOA, or ERC-1271 for contract agents), then loads mandate state and evaluates every rule in the SPEC 5.4 order inside one `BEGIN IMMEDIATE` transaction, so parallel calls cannot overspend.
-3. An accepted call gets a receipt signed by the operator over its Merkle leaf, a ledger journal (debit provider receivable, credit agent payable), and a `call.accepted` event; a refused call gets a recorded denial with its rule.
-4. `POST /v1/settlements` (or the interval worker) takes the latest voucher per (mandate, payee) of pairs with no batch in flight, checks each mandate and settled position on chain, screens every party against the token blacklist (USDC.e `isBlacklisted`, one Multicall3 read), drops agents whose wallet cannot fund their projected net debit, and splits the claims into chunks of at most 64.
-5. Per chunk it builds the receipts tree, derives `batchId = keccak256(abi.encode(chainId, hub, receiptsRoot, seq))`, creates one HSP mandate per projected net transfer and waits for debtor co-signatures, simulates, preflights the operator balance against gas plus the L1 data fee, and sends `settleBatch` (replacing it with the same nonce and higher fees if it is not included in time).
-   At one confirmation the batch is `included`; once its block is at or below the `CONFIRM_TAG` head the node decodes `NetTransfer` events, reconciles them with the off-chain projection, books the ledger and marks the batch `confirmed`. With `EAS_ATTEST=true` it then attests the batch on EAS.
-6. HSP: in `local` mode the node observes the settlement, signs an adapter receipt and runs the verifier (`ACCEPT` or `REJECT`); transfers whose debtor did not co-sign are `UNSIGNED`.
-   In `coordinator` mode co-signed mandates are registered with the HashKey Coordinator and observed until `SETTLED`; failures are retried in the background and never block the ledger.
+2. The node first verifies the ed25519 voucher signature against the Budget's agent key.
+   It then runs the payee check, which can refuse with `PAYEE_BLOCKED` or `PAYEE_NEEDS_APPROVAL` (see "The payee check").
+   A voucher that key did not sign, or one for a Budget the node does not know, is nobody's refusal: it gets a plain 402 error (`BAD_SIGNATURE` or `UNKNOWN_BUDGET`, no `refusal`), counts against the sender's unsigned limit, and leaves no denial row, event, webhook or screening decision in the owner's name.
+3. The node then evaluates every rule inside one `BEGIN IMMEDIATE` transaction, so parallel calls cannot overspend.
+   A revoked or expired Budget is refused at once, even inside the hub's settlement grace period.
+   Net exposure counts escrow only: this Budget's unsettled spending plus the call must fit its escrow, because the hub debits only escrow at settlement.
+   The funds check fails closed: a hub snapshot older than `FUNDS_MAX_AGE_MS` is read again first, and if the hub cannot be read the call is refused with `NET_EXPOSURE`, a message that says so, and the retry hint `{ kind: "after", seconds: 5, reason: "hub_unreadable" }`.
+   A request paid with several vouchers (a payment split between a business and a platform fee) is one call: every cap is checked against its total, and it counts once toward the per-minute and same-request limits.
+4. An accepted call gets a node-signed receipt and a ledger journal; a refusal is recorded with its rule, attempted amount, remaining Budget and retry hint, and goes out as a `budget.refused` webhook.
+   A retry hint never invites a retry that cannot work: a rolling limit answers with the real seconds until the call fits every rolling limit it breaks, and with `never` when no wait helps.
+5. `POST /v1/settlements` (or the interval worker) first reads the hub's settled position of every (Budget, payee) pair it would claim, and books what a payee settled itself with `settle_own`.
+   It then takes the latest voucher per pair, checks each Budget on the hub, packs claims into batches of at most 100 with one Budget per owner, and calls `settle_batch` with the canonical netting result.
+6. A send the hub refuses fails its batch; a send that ends without a verdict marks the batch `unknown` and returns its calls to the queue, and the node adopts the batch if the hub turns out to have it.
+   A refusal with `STALE_VOUCHER` or `NET_MISMATCH` means a settled position moved under the batch (a `settle_own` raced it): the node reads the positions again and rebuilds the batch without what is already settled, at most 3 times a run.
+   A batch is booked from the hub's record only when that record names this node as settler and stores this batch's root; anything else under the node's batch id fails the batch and pages the operator.
+7. Net creditors are queued for payout and paid in calls of at most 10 accounts; unregistered accounts keep their credit on the hub until they register with the token.
 
-Interrupted batches are recovered on restart: unsent batches are failed and their calls return to `accepted`, sent ones are handed to the finality tracker.
-The tracker (every 2 s) confirms batches, follows a transaction into a different block after a reorg, rebroadcasts a reorged-out settlement's stored signed transaction, and fails a batch only when the hub has no record of it and its nonce belongs to another transaction.
-`POST /v1/mandates` with a `permit` (EIP-2612 by the agent) opens the mandate with `openMandateWithPermit`, so the agent needs no HSK.
+`GET /v1/settlements/export` gives each party's gross expense and revenue per counterparty next to its net cash movement, as JSON or CSV.
+
+## Calls a seller settles itself
+
+`settle_own` is the seller's escape hatch, and the node does not get in its way or lose track because of it.
+The node reads `settledOf` before every settlement and on the funds interval, and books each movement that none of its batches made as a seller settlement (`sst_...`).
+Those calls are `settled` with `settledBy: "seller"`: they are in no batch, so they have no Merkle proof, and `GET /v1/receipts/:callId/proof` says so (`batchId`, `proof` and `onchainVerified` stay empty, and `sellerSettlement.covered` tells whether the hub's settled position covers the call).
+The ledger posts a `seller.settled` journal that moves the amount from the owner's escrow to the seller's hub credit, as the hub did, and the export and overview list these amounts next to the batches.
+If a seller settles a voucher the node never accepted, the node's position follows the hub, the amount is booked as `uncleared`, and the operator is paged.
+
+## Refusals an agent can confirm
+
+A seller relays the node's refusal to the agent, and a seller can say anything.
+`GET /v1/budgets/:id/refusals?requestHash=<hash>` (public, like the position read; `payee` and `cumulative` narrow it) returns the node's own record of the refusals of that request.
+Each record is signed with the node's receipt key (`nodeKey` in `/v1/info`), and the same signature travels with the 402 in `error.details.record`.
+The digest is `refusalDigest` in `@payminto/protocol`: SHA-256 of the text `payminto.refused.v1|hub|network|id|budgetId|payee|amount|cumulative|requestHash|rule|attemptedAmount|remainingBudget|retry kind|retry value|timestamp`, with an empty field for a null remaining Budget or a hint without a number.
+Its domain differs from the acceptance digest's (`payminto.accepted.v1`), so a refusal signature can never be used as a receipt.
+The node keeps no record of a voucher the agent did not sign, so a relayed `BAD_SIGNATURE` or `UNKNOWN_BUDGET` cannot be confirmed this way.
+
+## The payee check
+
+Before a Budget pays an account, the node judges that account as allow, warn or block, with reasons.
+The judgment is `@payminto/payee-check`: a missing account, a name that imitates an allowed payee, reports, a new account, changed contract code, and more.
+The node adds the rules around it, and the owner's decisions.
+
+### Do X, see Y
+
+| Do | See |
+|---|---|
+| Start the node on `near:testnet` with the defaults | The log line `payee check on`, with `indexer: nearblocks` |
+| `POST /v1/budgets` with a payee list | `payeeChecks` in the answer: one verdict per payee. A blocked payee does not stop the registration, because the owner decides |
+| `GET /v1/payees/check?account=wrap.testnet&budget=<id>` | The verdict as JSON, with every signal, what was checked and what was not |
+| Let an agent pay a payee with warnings | A 402 with `PAYEE_NEEDS_APPROVAL`, the event `payee.approval_requested` on `/v1/events`, and the request under `waiting` in `GET /v1/budgets/<id>/payee-approvals` |
+| `POST /v1/budgets/<id>/payee-approvals` with `{ "payee": "wrap.testnet", "decision": "approve" }` | The approval with who decided and when. The same call is then accepted |
+| Approve a payee the check blocks | `409 PAYEE_BLOCKED`, and the hint to send `overrideBlock: true`, which is written to the activity log |
+| `POST /v1/payees/reports` with `{ "account", "reason", "evidence" }` | The report, filed in the name of this node's operator account. The next check of that account says `reported` |
+
+These calls need a signed-in platform role (`agents.read` for reads, `agents.manage` for changes) or the recovery key, like the Budget routes.
+
+### The two refusals
+
+They are decided after the voucher's signature is checked and before the Budget's own rules run.
+Each is an ordinary refusal: the 402 with the machine-readable `refusal`, a row in the refusals list, the `budget.refused` webhook and a signed record.
+
+| Rule | Fires when | `retry` |
+|---|---|---|
+| `PAYEE_BLOCKED` | The verdict is block, or the Budget's owner denied the payee | `never` |
+| `PAYEE_BLOCKED` | The payee could not be checked and the node has never seen it | `after` 30 seconds |
+| `PAYEE_NEEDS_APPROVAL` | The verdict is warn and the owner has not approved the warnings it carries | `approval`, with `payee` and `approveAt` |
+
+`approveAt` is `<PUBLIC_DASHBOARD_URL>/budgets/<Budget id>`.
+It is built from the node's own configuration and from nothing a seller or a payee sent.
+It tells a person where to decide; it is not an address for an agent to call.
+
+A Budget that is revoked or expired is refused by its own rule, and the payee is not looked at.
+A payee that is not on a non-empty payee list is refused with `PAYEE_NOT_ALLOWED` as before, unless the check blocks it: a lookalike of an allowed payee gets `PAYEE_BLOCKED` with that reason.
+
+### Approvals
+
+An approval belongs to one Budget and one payee, and records who decided and when.
+It covers the warnings the owner saw: its `signals` list holds their ids.
+A warning that appears later, such as changed contract code, asks again.
+An approval does not stand against a block unless it was sent with `overrideBlock: true`, and then only against the blocks the owner saw.
+`decision: "deny"` refuses the payee for that Budget whatever the check says.
+`DELETE /v1/budgets/<id>/payee-approvals/<payee>` withdraws a decision.
+
+An agent's wallet asks about an approval with `POST /v1/budgets/<id>/payee-approvals/requests` and a signature of the Budget's agent key (`payeeApprovalRequestDigest` in `@payminto/protocol`).
+The answer is `approved`, `denied`, `waiting` or `blocked`.
+That route records the waiting request and sends the live event; it cannot approve anything.
+
+### What the call path reads
+
+- A payee the owner approved, or one the Budget has paid 3 times, is decided on the verdict the node holds.
+  The call path reads nothing from the network for it, and the node looks again in the background when that verdict is older than 5 minutes.
+- Any other payee is looked at within 3 seconds, and verdicts are reused for 30 seconds.
+- When the look cannot finish (the chain or the indexer does not answer), the node decides on the verdict it holds.
+  Registration stores one for every payee on the list, so a slow indexer does not stop a listed payee.
+- Only a payee the node has never seen is refused for that reason, with `PAYEE_BLOCKED` and `retry: { "kind": "after", "seconds": 30 }`.
+  A patient look (20 seconds) runs behind the refused call, so the retry is decided on its verdict.
+
+### Reports
+
+A report is a claim by a third party, and its text is untrusted data.
+It is validated (one line of at most 280 characters, evidence that is a transaction hash or an https URL), stored, and returned as plain JSON strings only.
+It never appears in a signal's reason, in a refusal or in anything an agent reads.
+The reporter is never taken from the request body: every report filed here carries this node's operator account, and `filedBy` says which signed-in person filed it.
+So one node is one voice, and reports from this node alone lead to `reported` (warn), not to a block.
+
+### Limits
+
+- The check reads accounts through `RPC_URL`.
+  On a network's public default endpoint it also tries the second public endpoint when the first refuses, because both are rate limited; with your own `RPC_URL` it reads that endpoint and no other.
+- Account ages come from NearBlocks on `near:testnet`, which learns the account ids that are checked.
+  A local chain has no indexer, so ages are not checked there and every verdict says so.
+- A node handed a chain object (the tests, `pnpm demo` on the simulated hub) has nothing to read accounts with, so the check is off there unless the caller passes sources (`startNode(config, { payeeCheck })`).
+- These are heuristics, not a guarantee.
+  The limits of each signal are in `packages/payee-check/README.md`.
+
+## Operator alerts
+
+Conditions only the operator can resolve are logged as errors, emitted as `operator.alert` events, and counted in `payminto_operator_alerts_total{kind}`; alert on any increase.
+The kinds are `batch_mismatch` (the hub holds another settler's batch or another root under this node's batch id), `seller_settled_uncleared` (a seller settled a voucher this node never accepted) and `settled_position_behind` (the hub's settled position is behind this node's, which means the database and the hub do not belong together).
+`src/hub-readiness.ts` checks at startup what the hub requires of a settler: that this node's receipt key is registered for its account (`receiptKeys`), and that its prepaid `settle_batch` storage balance (`storageOf`) covers at least one full batch.
+Each failed check is an error log line and an increase of `payminto_operator_alerts_total{kind="hub_readiness"}`.
+
+## Gateway
+
+A hosted checkout hands the shopper's wallet terms the node signed with its checkout key, as a ready `ft_transfer_call` to the hub.
+The node polls the hub's record of each payment id (`Chain.payments`) and books what the hub recorded; the payment proof is that record, read again when asked.
+Refunds are sent by the merchant from its own payout account and checked against the submitted transaction.
+A payout account change needs a NEP-413 signature by a full-access key of the new account.
+Agents pay links and payments over x402 v2 with `payminto-voucher` vouchers.
 
 ## Data safety
 
 Tests always use a fresh `mkdtemp` directory and never `DB_PATH`.
-The only destructive tool is `pnpm --filter @payminto/node db:reset <path>`, which deletes a database file and refuses unless the path ends in `.test.db` or `.demo.db`, lives in the OS temp dir, or `--i-know-this-is-disposable` is passed (guard in `src/db/guard.ts`).
-It also refuses the `DB_PATH` of the current environment unless that flag is given.
+The only destructive tool is `pnpm --filter @payminto/node db:reset <path>`, which refuses unless the path ends in `.test.db` or `.demo.db`, lives in the OS temp dir, or `--i-know-this-is-disposable` is passed (guard in `src/db/guard.ts`).
+Startup refuses a database with migration entries this build does not ship, and never drops one.
+Migrations are numbered and forward only: a database created by `001_near.sql` is brought up to date in place at startup, each file in one transaction, and `test/db-guard.test.ts` checks that every row survives.
 
 ## Tests
 
 ```sh
-pnpm --filter @payminto/node test        # unit, integration and end-to-end (boots its own anvil on a random port)
+pnpm --filter @payminto/node test
 pnpm --filter @payminto/node typecheck
-pnpm --filter @payminto/node test:fork   # opt-in: HashKey Chain testnet fork (anvil --fork-url), see docs/HASHKEY.md section 9
 ```
 
-`test/hashkey.test.ts` covers finality at the safe head, both reorg outcomes, same-nonce replacement, blacklist screening, permit onboarding, the operator fee preflight and the Coordinator chain registry against a real anvil.
-
-`test/e2e.test.ts` deploys the contracts, starts the node in-process on a temp database, serves two provider apps behind the SDK paywall, runs about 50 parallel paid calls from two agents (one of them also a payee, so netting happens) plus denied calls, settles, and checks balances, netting, HSP records, the trial balance and an on-chain `verifyReceipt` proof.
+Every suite runs on `FakeChain`, an in-memory model of the hub, with no network.
+`test/e2e.test.ts` tells the demo story: three owners (one a DAO), refusals, a restart, offset settlement, a proven call, payouts and the books.

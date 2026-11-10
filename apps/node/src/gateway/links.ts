@@ -48,8 +48,8 @@ export class LinkService {
   }
 
   /**
-   * Payments that count against max_payments: those money has reached. Open payments do not, so x402 probes (each 402
-   * creates a short-lived payment for its forwarder) cannot use up a link.
+   * Payments that count against max_payments: those money has reached. Open payments do not, so agent payment attempts
+   * (each creates a short-lived draft payment) cannot use up a link.
    */
   usedSlots(id: string): number {
     return this.#db.get<{ n: number }>("SELECT COUNT(*) AS n FROM payments WHERE link_id = ? AND status NOT IN ('open', 'expired', 'canceled')", id)!.n;

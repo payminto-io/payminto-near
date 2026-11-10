@@ -16,7 +16,7 @@ function fakeResult(task: string, ceiling: bigint | null): RunResult {
     usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
     turnUsage: [],
     toolCalls: [],
-    spend: { token: { symbol: "USDC", decimals: 6 }, mandateId: null, ceilingAtomic: ceiling?.toString() ?? null, ceiling: null, spentAtomic: "0", spent: "0 USDC", receipts: [], budgetLeftAtomic: null, budgetLeft: null, refusals: [] },
+    spend: { token: { symbol: "USDC", decimals: 6 }, budgetId: null, ceilingAtomic: ceiling?.toString() ?? null, ceiling: null, spentAtomic: "0", spent: "0 USDC", receipts: [], unverified: [], budgetLeftAtomic: null, budgetLeft: null, refusals: [] },
     note: null,
     error: null,
     startedAt: new Date().toISOString(),

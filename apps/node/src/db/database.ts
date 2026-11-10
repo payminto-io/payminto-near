@@ -8,6 +8,23 @@ export const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), ".."
 export type Row = Record<string, SQLInputValue>;
 
 /**
+ * The database was created by a schema this build does not ship (for example the pre-NEAR migrations). Startup stops here
+ * and never drops, rewrites or migrates such a database: point DB_PATH at a new file, or reset a disposable one with
+ * scripts/reset-db.ts, which refuses anything not marked disposable.
+ */
+export class LegacySchemaError extends Error {
+  readonly unknown: string[];
+  constructor(path: string, unknown: string[]) {
+    super(
+      `Database ${path} has migration entries this build does not ship (${unknown.join(", ")}). ` +
+        "It was not modified, and the node never drops a database. Use a new DB_PATH, or reset a disposable database with scripts/reset-db.ts.",
+    );
+    this.name = "LegacySchemaError";
+    this.unknown = unknown;
+  }
+}
+
+/**
  * Thin wrapper over node:sqlite with WAL, foreign keys, numbered forward-only migrations,
  * a bigint-safe `bigsum` aggregate, and synchronous BEGIN IMMEDIATE transactions with after-commit hooks.
  */
@@ -41,6 +58,12 @@ export class Database {
     const files = readdirSync(dir)
       .filter((f) => /^\d+_.+\.sql$/.test(f))
       .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    // Refuse before touching anything: a database from an older or newer schema must never be migrated in place.
+    const shipped = new Set(files);
+    const unknown = (this.raw.prepare("SELECT name FROM schema_migrations ORDER BY version").all() as Array<{ name: string }>)
+      .map((r) => r.name)
+      .filter((n) => !shipped.has(n));
+    if (unknown.length) throw new LegacySchemaError(this.path, unknown);
     let count = 0;
     for (const file of files) {
       const version = parseInt(file, 10);

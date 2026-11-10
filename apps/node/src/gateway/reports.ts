@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import type { Address, Hex } from "viem";
+
 import {
   explorerTx,
   REPORT_AMOUNT_FIELDS,
@@ -61,8 +61,8 @@ export function decimalOf(v: bigint, decimals: number): string {
 }
 
 /**
- * The fee actually charged on what was received, split like the forwarder splits it (GATEWAY.md section 14.2):
- * pro rata on a partial payment, capped at `fee_total` on an overpayment. Equal to the quote when paid exactly.
+ * The fee actually charged on what was received: pro rata on a partial payment, capped at `fee_total` on an
+ * overpayment. Equal to the quote when paid exactly.
  */
 export function chargedFees(p: Pick<PaymentRow, "amount_due" | "amount_paid" | "fee_total" | "platform_fee">): { fee: bigint; platform: bigint; method: bigint; net: bigint } {
   const due = BigInt(p.amount_due);
@@ -82,7 +82,7 @@ const IN_RANGE = "p.merchant_id = ? AND p.draft = 0 AND p.created_at >= ? AND p.
 
 /**
  * The reconciliation report (docs/GATEWAY.md section 16): one row per payment created in the range, with its fee
- * lines, net, refunds, on-chain transactions, clearing batch and receipt proofs, HSP fields and screening refusals, and
+ * lines, net, refunds, on-chain transactions, clearing batch and receipt proofs, and screening refusals, and
  * totals. Read only; every figure comes from the same rows the payment API serves.
  */
 export class ReconciliationReports {
@@ -104,7 +104,7 @@ export class ReconciliationReports {
     // Synchronous reads with no await in between, so rows, refunds and the ledger check describe the same moment.
     const payments = db.all<PaymentRow & Record<string, unknown>>(`SELECT p.* FROM payments p WHERE ${IN_RANGE} ORDER BY p.created_at, p.rowid`, ...args);
     const credits = group(
-      db.all<CreditRow & { batch_tx: Hex | null }>(
+      db.all<CreditRow & { batch_tx: string | null }>(
         `SELECT c.*, b.tx_hash AS batch_tx FROM payment_credits c JOIN payments p ON p.id = c.payment_id LEFT JOIN batches b ON b.batch_id = c.batch_id
          WHERE ${IN_RANGE} ORDER BY c.id`,
         ...args,
@@ -125,7 +125,7 @@ export class ReconciliationReports {
       from: r.from,
       to: r.to,
       generated_at: nowIso(),
-      chain_id: g.chainId,
+      network: g.network,
       livemode: g.ctx.livemode,
       token: { address: g.token.address, symbol: g.token.symbol, decimals: g.token.decimals },
       ...this.#totals(rows),
@@ -144,7 +144,7 @@ export class ReconciliationReports {
     return out;
   }
 
-  #row(p: PaymentRow & Record<string, unknown>, credits: Array<CreditRow & { batch_tx: Hex | null }>, refunds: RefundRow[], rules: Array<{ rule: string }>): ReconciliationRow {
+  #row(p: PaymentRow & Record<string, unknown>, credits: Array<CreditRow & { batch_tx: string | null }>, refunds: RefundRow[], rules: Array<{ rule: string }>): ReconciliationRow {
     const g = this.#g;
     const d = g.token.decimals;
     const fees = chargedFees(p);
@@ -164,9 +164,7 @@ export class ReconciliationReports {
       // Fees are not returned on refunds, so a full refund leaves this at minus the fee.
       net_after_refunds: fees.net - refunded,
     };
-    const batchIds = [...new Set(credits.map((c) => c.batch_id).filter((b): b is Hex => !!b))];
-    // Columns another workstream may add (HSP); a node without them reports empty cells.
-    const text = (k: string) => (typeof p[k] === "string" && p[k] !== "" ? (p[k] as string) : null);
+    const batchIds = [...new Set(credits.map((c) => c.batch_id).filter((b): b is string => !!b))];
     return {
       payment_id: p.id,
       reference: p.reference,
@@ -176,7 +174,7 @@ export class ReconciliationReports {
       paid_at: p.paid_at,
       status: p.status as PaymentStatus,
       method: (p.quote_method ?? p.method ?? null) as string | null,
-      payer: p.payer as Address | null,
+      payer: p.payer as string | null,
       currency: g.token.symbol,
       ...this.#amounts(amounts),
       refunds: refunds.map((f) => ({
@@ -186,7 +184,7 @@ export class ReconciliationReports {
         status: f.status,
         approval: f.approval ?? "not_required",
         tx_hash: f.tx_hash,
-        explorer_url: f.tx_hash ? explorerTx(g.chainId, f.tx_hash) : null,
+        explorer_url: f.tx_hash ? explorerTx(g.network, f.tx_hash) : null,
         created_at: f.created_at,
       })),
       transactions: credits.map((c) => {
@@ -197,7 +195,7 @@ export class ReconciliationReports {
           amount_base_units: c.amount,
           status: c.status,
           tx_hash: tx,
-          explorer_url: tx ? explorerTx(g.chainId, tx) : null,
+          explorer_url: tx ? explorerTx(g.network, tx) : null,
           batch_id: c.batch_id,
           call_id: c.call_id,
           receipt_proof_url: c.call_id && this.#publicUrl ? `${this.#publicUrl}/v1/receipts/${c.call_id}/proof` : null,
@@ -205,8 +203,6 @@ export class ReconciliationReports {
       }),
       batch_ids: batchIds,
       proof_url: p.status === "paid" || p.status === "overpaid" ? `${g.ctx.checkoutBaseUrl}/receipt/${p.id}` : null,
-      hsp_flow_id: text("hsp_flow_id"),
-      hsp_status: text("hsp_status"),
       screening_rules: [...new Set(rules.map((x) => x.rule))],
     };
   }
@@ -291,8 +287,6 @@ export class ReconciliationReports {
         batch_ids: join(row.batch_ids),
         receipt_proof_urls: join(row.transactions.map((x) => x.receipt_proof_url)),
         proof_url: row.proof_url,
-        hsp_flow_id: row.hsp_flow_id,
-        hsp_status: row.hsp_status,
         screening_rules: join(row.screening_rules),
       };
       lines.push(REPORT_CSV_COLUMNS.map((k) => csvCell(cells[k])).join(","));

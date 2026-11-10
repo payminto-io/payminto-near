@@ -228,7 +228,7 @@ export class AgentService {
 
   /** Keeps the skill's provider row in step with the agent and the business's current payout wallet. */
   syncProvider(r: AgentRow, merchant: MerchantRow): void {
-    if (!r.provider_id) return;
+    if (!r.provider_id || merchant.payout === null) return;
     this.#db.run(
       "UPDATE providers SET name = ?, description = ?, payee = ?, price_atomic = ? WHERE id = ? AND (name != ? OR description != ? OR payee != ? OR price_atomic != ?)",
       r.name,

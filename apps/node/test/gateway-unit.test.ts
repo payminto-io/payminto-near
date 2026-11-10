@@ -1,34 +1,30 @@
 /**
  * Gateway units on a temp SQLite file with a fake clock: the payment state machine (under, over, late payments, expiry,
- * processing), the reorg drop of an unconfirmed deposit credit, the webhook outbox, its retry schedule and signature,
- * and the SSRF guard. No chain: the chain-facing parts are fakes behind their seams.
+ * processing), the NEAR checkout watcher against FakeChain, the webhook outbox, its retry schedule and signature, and
+ * the SSRF guard.
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { getAddress, keccak256, toBytes, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { verifyWebhook, WEBHOOK_RETRY_SCHEDULE_SECONDS, type PaymentStatus } from "@payminto/protocol";
+import { sha256Text, verifyWebhook, WEBHOOK_RETRY_SCHEDULE_SECONDS, type PaymentStatus } from "@payminto/protocol";
+import { ChainClient } from "../src/chain.ts";
 import { Database } from "../src/db/database.ts";
 import { silentLogger } from "../src/logger.ts";
+import { WalletRail } from "../src/gateway/checkout.ts";
 import { MerchantService, type MerchantRow } from "../src/gateway/merchants.ts";
 import type { ModelContext } from "../src/gateway/model.ts";
 import { nextStatus, PaymentService } from "../src/gateway/payments.ts";
-import { GatewayRails } from "../src/gateway/rails.ts";
 import { checkWebhookUrl, isPrivateAddress } from "../src/gateway/ssrf.ts";
-import { DepositWatcher, type TransferLog, type TransferSource } from "../src/gateway/watcher.ts";
+import { PaymentWatcher } from "../src/gateway/watcher.ts";
 import { WebhookService, type WebhookSender } from "../src/gateway/webhooks.ts";
-import { ANVIL_KEYS, tempDir } from "./helpers.ts";
+import { startFakeChain, tempDir, testKey } from "./helpers.ts";
 
 const tmp = tempDir("payminto-gateway-unit-");
 afterAll(() => tmp.cleanup());
 
-const PAYOUT = privateKeyToAccount(ANVIL_KEYS[6]).address;
-const PAYER = privateKeyToAccount(ANVIL_KEYS[2]).address;
-const TOKEN = getAddress("0x00000000000000000000000000000000000000aa");
-const FACTORY = getAddress("0x00000000000000000000000000000000000000bb");
-const IMPL = getAddress("0x00000000000000000000000000000000000000cc");
-const ROUTER = getAddress("0x00000000000000000000000000000000000000dd");
-const ctx: ModelContext = { chainId: 31337, livemode: false, token: TOKEN, checkoutBaseUrl: "http://localhost:3000" };
+const PAYOUT = "shop.testnet";
+const PAYER = "payer.testnet";
+const TOKEN = "usdc.fake.testnet";
+const ctx: ModelContext = { network: "near:sandbox", livemode: false, hub: "hub.payminto.testnet", token: TOKEN, checkoutBaseUrl: "http://localhost:3000" };
 
 type Sent = { url: string; body: string; headers: Record<string, string> };
 
@@ -44,30 +40,21 @@ function harness(o: { send?: WebhookSender } = {}) {
       sent.push({ url: url.toString(), body, headers });
       return { status: 200, body: "ok" };
     });
-  const merchants = new MerchantService({ db, ctx, factory: FACTORY, router: ROUTER });
+  const merchants = new MerchantService({ db, ctx, checkoutKey: testKey(90).publicKey });
   const { defaultMerchant } = merchants.seed({ platformName: "Test", feeRecipient: null, seedPayout: PAYOUT });
   const webhooks = new WebhookService({ db, ctx, log: silentLogger, allowPrivate: true, clock: () => clock.now, send });
-  const rails = new GatewayRails({ chainId: 31337, token: TOKEN, factory: FACTORY, implementation: IMPL, router: ROUTER });
-  const payments = new PaymentService({ db, ctx, rails, merchants, webhooks, head: async () => 100n, clock: () => clock.now, ttlSec: 1800, attest: false });
+  const payments = new PaymentService({ db, ctx, merchants, webhooks, clock: () => clock.now, ttlSec: 1800 });
   return { db, clock, sent, merchants, merchant: defaultMerchant as MerchantRow, webhooks, payments };
 }
 
-let txn = 0;
-const tx = (): Hex => keccak256(toBytes(`tx-${++txn}`));
+let seq = 0;
 
-function credit(h: ReturnType<typeof harness>, paymentId: string, amount: bigint, status: "pending" | "confirmed" = "confirmed", blockNumber = 50) {
-  return h.payments.addCredit({
-    paymentId,
-    method: "deposit",
-    payer: PAYER,
-    amount,
-    txHash: tx(),
-    logIndex: 0,
-    blockNumber,
-    blockHash: keccak256(toBytes(`block-${blockNumber}`)),
-    status,
-    mayBeLate: true,
-  });
+/** A confirmed wallet credit (a hub record), or with `pending` a voucher credit waiting for its batch. */
+function credit(h: ReturnType<typeof harness>, paymentId: string, amount: bigint, status: "pending" | "confirmed" = "confirmed") {
+  const id = sha256Text(`credit-${++seq}`);
+  return status === "confirmed"
+    ? h.payments.addCredit({ paymentId, method: "wallet", payer: PAYER, amount, txHash: null, checkoutId: id, recordedAtMs: 1n, status, mayBeLate: true })
+    : h.payments.addCredit({ paymentId, method: "voucher", payer: PAYER, amount, txHash: null, callId: id, status, mayBeLate: false });
 }
 
 const eventsOf = (h: ReturnType<typeof harness>, paymentId: string) =>
@@ -98,12 +85,13 @@ describe("payment state machine", () => {
     }
   });
 
-  it("partially paid, then underpaid at expiry, then paid by a late deposit", async () => {
+  it("partially paid, then underpaid at expiry, then paid by a late payment", async () => {
     const h = harness();
     const p = await h.payments.create(h.merchant, { amount: 1_000_000n, metadata: { order: "42" } });
-    expect(p).toMatchObject({ status: "open", amount_due: "1000000", net_amount: "1000000", fee_total: "0" });
+    expect(p).toMatchObject({ status: "open", amount_due: "1000000", net_amount: "1000000", fee_total: "0", payout: PAYOUT });
+    expect(p.checkout_id).toMatch(/^[0-9a-f]{64}$/);
     credit(h, p.id, 400_000n);
-    expect(h.payments.row(p.id)).toMatchObject({ status: "partially_paid", amount_paid: "400000", payer: PAYER, method: "deposit", late: 0 });
+    expect(h.payments.row(p.id)).toMatchObject({ status: "partially_paid", amount_paid: "400000", payer: PAYER, method: "wallet", late: 0 });
     h.clock.now += 1801;
     expect(h.payments.expireDue()).toBe(1);
     expect(h.payments.row(p.id)).toMatchObject({ status: "underpaid", amount_paid: "400000" });
@@ -117,12 +105,12 @@ describe("payment state machine", () => {
     expect(h.payments.row(p.id)!.status).toBe("overpaid");
   });
 
-  it("overpays in one deposit and replays are no-ops", async () => {
+  it("overpays in one payment and a replay of the same hub record is a no-op", async () => {
     const h = harness();
     const p = await h.payments.create(h.merchant, { amount: 500n });
     const c = credit(h, p.id, 900n);
     expect(c.inserted).toBe(true);
-    const replay = h.payments.addCredit({ ...c.credit, paymentId: p.id, amount: 900n, txHash: c.credit.tx_hash, logIndex: c.credit.log_index, blockNumber: 50, blockHash: c.credit.block_hash, status: "confirmed", mayBeLate: true, method: "deposit", payer: PAYER });
+    const replay = h.payments.addCredit({ paymentId: p.id, amount: 900n, txHash: null, checkoutId: c.credit.checkout_id, status: "confirmed", mayBeLate: true, method: "wallet", payer: PAYER });
     expect(replay.inserted).toBe(false);
     expect(h.payments.row(p.id)).toMatchObject({ status: "overpaid", amount_paid: "900" });
     expect(h.payments.credits(p.id)).toHaveLength(1);
@@ -145,7 +133,7 @@ describe("payment state machine", () => {
     expect(eventsOf(h, b.id)).toEqual(["payment.created", "payment.canceled", "payment.underpaid"]);
   });
 
-  it("holds expiry while money is pending, and expires once the pending credit is dropped", async () => {
+  it("holds expiry while an accepted voucher waits for its batch, and is paid once the batch confirms", async () => {
     const h = harness();
     const p = await h.payments.create(h.merchant, { amount: 100n, expires_in: 300 });
     const c = credit(h, p.id, 100n, "pending");
@@ -153,29 +141,38 @@ describe("payment state machine", () => {
     h.clock.now += 400;
     h.payments.expireDue();
     expect(h.payments.row(p.id)!.status).toBe("processing");
-    h.payments.dropCredit(c.credit.id);
-    expect(h.payments.row(p.id)).toMatchObject({ status: "expired", amount_paid: "0", payer: null });
+    h.payments.confirmCredit(c.credit.id, { txHash: "fake-tx-9", batchId: "ab".repeat(32) });
+    expect(h.payments.row(p.id)).toMatchObject({ status: "paid", amount_paid: "100", late: 0 });
+    expect(h.payments.credits(p.id)[0]).toMatchObject({ status: "confirmed", tx_hash: "fake-tx-9", batch_id: "ab".repeat(32) });
   });
 
-  it("refuses line items that do not add up, and commits to the order", async () => {
+  it("refuses line items that do not add up, and commits to the order with sha256", async () => {
     const h = harness();
     await expect(h.payments.create(h.merchant, { amount: 100n, line_items: [{ name: "a", quantity: 2, unit_amount: "40" }] })).rejects.toThrow(/add up/);
     const p = await h.payments.create(h.merchant, { amount: 100n, reference: "inv-1", line_items: [{ name: "a", quantity: 2, unit_amount: "50" }] });
-    expect(p.order_hash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(p.order_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("refuses a wallet quote that would carry a fee, because the hub credits the merchant in full", async () => {
+    const h = harness();
+    h.db.run("UPDATE platform SET fee_recipient = 'fees.testnet'");
+    h.merchants.setMethods(h.merchant.id, [{ method: "wallet", fee_bps: 100 }], false);
+    expect(() => h.payments.quote(h.merchant, 10_000n, "wallet")).toThrow(/cannot carry a platform or method fee/);
+    expect(h.payments.feasibleMethods(h.merchant, 10_000n)).toEqual(["voucher"]);
   });
 });
 
 describe("draft payments", () => {
   it("are invisible until promoted, announce themselves on promotion, and are collected after expiry", async () => {
     const h = harness();
-    const d = await h.payments.create(h.merchant, { amount: 100n, method: "x402", expires_in: 300 }, { draftKey: "k" });
+    const d = await h.payments.create(h.merchant, { amount: 100n, method: "voucher", expires_in: 300 }, { draftKey: "k" });
     expect(h.payments.row(d.id)).toMatchObject({ draft: 1, status: "open" });
     expect(h.payments.list(h.merchant.id, { limit: 10 }).items).toEqual([]);
     expect(h.payments.list(h.merchant.id, { limit: 10 }).counts.open).toBe(0);
     expect(() => h.payments.get(h.merchant.id, d.id)).toThrow(/not found/);
     expect(eventsOf(h, d.id)).toEqual([]);
     // Money reaching a draft promotes it: payment.created comes first, then its state.
-    const paid = await h.payments.create(h.merchant, { amount: 100n, method: "x402", expires_in: 300 }, { draftKey: "k2" });
+    const paid = await h.payments.create(h.merchant, { amount: 100n, method: "voucher", expires_in: 300 }, { draftKey: "k2" });
     credit(h, paid.id, 100n);
     expect(h.payments.row(paid.id)).toMatchObject({ draft: 0, status: "paid" });
     expect(eventsOf(h, paid.id)).toEqual(["payment.created", "payment.paid"]);
@@ -187,43 +184,64 @@ describe("draft payments", () => {
   });
 });
 
-describe("deposit watcher reorg handling", () => {
-  it("drops an unconfirmed credit whose block left the chain, and credits it again where it lands", async () => {
+describe("NEAR checkout rail and watcher", () => {
+  it("signs terms the hub accepts, and books the hub's record as a confirmed wallet credit exactly once", async () => {
     const h = harness();
-    const p = await h.payments.create(h.merchant, { amount: 100n });
-    const log = (block: bigint, hashTag: string): TransferLog => ({
-      txHash: keccak256(toBytes("deposit-tx")),
-      logIndex: 3,
-      blockNumber: block,
-      blockHash: keccak256(toBytes(hashTag)),
-      from: PAYER,
-      to: p.deposit_address,
-      value: 100n,
-    });
-    const script: Array<{ latest: bigint; final: bigint; logs: TransferLog[] }> = [
-      { latest: 10n, final: 5n, logs: [log(8n, "8a")] }, // seen in the unconfirmed tail
-      { latest: 9n, final: 5n, logs: [] }, // reorg: block 8 replaced, transfer gone
-      { latest: 12n, final: 12n, logs: [log(11n, "11b")] }, // re-included and now final
-    ];
-    let step = 0;
-    const source: TransferSource = {
-      heads: async () => script[step]!,
-      transfersTo: async (to, from, toBlock) => script[step]!.logs.filter((l) => to.includes(l.to) && l.blockNumber >= from && l.blockNumber <= toBlock),
-    };
-    const w = new DepositWatcher({ db: h.db, payments: h.payments, source, startBlock: 1n, log: silentLogger });
-    await w.tick();
-    expect(h.payments.row(p.id)!.status).toBe("processing");
-    expect(h.payments.credits(p.id)).toMatchObject([{ status: "pending", block_number: 8 }]);
-    expect(w.cursor()).toBe(5n);
-    step = 1;
-    await w.tick();
-    expect(h.payments.credits(p.id)).toEqual([]);
-    expect(h.payments.row(p.id)).toMatchObject({ status: "open", amount_paid: "0" });
-    step = 2;
-    await w.tick();
-    expect(h.payments.credits(p.id)).toMatchObject([{ status: "confirmed", block_number: 11, log_index: 3 }]);
-    expect(h.payments.row(p.id)).toMatchObject({ status: "paid", flush_status: "pending" });
-    expect(w.cursor()).toBe(12n);
+    const fake = startFakeChain([PAYER]);
+    const node = testKey(90);
+    fake.setCheckoutKey(node.publicKey);
+    const chain = new ChainClient(fake, node);
+    const recorded: string[] = [];
+    const watcher = new PaymentWatcher({ db: h.db, chain, payments: h.payments, log: silentLogger, onRecorded: (_p, merchant, payer) => recorded.push(`${merchant}<${payer}`) });
+    const p = await h.payments.create(h.merchant, { amount: 2_500_000n, expires_in: 600 });
+    const offer = new WalletRail(chain).offer(p)!;
+    expect(offer.terms).toEqual({ payment_id: p.checkout_id, merchant: PAYOUT, amount: "2500000", expiry_ms: String(p.expires_unix * 1000) });
+    expect(offer.checkout_key).toBe(node.publicKey);
+    const call = offer.transaction.actions[0]!.params;
+    expect(offer.transaction.receiverId).toBe(fake.token);
+    expect(call.methodName).toBe("ft_transfer_call");
+    const args = call.args as { receiver_id: string; amount: string; msg: string };
+    expect(args.receiver_id).toBe(fake.hub);
+
+    expect(await watcher.tick()).toBe(0);
+    // The hub refuses tampered terms (returns the tokens) and records the signed ones.
+    const tampered = JSON.parse(args.msg);
+    tampered.payment.amount = "1";
+    expect(fake.ftTransferCall(PAYER, 1n, JSON.stringify(tampered)).refunded).toBe(1n);
+    expect(fake.ftTransferCall(PAYER, 2_500_000n, args.msg).refunded).toBe(0n);
+    // The same terms cannot pay twice.
+    expect(fake.ftTransferCall(PAYER, 2_500_000n, args.msg).refunded).toBe(2_500_000n);
+    fake.solvency();
+
+    expect(await watcher.tick()).toBe(1);
+    expect(h.payments.row(p.id)).toMatchObject({ status: "paid", amount_paid: "2500000", payer: PAYER, method: "wallet" });
+    expect(h.payments.credits(p.id)).toMatchObject([{ method: "wallet", status: "confirmed", checkout_id: p.checkout_id, recorded_at_ms: Number(fake.nowMs) }]);
+    expect(recorded).toEqual([`${PAYOUT}<${PAYER}`]);
+    expect(await fake.creditOf(PAYOUT)).toBe(2_500_000n);
+    // Polled again (the payment stays watched for a while after it closes): nothing new is booked.
+    expect(await watcher.tick()).toBe(0);
+    expect(h.payments.credits(p.id)).toHaveLength(1);
+    // Once paid, no wallet terms are offered any more.
+    expect(new WalletRail(chain).offer(h.payments.row(p.id)!)).toBeNull();
+  });
+
+  it("books a wallet payment the hub recorded after the node's clock expired the payment, as late", async () => {
+    const h = harness();
+    const fake = startFakeChain([PAYER]);
+    const node = testKey(90);
+    fake.setCheckoutKey(node.publicKey);
+    const chain = new ChainClient(fake, node);
+    const watcher = new PaymentWatcher({ db: h.db, chain, payments: h.payments, log: silentLogger });
+    // The node's clock is behind the hub's block time here, which a real deployment can see by a few seconds.
+    h.clock.now = Math.floor(Number(fake.nowMs) / 1000);
+    const p = await h.payments.create(h.merchant, { amount: 700n, expires_in: 300 });
+    const msg = (new WalletRail(chain).offer(p)!.transaction.actions[0]!.params.args as { msg: string }).msg;
+    h.clock.now += 301;
+    h.payments.expireDue();
+    expect(h.payments.row(p.id)!.status).toBe("expired");
+    expect(fake.ftTransferCall(PAYER, 700n, msg).refunded).toBe(0n);
+    expect(await watcher.tick()).toBe(1);
+    expect(h.payments.row(p.id)).toMatchObject({ status: "paid", late: 1 });
   });
 });
 

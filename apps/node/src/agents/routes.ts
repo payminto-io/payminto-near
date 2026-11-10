@@ -378,6 +378,7 @@ export function mountAgents(app: Hono<any>, m: AgentsModule, d: AgentRouteDeps):
     if (merchant.status !== "active") throw new ApiError(503, "MODEL_UNAVAILABLE", "this skill cannot run now", { reason: "business_suspended" });
     const reason = unavailable(agent);
     if (reason) throw new ApiError(503, "MODEL_UNAVAILABLE", "this skill cannot run now", { reason });
+    if (merchant.payout === null) throw new ApiError(503, "MODEL_UNAVAILABLE", "this skill cannot run now", { reason: "payout_not_set" });
     m.agents.syncProvider(agent, merchant);
     // A fresh Request with the bytes already read: the paywall hashes method, URL and body.
     const req = new Request(c.req.url, { method: "POST", headers: c.req.raw.headers, body: text });
@@ -390,7 +391,7 @@ export function mountAgents(app: Hono<any>, m: AgentsModule, d: AgentRouteDeps):
       input,
       resultTokenHash: sha256hex(token),
       skillCallId: check.paid.receipt.callId,
-      payer: m.gateway.db.get<{ agent: string }>("SELECT agent FROM mandates WHERE id = ?", check.paid.receipt.mandateId)?.agent ?? null,
+      payer: m.gateway.db.get<{ agent: string }>("SELECT agent FROM budgets WHERE id = ?", check.paid.receipt.budgetId)?.agent ?? null,
     });
     // Wait for the result up to skillWaitMs (25 s), then hand back a poll URL that needs the result token.
     const deadline = Date.now() + m.skillWaitMs;

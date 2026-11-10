@@ -13,7 +13,7 @@
  */
 import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
-import { ModelError, totalInputTokens, type ChatMessage, type ModelClient, type ModelErrorKind, type Part, type ToolSpec } from "@payminto/models";
+import { ModelError, summarizeAttestation, totalInputTokens, type ChatMessage, type ModelClient, type ModelErrorKind, type Part, type ToolSpec } from "@payminto/models";
 import type { Logger } from "../logger.ts";
 import type { AgentService } from "./agents.ts";
 import type { ConnectionService } from "./connections.ts";
@@ -294,6 +294,8 @@ export class AgentWorker {
         ms: Date.now() - started,
         text: excerpt(text, 2_000),
         tool_calls: calls.map((c) => c.name),
+        // NEAR AI Cloud only: what the enclave attestation of this turn showed (status, summary, hashes, signer).
+        ...(t.attestation ? { attestation: summarizeAttestation(t.attestation) } : {}),
       });
       messages.push({ role: "assistant", parts: t.parts, ...(t.native ? { native: t.native } : {}) });
       if (t.stop === "refusal") throw new RunFailure("MODEL_REFUSED", t.refusal?.explanation ?? "the model declined the task");

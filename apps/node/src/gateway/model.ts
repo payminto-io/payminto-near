@@ -1,12 +1,14 @@
-import type { Address, Hex } from "viem";
 import {
   checkoutUrl,
   linkUrl,
+  type AccountId,
   type ApiKey,
+  type BudgetRefusal,
   type Credit,
+  type Id32,
   type LineItem,
+  type Network,
   type Payment,
-  type PaymentHsp,
   type PaymentLink,
   type PaymentMethod,
   type PaymentRefundStatus,
@@ -17,9 +19,10 @@ import {
   type WebhookEndpoint,
   type WebhookEventType,
 } from "@payminto/protocol";
+import type { DenialNotice } from "../vouchers.ts";
 
 // ---------------------------------------------------------------------------
-// Rows (migration 004). Amounts are decimal text of base units.
+// Rows (migrations/001_near.sql). Amounts are decimal text of base units, accounts are NEAR account ids.
 // ---------------------------------------------------------------------------
 
 export type PaymentRow = {
@@ -34,70 +37,49 @@ export type PaymentRow = {
   method_fee: string;
   fee_total: string;
   net_amount: string;
-  fee_recipient: Address | null;
+  fee_recipient: AccountId | null;
   amount_paid: string;
   amount_refunded: string;
-  deposit_address: Address;
-  deposit_salt: Hex;
-  payout: Address;
+  /** The hub's payment id in the checkout terms. */
+  checkout_id: Id32;
+  payout: AccountId;
   description: string | null;
   reference: string | null;
   customer_email: string | null;
   customer_name: string | null;
   metadata: string;
   line_items: string;
-  order_hash: Hex;
+  order_hash: Id32;
   link_id: string | null;
-  payer: Address | null;
+  payer: AccountId | null;
   method: PaymentMethod | null;
   late: number;
   success_url: string | null;
-  created_block: number;
+  /** Reported by the payer's wallet after it sent the checkout transaction; display only. */
+  wallet_tx_hash: string | null;
   expires_at: string;
   expires_unix: number;
   paid_at: string | null;
   canceled_at: string | null;
   closed_at: string | null;
-  flush_status: "none" | "pending" | "done";
-  flush_attempts: number;
-  flush_next_unix: number | null;
-  flush_tx: Hex | null;
-  flush_error: string | null;
-  attest_status: "none" | "pending" | "done";
-  attestation_uid: Hex | null;
-  attestation_tx: Hex | null;
-  attest_error: string | null;
-  /** 1 while this is a draft an unpaid x402 request created (migration 005). */
+  /** 1 while this is a draft an unpaid x402 request created. */
   draft: number;
   draft_key: string | null;
   created_at: string;
   updated_at: string;
-  /** HSP order and status (migration 010). */
-  hsp_flow_id: string | null;
-  hsp_payment_request_id: string | null;
-  hsp_payment_url: string | null;
-  hsp_status: PaymentHsp["status"] | null;
-  hsp_status_reason: string | null;
-  hsp_tx_hash: Hex | null;
-  hsp_attribution_verified: number;
-  hsp_payer: Address | null;
-  hsp_submitted_at: string | null;
-  hsp_updated_at: string | null;
-  hsp_next_poll_unix: number | null;
 };
 
 export type CreditRow = {
   id: number;
   payment_id: string;
   method: PaymentMethod;
-  payer: Address | null;
+  payer: AccountId | null;
   amount: string;
-  tx_hash: Hex | null;
-  log_index: number | null;
-  block_number: number | null;
-  block_hash: Hex | null;
-  call_id: Hex | null;
-  batch_id: Hex | null;
+  tx_hash: string | null;
+  checkout_id: Id32 | null;
+  recorded_at_ms: number | null;
+  call_id: Id32 | null;
+  batch_id: Id32 | null;
   status: "pending" | "confirmed";
   late: number;
   created_at: string;
@@ -131,10 +113,12 @@ export type RefundRow = {
   payment_id: string;
   amount: string;
   reason: string | null;
-  to_addr: Address;
+  to_addr: AccountId;
   status: RefundStatus;
-  method: "authorization" | "transfer" | null;
-  tx_hash: Hex | null;
+  method: "transfer" | null;
+  tx_hash: string | null;
+  verification: "transfer_checked" | "finality_only" | null;
+  submitted_unix: number | null;
   failure_reason: string | null;
   note: string | null;
   approval: "not_required" | "requested" | "approved";
@@ -147,7 +131,8 @@ export type RefundRow = {
 
 export type EndpointRow = {
   id: string;
-  merchant_id: string;
+  /** Null for a platform endpoint. */
+  merchant_id: string | null;
   url: string;
   description: string | null;
   events: string;
@@ -163,7 +148,8 @@ export type EndpointRow = {
 export type GatewayEventRow = {
   seq: number;
   id: string;
-  merchant_id: string;
+  /** Null for a platform event. */
+  merchant_id: string | null;
   type: WebhookEventType | "ping";
   object_id: string;
   payment_id: string | null;
@@ -208,12 +194,11 @@ export type ApiKeyRow = {
   expires_at?: string | null;
 };
 
-
 // ---------------------------------------------------------------------------
 // API shapes: exactly the exported types in packages/protocol/src/gateway.ts.
 // ---------------------------------------------------------------------------
 
-export type ModelContext = { chainId: number; livemode: boolean; token: Address; checkoutBaseUrl: string };
+export type ModelContext = { network: Network; livemode: boolean; hub: AccountId; token: AccountId; checkoutBaseUrl: string };
 
 export function refundStatusOf(paid: bigint, refunded: bigint): PaymentRefundStatus {
   if (refunded === 0n) return "none";
@@ -221,20 +206,28 @@ export function refundStatusOf(paid: bigint, refunded: bigint): PaymentRefundSta
 }
 
 /** Payment (protocol type) plus the fee recipient its fee is bound to. */
-export type PaymentJson = Payment & { fee_recipient: Address | null };
+export type PaymentJson = Payment & { fee_recipient: AccountId | null };
 
 export function paymentJson(r: PaymentRow, m: ModelContext): PaymentJson {
   return {
     id: r.id,
+    merchant_id: r.merchant_id,
     livemode: m.livemode,
     status: r.status,
+    amount: r.amount,
+    surcharge: r.surcharge,
     amount_due: r.amount_due,
+    platform_fee: r.platform_fee,
+    method_fee: r.method_fee,
+    fee_total: r.fee_total,
+    net_amount: r.net_amount,
     amount_paid: r.amount_paid,
     amount_refunded: r.amount_refunded,
     refund_status: refundStatusOf(BigInt(r.amount_paid), BigInt(r.amount_refunded)),
-    chain_id: m.chainId,
+    network: m.network,
     token: m.token,
-    deposit_address: r.deposit_address,
+    hub: m.hub,
+    checkout_id: r.checkout_id,
     description: r.description,
     reference: r.reference,
     customer_email: r.customer_email,
@@ -244,6 +237,7 @@ export function paymentJson(r: PaymentRow, m: ModelContext): PaymentJson {
     order_hash: r.order_hash,
     link_id: r.link_id,
     payer: r.payer,
+    payout: r.payout,
     // The method the fees were quoted for; a person who never picked one is shown the method that paid.
     method: r.quote_method ?? r.method,
     late: r.late === 1,
@@ -254,31 +248,7 @@ export function paymentJson(r: PaymentRow, m: ModelContext): PaymentJson {
     canceled_at: r.canceled_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
-    merchant_id: r.merchant_id,
-    amount: r.amount,
-    surcharge: r.surcharge,
-    platform_fee: r.platform_fee,
-    method_fee: r.method_fee,
-    fee_total: r.fee_total,
-    net_amount: r.net_amount,
     fee_recipient: r.fee_recipient,
-    hsp: hspJson(r),
-  };
-}
-
-/** The HSP fields of a payment, or null when it never had an HSP order. */
-export function hspJson(r: PaymentRow): PaymentHsp | null {
-  if (!r.hsp_flow_id || !r.hsp_status) return null;
-  return {
-    flow_id: r.hsp_flow_id,
-    payment_request_id: r.hsp_payment_request_id,
-    status: r.hsp_status,
-    status_reason: r.hsp_status_reason,
-    tx_hash: r.hsp_tx_hash,
-    attribution_verified: r.hsp_attribution_verified === 1,
-    payer: r.hsp_payer,
-    submitted_at: r.hsp_submitted_at,
-    updated_at: r.hsp_updated_at,
   };
 }
 
@@ -289,9 +259,9 @@ export function creditJson(r: CreditRow): Credit {
     payer: r.payer,
     amount: r.amount,
     tx_hash: r.tx_hash,
-    log_index: r.log_index,
-    block_number: r.block_number,
     batch_id: r.batch_id,
+    call_id: r.call_id,
+    recorded_at_ms: r.recorded_at_ms === null ? null : String(r.recorded_at_ms),
     status: r.status,
     late: r.late === 1,
     created_at: r.created_at,
@@ -348,13 +318,14 @@ export function refundJson(r: RefundRow, m: ModelContext): Refund & { note: stri
     status: r.status,
     method: r.method,
     tx_hash: r.tx_hash,
+    verification: r.verification,
     failure_reason: r.failure_reason,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
 }
 
-export function endpointJson(r: EndpointRow, m: ModelContext, withSecret = false): WebhookEndpoint {
+export function endpointJson(r: EndpointRow, m: Pick<ModelContext, "livemode">, withSecret = false): WebhookEndpoint {
   return {
     id: r.id,
     livemode: m.livemode,
@@ -402,3 +373,25 @@ export function apiKeyJson(r: ApiKeyRow): ApiKey {
 }
 
 export const isoOf = (unix: number) => new Date(unix * 1000).toISOString();
+
+/** The `budget.refused` webhook object: the rule, attempted amount, remaining Budget and retry hint of one refusal. */
+export function refusalJson(n: DenialNotice): BudgetRefusal {
+  const d = n.denial;
+  return {
+    id: d.id,
+    object: "refusal",
+    rule: d.rule,
+    message: d.message,
+    budget_id: d.budget_id,
+    owner: n.owner,
+    agent: d.agent,
+    payee: d.payee,
+    provider_id: d.provider_id,
+    attempted_amount: n.refusal?.attemptedAmount ?? d.amount,
+    remaining_budget: n.refusal?.remainingBudget ?? null,
+    retry: n.refusal?.retry ?? { kind: "never" },
+    request_hash: d.request_hash,
+    cumulative: d.cumulative,
+    created_at: d.at,
+  };
+}

@@ -8,20 +8,18 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import type { Abi, Address } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { depositFactoryAbi, depositFactoryBytecode, paymentRouterAbi, paymentRouterBytecode } from "@payminto/protocol";
+
 import type { Provider } from "@payminto/models";
 import { mockProvider, type MockAnswer, type MockProvider, type SeenRequest } from "@payminto/models/mock-provider";
 import { startNode, type ClearingNode } from "../src/server.ts";
 import { createLogger } from "../src/logger.ts";
 import type { AgentsConfig, GatewayConfig } from "../src/config.ts";
 import type { RunRow } from "../src/agents/rows.ts";
-import { ANVIL_KEYS, deployClearing, freePort, startAnvil, tempDir, testConfig, type Anvil } from "./helpers.ts";
+import { freePort, startFakeChain, tempDir, testConfig } from "./helpers.ts";
 
 const ADMIN = "test-admin-token-123";
-const PAYOUT = privateKeyToAccount(ANVIL_KEYS[6]);
-const FEES = privateKeyToAccount(ANVIL_KEYS[7]).address;
+const PAYOUT = "acme-store.testnet";
+const FEES = "fees.testnet";
 
 type Call = { name: string; args: Record<string, unknown> };
 
@@ -120,7 +118,7 @@ function replicatePrediction(text: string, u: { input: number; output: number })
   };
 }
 
-let anvil: Anvil;
+let fakeChain: ReturnType<typeof startFakeChain>;
 let node: ClearingNode;
 let mock: MockProvider;
 let key = "";
@@ -171,30 +169,23 @@ async function drain(id: string, ms = 15_000): Promise<RunRow> {
 }
 
 beforeAll(async () => {
-  anvil = await startAnvil();
-  const { hub, token } = await deployClearing(anvil);
-  const factory = await anvil.deploy(depositFactoryAbi as Abi, depositFactoryBytecode);
-  const router = await anvil.deploy(paymentRouterAbi as Abi, paymentRouterBytecode);
+  fakeChain = startFakeChain();
+  const { hub, token } = { hub: fakeChain.hub, token: fakeChain.token };
   const gateway: GatewayConfig = {
-    seedPayout: PAYOUT.address as Address,
+    seedPayout: PAYOUT,
     platformName: "Acme Store",
     feeRecipient: FEES,
-    paymentRouter: router,
     checkoutBaseUrl: "http://localhost:3000",
-    depositFactory: factory,
-    depositFactoryBlock: 0n,
-    forwarderImplementation: null,
     checkoutTtlSec: 1800,
     webhookAllowPrivate: true,
     watchIntervalMs: 2000,
-    screenMinPayerNonce: 0,
   };
   mock = await mockProvider();
   const port = await freePort();
   // No model layer override: the node builds its clients with @payminto/models.
   node = await startNode(
-    testConfig({ rpcUrl: anvil.rpcUrl, hub, token, dbPath: tmp.dbPath, adminToken: ADMIN, gateway, port, publicUrl: `http://127.0.0.1:${port}`, agents: agentsConfig }),
-    { logger: createLogger({ level: "debug", sink: (l) => logs.push(l) }), port, workers: false },
+    testConfig({ hub, token, dbPath: tmp.dbPath, adminToken: ADMIN, gateway, port, publicUrl: `http://127.0.0.1:${port}`, agents: agentsConfig }),
+    { logger: createLogger({ level: "debug", sink: (l) => logs.push(l) }), port, workers: false, chain: fakeChain },
   );
   key = (await api("POST", "/v1/api-keys", { name: "automation" }, ADMIN)).json.secret;
 }, 120_000);
@@ -202,7 +193,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await node?.stop();
   await mock?.close();
-  anvil?.stop();
   tmp.cleanup();
 });
 
@@ -290,6 +280,65 @@ describe.each(DIALECTS)("an ops agent on $provider", (d) => {
     expect(refused.json.error).toMatchObject({ code: "MODEL_UNAVAILABLE", details: { reason: "connection_invalid" } });
     // Nothing retried.
     expect(steps(r.json.id).filter((e) => e.type === "retry_scheduled")).toHaveLength(0);
+  });
+});
+
+describe("an ops agent on NEAR AI Cloud", () => {
+  const NEAR_KEY = "sk-nearai-test-SECRETKEY-000111";
+
+  it("checks the key with the key check, runs, and records what attestation showed for the turn", async () => {
+    mock.requests.length = 0;
+    const reply = { id: "chatcmpl-near-1", object: "chat.completion", model: "z-ai/glm-5.3-flash", choices: [{ index: 0, message: { role: "assistant", content: "All quiet today." }, finish_reason: "stop" }], usage: { prompt_tokens: 400, completion_tokens: 12 } };
+    const gateway = (r: SeenRequest): MockAnswer => {
+      const path = r.path.split("?")[0]!;
+      if (path === "/v1/check_api_key") return { json: { valid: true, organization_id: "o", workspace_id: "w", api_key_id: "k" } };
+      if (path === "/v1/models") return { json: { object: "list", data: [{ id: "z-ai/glm-5.3-flash" }] } };
+      if (path === "/v1/chat/completions") return { json: reply };
+      // No attestation report and no signature: the run still answers, and the step says the answer is unverified.
+      return { status: 404, json: { error: { message: "not found", type: "not_found" } } };
+    };
+    // Nine requests, listed at the end; exactly as many answers, so nothing is left queued for a later test.
+    mock.answer(...Array.from({ length: 9 }, () => gateway));
+    const c = await api("POST", "/v1/ai/connections", { provider: "nearai", label: "NEAR AI Cloud", api_key: NEAR_KEY, base_url: `${mock.url}/v1`, default_model: "z-ai/glm-5.3-flash" });
+    expect(c.status).toBe(201);
+    expect(c.json).toMatchObject({ provider: "nearai", status: "active", verification: { ok: true, models: ["z-ai/glm-5.3-flash"] } });
+    expect(mock.requests[0]).toMatchObject({ method: "POST", path: "/v1/check_api_key", headers: { authorization: `Bearer ${NEAR_KEY}` } });
+    const a = await api("POST", "/v1/agents", { kind: "ops", name: "Desk on NEAR AI Cloud", connection_id: c.json.id });
+    expect(a.status).toBe(201);
+    const r = await api("POST", `/v1/agents/${a.json.id}/runs`, { input: "How are we doing?" });
+    const done = await drain(r.json.id);
+    expect(done.status).toBe("succeeded");
+    const view = (await api("GET", `/v1/agent-runs/${r.json.id}`)).json;
+    expect(view).toMatchObject({ result: { answer: "All quiet today." }, usage: { input_tokens: 400, output_tokens: 12, provider: "nearai" } });
+    const turn = steps(r.json.id).find((e) => e.type === "model_turn")!;
+    expect(turn.data.attestation).toMatchObject({ status: "failed", failed: ["signature_available"], signature_kind: null, bound_to: null, summary: expect.stringMatching(/^Not verified: no signature available/) });
+    // The attestation report is asked for without the key; the key only goes to the key check, the chat and the signature.
+    const report = mock.requests.find((q) => q.path.startsWith("/v1/attestation/report"))!;
+    expect(report.headers.authorization).toBeUndefined();
+    for (const text of [...responses, ...logs, JSON.stringify(steps(r.json.id))]) expect(text).not.toContain("SECRETKEY");
+    expect(mock.requests.map((q) => `${q.method} ${q.path.split("?")[0]}`)).toEqual([
+      "POST /v1/check_api_key",
+      "GET /v1/models",
+      // With the model, then the gateway alone.
+      "GET /v1/attestation/report",
+      "GET /v1/attestation/report",
+      "POST /v1/chat/completions",
+      // Asked again while the signature is not recorded yet.
+      "GET /v1/signature/chatcmpl-near-1",
+      "GET /v1/signature/chatcmpl-near-1",
+      "GET /v1/signature/chatcmpl-near-1",
+      "GET /v1/signature/chatcmpl-near-1",
+    ]);
+  });
+
+  it("marks the connection invalid for a key the key check rejects, though the model list would answer", async () => {
+    const gateway = (r: SeenRequest): MockAnswer => (r.path === "/v1/check_api_key" ? { status: 401, json: { error: { message: "Invalid or expired API key", type: "invalid_api_key", param: null, code: null } } } : { json: { object: "list", data: [{ id: "z-ai/glm-5.3-flash" }] } });
+    // Only the key check is asked.
+    mock.answer(gateway);
+    const c = await api("POST", "/v1/ai/connections", { provider: "nearai", label: "NEAR bad key", api_key: NEAR_KEY, base_url: `${mock.url}/v1`, default_model: "z-ai/glm-5.3-flash" });
+    expect(c.status).toBe(201);
+    expect(c.json).toMatchObject({ status: "invalid", verification: { ok: false, error: { kind: "auth", status: 401 } } });
+    expect(c.json.last_error).toMatch(/^NEAR AI Cloud rejected the API key \(401\): Invalid or expired API key/);
   });
 });
 

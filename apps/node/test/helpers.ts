@@ -1,40 +1,75 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FakeChain } from "@payminto/chain/fake";
 import {
-  createPublicClient,
-  createWalletClient,
-  defineChain,
-  getAddress,
-  http,
-  type Abi,
-  type Address,
-  type Hex,
-  type PublicClient,
-  type WalletClient,
-  type Chain,
-  type Transport,
-  type Account,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { clearingHubAbi, clearingHubBytecode, localAnvil, mockStablecoinAbi, mockStablecoinBytecode } from "@payminto/protocol";
+  budgetIdOf,
+  budgetTermsToJson,
+  keypairFromSeed,
+  nep413Digest,
+  payoutProofRequest,
+  policyHash,
+  signDigest,
+  voucherDigest,
+  type AccountId,
+  type BudgetTerms,
+  type Id32,
+  type Keypair,
+  type PayoutProof,
+  type PayoutProofScope,
+  type Policy,
+  type PublicKey,
+  type Voucher,
+} from "@payminto/protocol";
 import { DEFAULT_RATE_LIMIT, type Config } from "../src/config.ts";
+import type { AccessKeyKind, AccessKeyReader, TxReader, TxTransfers } from "../src/near-rpc.ts";
 
-/** Anvil default dev keys: public, local only. */
-export const ANVIL_KEYS = [
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-  "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-  "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
-  "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
-  "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
-  "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e",
-  "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
-  "0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97",
-  "0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6",
-] as const satisfies readonly Hex[];
+export const HUB = "hub.payminto.testnet";
+export const TOKEN = "usdc.fake.testnet";
+export const OPERATOR = "node.payminto.testnet";
+/** Public test seed for the node's receipt key. Never used outside tests. */
+export const TEST_NODE_SEED = "11".repeat(32);
+
+export const OWNER_A = "alice.testnet";
+export const OWNER_B = "bob.testnet";
+export const SELLER = "seller.testnet";
+
+export const testKey = (n: number): Keypair => keypairFromSeed(new Uint8Array(32).fill(n));
+
+/** A NEAR account with a full-access test key, for NEP-413 payout proofs. Never funded anywhere. */
+export type PayoutAccount = { account: AccountId; key: Keypair };
+export const payoutAccount = (name: string, seed: number): PayoutAccount => ({ account: name, key: testKey(seed) });
+
+/** What a dashboard sends after NEAR Connect `signMessage`: a NEP-413 proof bound to this node's network and hub. */
+export function payoutProof(a: PayoutAccount, merchantId: string, scope: PayoutProofScope, timestamp = Math.floor(Date.now() / 1000)): PayoutProof {
+  const digest = nep413Digest(payoutProofRequest(merchantId, a.account, timestamp, scope));
+  return { payout: a.account, timestamp, public_key: a.key.publicKey, signature: Buffer.from(signDigest(a.key.secretKey, digest), "hex").toString("base64") };
+}
+
+/**
+ * The node-local NEAR RPC reads, in memory: which keys are full-access keys of which accounts, and which refund
+ * transactions exist. Tests register both.
+ */
+export class FakeNearRpc implements AccessKeyReader, TxReader {
+  readonly keys = new Map<string, AccessKeyKind>();
+  readonly txs = new Map<string, TxTransfers>();
+
+  addKey(account: AccountId, key: PublicKey, kind: Exclude<AccessKeyKind, null> = "full_access"): this {
+    this.keys.set(`${account} ${key}`, kind);
+    return this;
+  }
+
+  async accessKey(account: AccountId, publicKey: PublicKey): Promise<AccessKeyKind> {
+    return this.keys.get(`${account} ${publicKey}`) ?? null;
+  }
+
+  async transfers(hash: string, signer: AccountId): Promise<TxTransfers> {
+    const t = this.txs.get(hash);
+    if (!t) return { status: "unknown" };
+    return t.status === "final" && t.signer !== signer ? { status: "unknown" } : t;
+  }
+}
 
 export async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -48,95 +83,12 @@ export async function freePort(): Promise<number> {
   });
 }
 
-export type Anvil = {
-  rpcUrl: string;
-  chain: Chain;
-  pub: PublicClient<Transport, Chain>;
-  wallet(key: Hex): WalletClient<Transport, Chain, Account>;
-  deploy(abi: Abi, bytecode: Hex): Promise<Address>;
-  stop(): void;
-};
-
-/** The port from anvil's "Listening on 127.0.0.1:PORT" line; later output is drained so the pipe never fills. */
-function anvilPort(proc: ChildProcess, timeoutMs: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    let buf = "";
-    const done = (err: Error | null, port?: number) => {
-      clearTimeout(timer);
-      proc.stdout!.off("data", onData);
-      proc.off("exit", onExit);
-      proc.stdout!.on("data", () => {});
-      if (err) reject(err);
-      else resolve(port!);
-    };
-    const onData = (d: Buffer) => {
-      buf = (buf + d.toString("utf8")).slice(-4096);
-      const m = /Listening on \S*?:(\d+)/.exec(buf);
-      if (m) done(null, Number(m[1]));
-    };
-    const onExit = () => done(new Error("anvil exited before listening"));
-    const timer = setTimeout(() => done(new Error(`no "Listening on" line within ${timeoutMs} ms`)), timeoutMs);
-    proc.stdout!.on("data", onData);
-    proc.once("exit", onExit);
-  });
-}
-
-/**
- * Boots a fresh anvil on a random free port. `args` adds flags (the fork suite passes --fork-url), `chain` is the
- * chain definition the clients use (a HashKey Chain definition for forks).
- */
-export async function startAnvil(opts: { args?: string[]; chain?: Chain; startupMs?: number } = {}): Promise<Anvil> {
-  // Port 0: anvil binds a port the OS picks and reports it, so parallel test files can never end up on one anvil
-  // (a probed free port could be taken by another file's anvil before this one binds it).
-  const proc: ChildProcess = spawn("anvil", ["--port", "0", ...(opts.args ?? [])], { stdio: ["ignore", "pipe", "ignore"] });
-  const port = await anvilPort(proc, opts.startupMs ?? 15_000).catch((err: Error) => {
-    proc.kill();
-    throw new Error(`anvil did not start: ${err.message}`);
-  });
-  const rpcUrl = `http://127.0.0.1:${port}`;
-  const chain = defineChain({ ...(opts.chain ?? localAnvil), rpcUrls: { default: { http: [rpcUrl] } } });
-  const transport = http(rpcUrl);
-  const pub = createPublicClient({ chain, transport, pollingInterval: 100 });
-  for (let i = 0; ; i++) {
-    try {
-      await pub.getChainId();
-      break;
-    } catch {
-      if (i > (opts.startupMs ?? 15_000) / 100) {
-        proc.kill();
-        throw new Error("anvil did not start");
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  const wallet = (key: Hex) => createWalletClient({ account: privateKeyToAccount(key), chain, transport });
-  const deployer = wallet(ANVIL_KEYS[0]);
-  return {
-    rpcUrl,
-    chain,
-    pub,
-    wallet,
-    async deploy(abi, bytecode) {
-      const hash = await deployer.deployContract({ abi, bytecode });
-      const rcpt = await pub.waitForTransactionReceipt({ hash });
-      return getAddress(rcpt.contractAddress!);
-    },
-    stop() {
-      proc.kill();
-    },
-  };
-}
-
-export async function deployClearing(anvil: Anvil): Promise<{ hub: Address; token: Address }> {
-  const hub = await anvil.deploy(clearingHubAbi as Abi, clearingHubBytecode);
-  const token = await anvil.deploy(mockStablecoinAbi as Abi, mockStablecoinBytecode);
-  return { hub, token };
-}
-
-export async function mint(anvil: Anvil, token: Address, to: Address, amount: bigint): Promise<void> {
-  const w = anvil.wallet(ANVIL_KEYS[0]);
-  const hash = await w.writeContract({ address: token, abi: mockStablecoinAbi, functionName: "mint", args: [to, amount] });
-  await anvil.pub.waitForTransactionReceipt({ hash });
+/** A fresh in-memory hub with the test node allowlisted as a settler, and funded, registered test accounts. */
+export function startFakeChain(accounts: readonly AccountId[] = [OWNER_A, OWNER_B, SELLER]): FakeChain {
+  const chain = new FakeChain({ hub: HUB, token: TOKEN, network: "near:sandbox", operator: OPERATOR });
+  chain.addSettler(OPERATOR);
+  for (const a of accounts) chain.mint(a, 1_000_000_000n);
+  return chain;
 }
 
 /** Fresh temp directory per test file; never DB_PATH. */
@@ -145,22 +97,24 @@ export function tempDir(prefix = "payminto-node-"): { dir: string; dbPath: strin
   return { dir, dbPath: join(dir, "clearing.test.db"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export function testConfig(over: Partial<Config> & Pick<Config, "rpcUrl" | "hub" | "token" | "dbPath">): Config {
+export function testConfig(over: Partial<Config> & Pick<Config, "dbPath">): Config {
   return {
     port: 0,
     host: "127.0.0.1",
-    chainId: 31337,
-    operatorKey: ANVIL_KEYS[9],
+    network: "near:sandbox",
+    rpcUrl: "http://127.0.0.1:1",
+    hub: HUB,
+    token: TOKEN,
+    operator: OPERATOR,
+    operatorKey: "ed25519:test-only",
+    nodeSigningSeed: TEST_NODE_SEED,
     adminToken: "test-admin-token-123",
     settleIntervalSec: 0,
     settleMinCalls: 1,
     publicUrl: "http://127.0.0.1:0",
-    hsp: { mode: "local", verifyingContract: over.hub, cosignTimeoutSec: 10 },
     corsOrigins: ["http://localhost:3000"],
     logLevel: "error",
     fundsRefreshSec: 30,
-    deployBlock: 0n,
-    rpcFallbackUrls: [],
     rateLimit: DEFAULT_RATE_LIMIT,
     trustProxyHops: 0,
     denials: { dedupWindowSec: 60, maxRows: 100_000 },
@@ -169,4 +123,53 @@ export function testConfig(over: Partial<Config> & Pick<Config, "rpcUrl" | "hub"
     auth: { scryptLogN: 12, rateLimitPerMin: 10_000, setupPerMin: 10_000, emailPerHour: 10_000, searchRps: 1_000 },
     ...over,
   };
+}
+
+export const DEFAULT_POLICY: Policy = { perCallCap: "1000000", dailyCap: "100000000", maxCallsPerMinute: 0, purpose: "test" };
+
+let saltSeq = 0;
+
+/** Budget terms for a test, ready for `FakeChain.openBudget` and `POST /v1/budgets`. */
+export function budgetTerms(owner: AccountId, agent: Keypair, over: Partial<BudgetTerms> & { policy?: Policy } = {}): { terms: BudgetTerms; policy: Policy } {
+  const { policy = DEFAULT_POLICY, ...rest } = over;
+  const terms: BudgetTerms = {
+    owner,
+    agentPk: agent.publicKey,
+    settler: OPERATOR,
+    cap: 100_000_000n,
+    validUntil: BigInt(Date.now()) + 86_400_000n,
+    payees: [],
+    policyHash: policyHash(policy),
+    salt: (++saltSeq).toString(16).padStart(64, "0"),
+    ...rest,
+  };
+  return { terms, policy };
+}
+
+export type OpenedBudget = { id: Id32; terms: BudgetTerms; policy: Policy; agent: Keypair };
+
+/** Opens and funds a Budget on the fake hub, then registers it with the node over HTTP. */
+export async function openBudget(
+  chain: FakeChain,
+  nodeUrl: string,
+  adminToken: string,
+  owner: AccountId,
+  agent: Keypair,
+  o: { escrow?: bigint; label?: string } & Partial<BudgetTerms> & { policy?: Policy } = {},
+): Promise<OpenedBudget> {
+  const { escrow = 50_000_000n, label = "test budget", ...over } = o;
+  const { terms, policy } = budgetTerms(owner, agent, over);
+  const id = chain.openBudget(owner, terms);
+  if (escrow > 0n) chain.depositBudget(owner, id, escrow);
+  const res = await fetch(`${nodeUrl}/v1/budgets`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ budget: budgetTermsToJson(terms), policy, label }),
+  });
+  if (res.status !== 201) throw new Error(`POST /v1/budgets: ${res.status} ${await res.text()}`);
+  return { id: budgetIdOf(chain.hub, chain.network, terms), terms, policy, agent };
+}
+
+export function signVoucher(chain: Pick<FakeChain, "hub" | "network">, agent: Keypair, v: Voucher): string {
+  return signDigest(agent.secretKey, voucherDigest(chain.hub, chain.network, v));
 }

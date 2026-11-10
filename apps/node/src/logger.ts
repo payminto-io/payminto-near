@@ -3,7 +3,7 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 const ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 /** Field names whose values are never written to logs. */
-const SECRET_KEYS = /^(operatorKey|privateKey|adminToken|apiKey|api_key|authorization|token_secret|password|secret|hspApiKey|signerProof)$/i;
+const SECRET_KEYS = /^(operatorKey|privateKey|adminToken|apiKey|api_key|authorization|token_secret|password|secret)$/i;
 
 export type Logger = {
   debug(msg: string, fields?: Record<string, unknown>): void;

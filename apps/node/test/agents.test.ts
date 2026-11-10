@@ -1,5 +1,5 @@
 /**
- * Merchant AI agents end to end (docs/AGENTS.md section 8): anvil with the gateway contracts, the node in-process on
+ * Merchant AI agents end to end (docs/AGENTS.md section 8): FakeChain in place of NEAR, the node in-process on
  * a temp SQLite file with background workers off (the agent worker is driven by the test, or started where a test
  * needs it), and a scripted model in place of a provider. Covers the connections API and roles, keys never leaking,
  * agents and their validation, runs with long-poll, steps, cancel and idempotency, the worker (exclusive claims under
@@ -9,11 +9,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { maxUint256, type Abi, type Address } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { depositFactoryAbi, depositFactoryBytecode, newRefundId, paymentRouterAbi, paymentRouterBytecode, payoutChangeMessage } from "@payminto/protocol";
+import { newRefundId } from "@payminto/protocol";
 import { ModelError, type VerifyResult } from "@payminto/models";
-import { AgentClient, OwnerClient } from "@payminto/sdk";
+import { AgentClient } from "@payminto/sdk";
 import { startNode, type ClearingNode } from "../src/server.ts";
 import { createLogger } from "../src/logger.ts";
 import type { AgentsConfig, GatewayConfig } from "../src/config.ts";
@@ -29,15 +27,15 @@ import { reencryptSecrets } from "../src/agents/rotate.ts";
 import { SecretBox } from "../src/agents/secrets.ts";
 import { AgentWorker } from "../src/agents/worker.ts";
 import { scriptedModel, type ScriptStep } from "./scripted-model.ts";
-import { ANVIL_KEYS, deployClearing, freePort, mint, startAnvil, tempDir, testConfig, type Anvil } from "./helpers.ts";
+import { FakeNearRpc, freePort, OWNER_A, openBudget, payoutAccount, payoutProof, startFakeChain, tempDir, testConfig, testKey } from "./helpers.ts";
 
 const ADMIN = "test-admin-token-123";
 const USDC = 1_000_000n;
-const OWNER = privateKeyToAccount(ANVIL_KEYS[1]);
-const BUYER = privateKeyToAccount(ANVIL_KEYS[4]);
-const PAYOUT_B = privateKeyToAccount(ANVIL_KEYS[5]);
-const PAYOUT = privateKeyToAccount(ANVIL_KEYS[6]);
-const FEES = privateKeyToAccount(ANVIL_KEYS[7]).address;
+const BUYER = testKey(44);
+const PAYOUT_B = payoutAccount("beta-shop.testnet", 65);
+const PAYOUT = payoutAccount("acme-store.testnet", 66);
+const FEES = "fees.testnet";
+const rpc = new FakeNearRpc().addKey(PAYOUT_B.account, PAYOUT_B.key.publicKey);
 const PW = "purple-otter-sings-at-dawn";
 const SECRETS_KEY = randomBytes(32).toString("base64");
 /** Every model key used here; none may ever show up in a response, log, audit entry, event or error. */
@@ -49,10 +47,10 @@ const MODEL_KEYS = {
   limit: "sk-ant-test-limit-0123456789abcdefSECRET",
 };
 
-let anvil: Anvil;
+let fakeChain: ReturnType<typeof startFakeChain>;
 let node: ClearingNode;
-let hub: Address;
-let token: Address;
+let hub: string;
+let token: string;
 const tmp = tempDir("payminto-agents-");
 const logs: string[] = [];
 /** Every response body seen by the test, for the key grep. */
@@ -172,28 +170,20 @@ const agentsConfig: AgentsConfig = {
 };
 
 beforeAll(async () => {
-  anvil = await startAnvil();
-  ({ hub, token } = await deployClearing(anvil));
-  const factory = await anvil.deploy(depositFactoryAbi as Abi, depositFactoryBytecode);
-  const router = await anvil.deploy(paymentRouterAbi as Abi, paymentRouterBytecode);
+  fakeChain = startFakeChain();
+  ({ hub, token } = { hub: fakeChain.hub, token: fakeChain.token });
   const gateway: GatewayConfig = {
-    seedPayout: PAYOUT.address,
+    seedPayout: PAYOUT.account,
     platformName: "Acme Store",
     feeRecipient: FEES,
-    paymentRouter: router,
     checkoutBaseUrl: "http://localhost:3000",
-    depositFactory: factory,
-    depositFactoryBlock: 0n,
-    forwarderImplementation: null,
     checkoutTtlSec: 1800,
     webhookAllowPrivate: true,
     watchIntervalMs: 2000,
-    screenMinPayerNonce: 0,
   };
   const port = await freePort();
   node = await startNode(
     testConfig({
-      rpcUrl: anvil.rpcUrl,
       hub,
       token,
       dbPath: tmp.dbPath,
@@ -204,14 +194,14 @@ beforeAll(async () => {
       auth: { scryptLogN: 12, rateLimitPerMin: 10_000, setupPerMin: 10_000, emailPerHour: 10_000, searchRps: 1_000, breakGlass: true },
       agents: agentsConfig,
     }),
-    { logger: createLogger({ level: "debug", sink: (l) => logs.push(l) }), port, workers: false, models },
+    { logger: createLogger({ level: "debug", sink: (l) => logs.push(l) }), port, workers: false, models, chain: fakeChain, nearRpc: rpc },
   );
   merchantA = (await api("GET", "/v1/merchant", undefined, ADMIN)).json.id;
   keyA = (await api("POST", "/v1/api-keys", { name: "automation" }, ADMIN)).json.secret;
   const ts = Math.floor(Date.now() / 1000);
   const b = await api("POST", "/v1/merchants", {
     name: "Beta Shop",
-    payout: { payout: PAYOUT_B.address, timestamp: ts, signature: await PAYOUT_B.signMessage({ message: payoutChangeMessage("new", PAYOUT_B.address, ts, { chainId: 31337, hub }) }) },
+    payout: payoutProof(PAYOUT_B, "new", { network: fakeChain.network, hub: fakeChain.hub }, ts),
   }, ADMIN);
   expect(b.status).toBe(201);
   merchantB = b.json.id;
@@ -223,7 +213,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await node?.stop();
-  anvil?.stop();
   tmp.cleanup();
 });
 
@@ -233,7 +222,7 @@ describe("AI connections", () => {
   it("lists the providers to any member", async () => {
     const r = await viewer.get("/v1/ai/providers");
     expect(r.status).toBe(200);
-    expect(r.json.items.map((p: { id: string }) => p.id)).toEqual(["anthropic", "openai", "google", "openai_compatible", "replicate"]);
+    expect(r.json.items.map((p: { id: string }) => p.id)).toEqual(["anthropic", "openai", "google", "openai_compatible", "replicate", "nearai"]);
   });
 
   it("lets only Admins create one; it is verified, sealed, and shown with the key's last 4 characters only", async () => {
@@ -641,7 +630,7 @@ describe("runs", () => {
 
 describe("paid skills", () => {
   let skill = "";
-  let buyer: AgentClient;
+  let buyer!: AgentClient;
 
   it("registers a skill as a provider listed in the directory", async () => {
     const r = await api("POST", "/v1/agents", { kind: "skill", name: "Market brief", description: "A short market note.", connection_id: connA, slug: "market-brief", price: "10000", input_hint: "a trading pair" });
@@ -650,41 +639,38 @@ describe("paid skills", () => {
     skill = r.json.id;
     expect((await api("POST", "/v1/agents", { kind: "skill", name: "Dup", connection_id: connA, slug: "market-brief", price: "1" })).json.error.code).toBe("SLUG_TAKEN");
     const dir = (await call("GET", "/v1/directory", undefined, {})).json;
-    expect(dir.services.find((s: { pay_url: string }) => s.pay_url === `${node.url}/v1/skills/market-brief`)).toMatchObject({ type: "endpoint", title: "Market brief", price: { amount: "10000" }, payee: PAYOUT.address, category: "skill" });
+    expect(dir.services.find((s: { pay_url: string }) => s.pay_url === `${node.url}/v1/skills/market-brief`)).toMatchObject({ type: "endpoint", title: "Market brief", price: { amount: "10000" }, payee: PAYOUT.account, category: "skill" });
   });
 
   it("answers 402 unpaid, then a paid call waits, answers 202 and the buyer polls the result with its token", async () => {
-    const owner = new OwnerClient({ nodeUrl: node.url, chainId: 31337, hub, account: OWNER, publicClient: anvil.pub, adminToken: ADMIN });
+    // A Budget the buyer's owner opened and funded on the hub, allowing only this business as payee.
     const policy = { perCallCap: "100000", dailyCap: (5n * USDC).toString(), maxCallsPerMinute: 100, purpose: "buy skills" };
-    const m = await owner.createMandate({ agent: BUYER.address, token, totalCap: 10n * USDC, validForSeconds: 86_400, payees: [PAYOUT.address], policy });
-    await owner.submit({ ...m, policy, payees: [PAYOUT.address], label: "Skill buyer" });
-    await mint(anvil, token, BUYER.address, 100n * USDC);
-    buyer = new AgentClient({ nodeUrl: node.url, chainId: 31337, hub, account: BUYER, mandateId: m.mandateId });
-    await buyer.ensureAllowance(anvil.wallet(ANVIL_KEYS[4]), maxUint256, { token });
+    const budget = await openBudget(fakeChain, node.url, ADMIN, OWNER_A, BUYER, { escrow: 10n * USDC, cap: 10n * USDC, payees: [PAYOUT.account], policy, label: "Skill buyer" });
+    buyer = new AgentClient({ network: fakeChain.network, hub: fakeChain.hub, keypair: BUYER, budgetId: budget.id, nodeUrl: node.url });
 
-    const unpaid = await call("POST", "/v1/skills/market-brief", { input: "HSK-USDC" }, {});
+    const unpaid = await call("POST", "/v1/skills/market-brief", { input: "NEAR-USDC" }, {});
     expect(unpaid.status).toBe(402);
     expect(unpaid.headers.get("payment-required")).toBeTruthy();
     expect(node.services.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM agent_runs WHERE agent_id = ?", skill)!.n).toBe(0);
 
     worker().start();
-    play((async () => (await sleep(900), { text: "HSK-USDC is calm today." })) as ScriptStep);
-    const res = await buyer.fetch(`${node.url}/v1/skills/market-brief`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "HSK-USDC" }) });
+    play((async () => (await sleep(900), { text: "NEAR-USDC is calm today." })) as ScriptStep);
+    const res = await buyer.fetch(`${node.url}/v1/skills/market-brief`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "NEAR-USDC" }) });
     expect(res.status).toBe(202);
     expect(res.headers.get("payment-response")).toBeTruthy();
     const accepted = (await res.json()) as { run_id: string; status: string; poll_url: string; result_token: string };
     expect(accepted).toMatchObject({ status: expect.stringMatching(/^(queued|running)$/), result_token: expect.stringMatching(/^rtk_/) });
     expect(accepted.poll_url).toBe(`${node.url}/v1/skills/market-brief/runs/${accepted.run_id}?token=${accepted.result_token}`);
     const polled = await call("GET", `${new URL(accepted.poll_url).pathname}${new URL(accepted.poll_url).search}&wait=10`, undefined, {});
-    expect(polled.json).toMatchObject({ run_id: accepted.run_id, status: "succeeded", result: { answer: "HSK-USDC is calm today." } });
+    expect(polled.json).toMatchObject({ run_id: accepted.run_id, status: "succeeded", result: { answer: "NEAR-USDC is calm today." } });
     expect(polled.json.result_token).toBeUndefined();
     // Nobody else can read it: a wrong token, or another run id, is the same 404.
     expect((await call("GET", `/v1/skills/market-brief/runs/${accepted.run_id}?token=rtk_${"A".repeat(32)}`, undefined, {})).status).toBe(404);
     expect((await call("GET", `/v1/skills/market-brief/runs/${accepted.run_id}`, undefined, {})).status).toBe(404);
     const r = run(accepted.run_id);
-    expect(r).toMatchObject({ trigger: "skill_call", payer: BUYER.address });
-    expect(r.skill_call_id).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(node.services.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM calls WHERE call_id = ?", r.skill_call_id)!.n).toBe(1);
+    expect(r).toMatchObject({ trigger: "skill_call", payer: BUYER.publicKey });
+    expect(r.skill_call_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(node.services.db.get<{ payee: string; budget_id: string }>("SELECT payee, budget_id FROM calls WHERE call_id = ?", r.skill_call_id)).toEqual({ payee: PAYOUT.account, budget_id: budget.id });
 
     // A fast skill answers in the same response.
     play({ text: "Quick note." });

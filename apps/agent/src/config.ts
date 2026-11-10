@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { McpServerSpec } from "./mcp.ts";
 import { DEFAULT_LIMITS, type RunLimits } from "./runtime.ts";
+import { existsSync } from "node:fs";
+import { defaultAgentKeyPath } from "@payminto/sdk";
 import { createModelClient, DEFAULT_MODEL, ModelError, PROVIDER_IDS, providerInfo, type Effort, type ModelClient, type Provider } from "@payminto/models";
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -21,6 +23,7 @@ export class MissingApiKeyError extends Error {
       google: "PAYMINTO_AGENT_PROVIDER is google: export GOOGLE_API_KEY=... (a Gemini API key from Google AI Studio, and optionally PAYMINTO_AGENT_MODEL)",
       openai_compatible: "PAYMINTO_AGENT_PROVIDER is openai_compatible: export PAYMINTO_AGENT_API_KEY=... (the key of the endpoint at PAYMINTO_AGENT_BASE_URL)",
       replicate: "PAYMINTO_AGENT_PROVIDER is replicate: export REPLICATE_API_TOKEN=r8_... (an API token from https://replicate.com/account/api-tokens, and optionally PAYMINTO_AGENT_MODEL, default deepseek-ai/deepseek-v3.1)",
+      nearai: "PAYMINTO_AGENT_PROVIDER is nearai: export NEARAI_API_KEY=sk-... (a NEAR AI Cloud key from API Keys at https://cloud.near.ai, and optionally PAYMINTO_AGENT_MODEL, default z-ai/glm-5.3-flash)",
     };
     super(`${variable} is not set. ${how[provider]}, then run the command again.`);
     this.name = "MissingApiKeyError";
@@ -39,14 +42,20 @@ export class AgentConfigError extends Error {
 /** Environment variables the wallet MCP server reads; only these are passed to it (never a model API key). */
 export const WALLET_ENV = [
   "NODE_URL",
-  "CHAIN_ID",
-  "RPC_URL",
-  "HUB_ADDRESS",
-  "DEPLOYMENTS_DIR",
+  "NETWORK",
+  "HUB_ACCOUNT",
   "AGENT_KEY",
-  "MANDATE_ID",
+  "AGENT_KEY_FILE",
+  "BUDGET_ID",
+  "NEAR_RPC_URL",
+  "CHAIN_READER",
+  "PAYEE_CHECK",
+  "PAYEE_CHECK_INDEXER",
+  "PAYEE_CHECK_INDEXER_KEY",
   "MAX_PRICE_ATOMIC",
-  "TRUSTED_NODE",
+  "PAYABLE_HOSTS",
+  "ALLOW_ANY_PAYEE",
+  "TRUSTED_NODE_KEY",
   "RECEIPT_STORE_PATH",
   "PAYMINTO_DATA_DIR",
 ] as const;
@@ -60,13 +69,14 @@ function pick(env: Env, names: readonly string[]): Record<string, string> {
 
 /**
  * An MCP server from one config value: an http(s) URL is Streamable HTTP; anything else is a command line split on
- * spaces (a leading `node` runs with this Node binary, so type stripping works the same way).
+ * spaces (a leading `node` runs with this Node binary, so type stripping works the same way). `bearer` is the token
+ * a Payminto MCP server over HTTP requires; it is sent only to a URL, never passed to a command.
  */
-export function parseMcpSpec(name: string, value: string, env: Record<string, string> = {}): McpServerSpec {
+export function parseMcpSpec(name: string, value: string, env: Record<string, string> = {}, bearer?: string): McpServerSpec {
   const v = value.trim();
   if (/^https?:\/\//i.test(v)) {
     try {
-      return { name, url: new URL(v).toString() };
+      return { name, url: new URL(v).toString(), ...(bearer ? { headers: { authorization: `Bearer ${bearer}` } } : {}) };
     } catch {
       throw new AgentConfigError([`${name}: ${v} is not a valid URL`]);
     }
@@ -107,16 +117,21 @@ export function limitsFromEnv(env: Env = process.env): RunLimits & { effort: Eff
 
 /**
  * The buyer's wallet: `node apps/mcp/src/main.ts` with the wallet variables passed through, or whatever
- * PAYMINTO_WALLET_MCP names (a command line or a Streamable HTTP URL such as http://127.0.0.1:3334/mcp).
+ * PAYMINTO_WALLET_MCP names (a command line or a Streamable HTTP URL such as http://127.0.0.1:3334/mcp). A wallet
+ * over HTTP requires a bearer token: PAYMINTO_WALLET_MCP_TOKEN carries it.
  */
 export function walletServerSpec(env: Env = process.env): McpServerSpec {
   const custom = env.PAYMINTO_WALLET_MCP?.trim();
   const pass = pick(env, WALLET_ENV);
-  if (custom) return parseMcpSpec("payminto-wallet", custom, pass);
-  const missing = ["NODE_URL", "AGENT_KEY", "MANDATE_ID"].filter((n) => !env[n]);
-  if (missing.length) {
-    throw new AgentConfigError(missing.map((n) => `${n}: required for the buyer agent's wallet (see apps/agent/README.md), or set PAYMINTO_WALLET_MCP`));
+  if (custom) return parseMcpSpec("payminto-wallet", custom, pass, env.PAYMINTO_WALLET_MCP_TOKEN?.trim() || undefined);
+  const problems = ["NODE_URL", "BUDGET_ID"].filter((n) => !env[n]).map((n) => `${n}: required for the buyer agent's wallet (see apps/agent/README.md), or set PAYMINTO_WALLET_MCP`);
+  // The wallet reads the key from a file; the path, never the key, is what crosses into its environment.
+  if (!pass.AGENT_KEY && !pass.AGENT_KEY_FILE) {
+    const path = defaultAgentKeyPath(env);
+    if (existsSync(path)) pass.AGENT_KEY_FILE = path;
+    else problems.push(`AGENT_KEY_FILE: no agent key at ${path}; run \`payminto-agent keygen\` (or set AGENT_KEY_FILE)`);
   }
+  if (problems.length) throw new AgentConfigError(problems);
   return { name: "payminto-wallet", command: process.execPath, args: [MCP_MAIN], env: pass };
 }
 
@@ -127,7 +142,7 @@ export function walletServerSpec(env: Env = process.env): McpServerSpec {
 export function merchantServerSpec(env: Env = process.env): McpServerSpec {
   const custom = env.PAYMINTO_MERCHANT_MCP?.trim();
   const pass = pick(env, MERCHANT_ENV);
-  if (custom) return parseMcpSpec("payminto-merchant", custom, pass);
+  if (custom) return parseMcpSpec("payminto-merchant", custom, pass, env.PAYMINTO_MERCHANT_MCP_TOKEN?.trim() || undefined);
   const missing = ["NODE_URL", "MERCHANT_API_KEY"].filter((n) => !env[n]);
   if (missing.length) {
     throw new AgentConfigError(missing.map((n) => `${n}: required for the ops agent's merchant tools (see apps/agent/README.md), or set PAYMINTO_MERCHANT_MCP`));
@@ -165,6 +180,7 @@ export const KEY_ENV: Record<Provider, string> = {
   google: "GOOGLE_API_KEY",
   openai_compatible: "PAYMINTO_AGENT_API_KEY",
   replicate: "REPLICATE_API_TOKEN",
+  nearai: "NEARAI_API_KEY",
 };
 
 /**

@@ -1,19 +1,26 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import { streamSSE } from "hono/streaming";
+import { streamSSE } from "./sse.ts";
 import { z } from "zod";
-import { getAddress, isAddress, type Address, type Hex } from "viem";
 import {
   explorerAddress,
   explorerTx,
   networkFor,
   SCHEME,
   X402_VERSION,
+  isAccountId,
+  isPublicKey,
+  MAX_CLAIMS,
+  receiptLeaf,
+  type AccountId as Address,
+  type BudgetTerms,
   type ClearingReceipt,
   type DenialRule,
+  type Id32 as Hex,
+  type PublicKey,
 } from "@payminto/protocol";
+import { limitBody } from "./body-limit.ts";
 import type { ChainClient } from "./chain.ts";
 import type { Config } from "./config.ts";
 import type { Database } from "./db/database.ts";
@@ -21,14 +28,18 @@ import { ApiError } from "./errors.ts";
 import type { EventBus, NodeEvent } from "./events.ts";
 import type { Ledger } from "./ledger.ts";
 import type { Logger } from "./logger.ts";
-import type { MandateService } from "./mandates.ts";
+import type { BudgetService } from "./budgets.ts";
+import type { FundsTracker } from "./funds.ts";
 import { databaseGauges, renderGauges, type Metrics } from "./metrics.ts";
 import { clientIp, TokenBuckets, type TakeResult } from "./ratelimit.ts";
 import { overview } from "./overview.ts";
 import { receiptVerifiedOnchain } from "./proofs.ts";
-import type { SettlementService } from "./settlement.ts";
-import { batchSummaryJson, providerPublicJson, nowIso, type ProviderRow, type Store } from "./store.ts";
-import type { VoucherService } from "./vouchers.ts";
+import { receiptFieldsOf, type SettlementService } from "./settlement.ts";
+import { settlementExport, settlementExportCsv } from "./exports.ts";
+import { mountPayees, type PayeeService } from "./payees/index.ts";
+import type { PayoutService } from "./payouts.ts";
+import { batchSummaryJson, providerPublicJson, nowIso, settledByOf, type BudgetRow, type ProviderRow, type Store } from "./store.ts";
+import { UnsignedVoucherError, type VoucherService } from "./vouchers.ts";
 import type { Gateway } from "./gateway/index.ts";
 import { mountGateway } from "./gateway/routes.ts";
 import { Access, auditActor, resolveActor, type AuthVars } from "./auth/actor.ts";
@@ -36,7 +47,6 @@ import { DEFAULT_AUTH_LIMITS, mountAuth } from "./auth/routes.ts";
 import type { AuthService } from "./auth/service.ts";
 import type { CustomerService } from "./gateway/customers.ts";
 import { SEARCH_TYPES, type SearchService, type SearchType } from "./search.ts";
-import { hashkeyLinks } from "@payminto/protocol";
 import type { AgentsModule } from "./agents/index.ts";
 import { mountAgents } from "./agents/routes.ts";
 
@@ -50,15 +60,20 @@ export type NodeServices = {
   ledger: Ledger;
   events: EventBus;
   vouchers: VoucherService;
-  mandates: MandateService;
+  budgets: BudgetService;
+  /** Each Budget's escrow and its owner's credit, read from the hub. */
+  funds: FundsTracker;
+  /** The payee check: verdicts, approvals, waiting calls and reports (payees/service.ts). */
+  payees: PayeeService;
   settlement: SettlementService;
+  payouts: PayoutService;
   log: Logger;
   token: { address: Address; symbol: string; decimals: number };
   /** Called on shutdown to end open SSE streams. */
   sseClosers: Set<() => void>;
   metrics: Metrics;
-  limiters: { provider: TokenBuckets; ip: TokenBuckets };
-  /** Payminto Gateway, when enabled (GATEWAY_PAYOUT_ADDRESS or GATEWAY_ENABLED). */
+  limiters: { provider: TokenBuckets; ip: TokenBuckets; unsigned: TokenBuckets };
+  /** Payminto Gateway, when enabled (GATEWAY_PAYOUT_ACCOUNT or GATEWAY_ENABLED). */
   gateway?: Gateway | null;
   /** Accounts, sessions and permissions (docs/PRODUCT.md sections 4 and 10). */
   auth: AuthService;
@@ -72,18 +87,10 @@ export type NodeServices = {
 // Validation (zod at the trust boundary)
 // ---------------------------------------------------------------------------
 
-const zAddress = z
-  .string()
-  .refine((v) => isAddress(v, { strict: false }), "must be a 0x address")
-  .transform((v) => getAddress(v));
-const zBytes32 = z
-  .string()
-  .regex(/^0x[0-9a-fA-F]{64}$/, "must be 0x-prefixed 32-byte hex")
-  .transform((v) => v.toLowerCase() as Hex);
-const zHex = z
-  .string()
-  .regex(/^0x([0-9a-fA-F]{2})*$/, "must be 0x-prefixed hex")
-  .transform((v) => v as Hex);
+const zAddress = z.string().refine((v) => isAccountId(v), "must be a NEAR account id");
+const zBytes32 = z.string().regex(/^[0-9a-f]{64}$/, "must be 32 bytes as 64 lowercase hex characters");
+const zSig = z.string().regex(/^[0-9a-f]{128}$/, "must be a 64-byte signature as lowercase hex");
+const zPublicKey = z.string().refine((v) => isPublicKey(v), "must be an ed25519:<base58> public key").transform((v) => v as PublicKey);
 // abort: refinements that call BigInt must not run on a string that failed the pattern (see gateway/http.ts).
 const zUint = z.string().regex(/^(0|[1-9]\d{0,77})$/, { message: "must be a decimal string of atomic units", abort: true });
 const zUintBig = zUint.transform((v) => BigInt(v));
@@ -91,36 +98,27 @@ const zUintBig = zUint.transform((v) => BigInt(v));
 const policySchema = z.object({
   perCallCap: zUint,
   dailyCap: zUint,
+  hourlyCap: zUint.optional(),
   maxCallsPerMinute: z.number().int().min(0).max(1_000_000),
+  maxRepeatsPerRequest: z.number().int().min(0).max(1_000_000).optional(),
   purpose: z.string().max(500),
 });
 
-const mandateJsonSchema = z.object({
+const budgetJsonSchema = z.object({
   owner: zAddress,
-  agent: zAddress,
-  token: zAddress,
-  totalCap: zUintBig,
-  validAfter: zUintBig,
+  agentPk: zPublicKey,
+  settler: zAddress,
+  cap: zUintBig,
   validUntil: zUintBig,
-  payeesRoot: zBytes32,
+  payees: z.array(zAddress).max(16),
   policyHash: zBytes32,
   salt: zBytes32,
-});
+}) satisfies z.ZodType<BudgetTerms>;
 
-const createMandateSchema = z.object({
-  mandate: mandateJsonSchema,
-  ownerSignature: zHex,
+const createBudgetSchema = z.object({
+  budget: budgetJsonSchema,
   policy: policySchema,
-  payees: z.array(zAddress).max(1024),
   label: z.string().trim().min(1).max(120),
-  /** Optional EIP-2612 permit by the agent for the hub: opened with openMandateWithPermit, so the agent sends nothing. */
-  permit: z
-    .object({
-      value: zUintBig,
-      deadline: zUintBig,
-      signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/, "must be a 65-byte signature").transform((v) => v as Hex),
-    })
-    .optional(),
 });
 
 const createProviderSchema = z.object({
@@ -137,19 +135,18 @@ const voucherSchema = z.object({
   scheme: z.literal(SCHEME),
   network: z.string(),
   payload: z.object({
-    mandateId: zBytes32,
+    budgetId: zBytes32,
     payee: zAddress,
     amount: zUintBig,
     cumulative: zUintBig,
-    signature: zHex,
+    signature: zSig,
     requestHash: zBytes32,
   }),
   providerId: z.string().min(1).max(64),
   requestHash: zBytes32,
 });
 
-const cosignSchema = z.object({ signerProof: zHex });
-const revokeSchema = z.object({ signature: zHex.optional() }).default({});
+const revokeSchema = z.object({ signature: zSig.optional() }).default({});
 
 async function body<T extends z.ZodType>(c: Context, schema: T): Promise<z.output<T>> {
   let raw: unknown;
@@ -217,7 +214,7 @@ export function createApi(s: NodeServices): Hono<Vars> {
   const { config, store, chain, events, log } = s;
   const app = new Hono<Vars>();
   const nowSec = () => Math.floor(Date.now() / 1000);
-  const net = networkFor(config.chainId);
+  const net = networkFor(config.network);
 
   app.use(
     "*",
@@ -233,9 +230,9 @@ export function createApi(s: NodeServices): Hono<Vars> {
 
   app.use(
     "*",
-    bodyLimit({
+    limitBody({
       maxSize: 512 * 1024,
-      onError: (c) => c.json({ error: { code: "PAYLOAD_TOO_LARGE", message: "request body exceeds 512 KiB" } }, 413),
+      onTooLarge: (c) => c.json({ error: { code: "PAYLOAD_TOO_LARGE", message: "request body exceeds 512 KiB" } }, 413),
     }),
   );
 
@@ -263,6 +260,16 @@ export function createApi(s: NodeServices): Hono<Vars> {
     s.metrics.inc("payminto_rate_limited_total", "Requests refused with 429, by limiter.", { scope });
     c.header("Retry-After", String(retryAfterSec));
     return c.json({ error: { code: "RATE_LIMITED", message: `too many requests, retry in ${retryAfterSec}s`, details: { scope } } }, 429);
+  };
+
+  /**
+   * A voucher nobody signed: counted, and answered 429 once its sender (a provider key, or a client IP on the public pay
+   * routes) is over the unsigned limit. Null lets the plain error through. Signed vouchers never touch this bucket.
+   */
+  const unsignedVoucher = (c: Context, sender: string, err: UnsignedVoucherError): Response | null => {
+    s.metrics.inc("payminto_unsigned_vouchers_total", "Vouchers not signed by their Budget's agent key (never recorded as refusals).", { reason: err.code });
+    const r = s.limiters.unsigned.take(sender);
+    return r.ok ? null : tooMany(c, "unsigned", r);
   };
 
   // One actor per request: API key, recovery key (ADMIN_TOKEN) or session cookie (docs/PRODUCT.md 10.1).
@@ -305,17 +312,13 @@ export function createApi(s: NodeServices): Hono<Vars> {
   // ------------------------------------------------------------------ public
 
   app.get("/healthz", async (c) => {
-    let blockNumber: number | null = null;
+    let ok = true;
     try {
-      blockNumber = Number(await chain.public.getBlockNumber());
+      await chain.chain.isRegistered(chain.hub);
     } catch {
-      blockNumber = null;
+      ok = false;
     }
-    const ok = blockNumber !== null;
-    return c.json(
-      { ok, chainId: config.chainId, hub: chain.hub, token: chain.token, operator: chain.operator.address, blockNumber, hspMode: config.hsp.mode },
-      ok ? 200 : 503,
-    );
+    return c.json({ ok, network: config.network, hub: chain.hub, token: chain.token, operator: chain.operator }, ok ? 200 : 503);
   });
 
   // Prometheus scrape target. Admin-authenticated: configure `authorization: { credentials: <ADMIN_TOKEN> }` in the
@@ -326,27 +329,16 @@ export function createApi(s: NodeServices): Hono<Vars> {
     if (!t || !(safeEqual(t, config.adminToken) || (metricsToken !== null && safeEqual(t, metricsToken)))) {
       throw new ApiError(401, "UNAUTHORIZED", "ADMIN_TOKEN or METRICS_TOKEN bearer required");
     }
-    const [head, gas] = await Promise.all([
-      chain.public.getBlockNumber().catch(() => null),
-      chain.public.getBalance({ address: chain.operator.address }).catch(() => null),
-    ]);
-    const scanned = store.getMeta("revocations_scanned_block");
+    const up = await chain.chain.isRegistered(chain.hub).then(() => true, () => false);
     const mem = process.memoryUsage();
     const lines = [
       ...renderGauges([
         {
           name: "payminto_node_info",
           help: "Static node information.",
-          samples: [{ labels: { version: NODE_VERSION, chain_id: String(config.chainId), hsp_mode: config.hsp.mode }, value: 1 }],
+          samples: [{ labels: { version: NODE_VERSION, network: config.network }, value: 1 }],
         },
-        { name: "payminto_chain_head_block", help: "Latest block seen from RPC_URL.", samples: head === null ? [] : [{ value: head }] },
-        { name: "payminto_rpc_up", help: "1 when the RPC answered this scrape.", samples: [{ value: head === null ? 0 : 1 }] },
-        {
-          name: "payminto_revocations_scanned_block",
-          help: "Last block scanned for on-chain MandateRevoked events.",
-          samples: scanned === undefined ? [] : [{ value: BigInt(scanned) }],
-        },
-        { name: "payminto_operator_gas_balance_wei", help: "Native balance of the operator, which pays settlement gas.", samples: gas === null ? [] : [{ value: gas }] },
+        { name: "payminto_rpc_up", help: "1 when the RPC answered this scrape.", samples: [{ value: up ? 1 : 0 }] },
         { name: "payminto_unsettled_calls", help: "Accepted calls not yet in a batch.", samples: [{ value: store.unsettledCallCount() }] },
         { name: "payminto_sse_clients", help: "Open /v1/events streams.", samples: [{ value: s.sseClosers.size }] },
         { name: "payminto_ratelimit_keys", help: "Tracked rate-limit buckets.", samples: [
@@ -362,82 +354,73 @@ export function createApi(s: NodeServices): Hono<Vars> {
     return c.text(lines.join("\n") + "\n", 200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
   });
 
-  // The RPC a browser wallet should use: PUBLIC_RPC_URL, else the chain's public RPC, else RPC_URL when it carries no key.
-  const publicRpcUrl = config.auth?.publicRpcUrl ?? (net.chain.id === 31337 || !net.chain.rpcUrls.default.http[0] ? (hasSecret(config.rpcUrl) ? null : config.rpcUrl) : net.chain.rpcUrls.default.http[0]);
-  app.get("/v1/info", async (c) => {
-    const gas = await chain.public.getBalance({ address: chain.operator.address }).catch(() => null);
-    return c.json({
+  // The RPC a browser wallet should use: PUBLIC_RPC_URL, else RPC_URL when it carries no key, else the network default.
+  const publicRpcUrl = config.auth?.publicRpcUrl ?? (hasSecret(config.rpcUrl) ? net.rpcUrl : config.rpcUrl);
+  app.get("/v1/info", (c) =>
+    c.json({
       version: NODE_VERSION,
-      chainId: config.chainId,
-      network: {
-        chainId: config.chainId,
-        name: net.chain.name,
-        caip2: net.caip2,
-        explorer: net.explorer || null,
-        testnet: !!net.chain.testnet,
-        rpc_url: publicRpcUrl,
-        fallback_rpc_urls: config.rpcFallbackUrls.filter((u) => !hasSecret(u)),
-        ...(hashkeyLinks[config.chainId] ?? { faucet: null, bridge: null, docs: null }),
-      },
+      network: { id: config.network, name: net.name, explorer: net.explorer || null, testnet: net.testnet, rpc_url: publicRpcUrl },
       hub: chain.hub,
-      hubExplorerUrl: explorerAddress(config.chainId, chain.hub),
+      hubExplorerUrl: explorerAddress(config.network, chain.hub),
       token: s.token,
       explorer: net.explorer || null,
-      operator: chain.operator.address,
-      /** Native gas balance of the operator (wei), which pays openMandate and settleBatch gas. */
-      ...(gas !== null ? { operatorGasBalance: gas.toString() } : {}),
+      operator: chain.operator,
+      nodeKey: chain.nodeKey,
       publicUrl: config.publicUrl,
-      hspMode: config.hsp.mode,
-      hsp: {
-        mode: config.hsp.mode,
-        verifyingContract: s.settlement.hsp.verifyingContract,
-        requiredCapabilities: s.settlement.hsp.requiredCapabilities,
-        cosignTimeoutSec: config.hsp.cosignTimeoutSec,
-      },
       settleIntervalSec: config.settleIntervalSec,
-      gateway: s.gateway
-        ? {
-            enabled: true,
-            checkoutBaseUrl: s.gateway.ctx.checkoutBaseUrl,
-            depositFactory: s.gateway.config.depositFactory,
-            paymentRouter: s.gateway.config.paymentRouter,
-            tokenDomain: s.gateway.domain,
-            confirmTag: chain.confirmTag,
-            // The HSP payment method (GATEWAY.md section 17): off, or whether HashKey's HSP can take payments now.
-            hspPayments: s.gateway.hsp?.availability() ?? { state: "off" },
-          }
-        : { enabled: false },
-      settlement: {
-        intervalSec: config.settleIntervalSec,
-        minCalls: config.settleMinCalls,
-        maxClaimsPerBatch: 64,
-        /** Head a batch must reach before it is confirmed and booked (latest, safe or finalized). */
-        confirmTag: chain.confirmTag,
-        easAttest: config.easAttest ?? false,
-      },
-    });
-  });
+      gateway: s.gateway ? { enabled: true, checkoutBaseUrl: s.gateway.ctx.checkoutBaseUrl } : { enabled: false },
+      settlement: { intervalSec: config.settleIntervalSec, minCalls: config.settleMinCalls, maxClaimsPerBatch: MAX_CLAIMS },
+    }),
+  );
 
   app.get("/v1/providers", (c) => {
     const now = nowSec();
     return c.json(store.providers().map((p) => providerPublicJson(p, store.providerCalls24h(p.id, now))));
   });
 
-  app.get("/v1/mandates/:id/position", (c) => {
+  app.get("/v1/budgets/:id/position", (c) => {
     const id = param(c.req.param("id"), zBytes32, "id");
     const payee = param(c.req.query("payee"), zAddress, "payee");
-    if (!store.mandate(id)) throw new ApiError(404, "UNKNOWN_MANDATE", "No open mandate with this id on this node");
+    if (!store.budget(id)) throw new ApiError(404, "UNKNOWN_BUDGET", "No open budget with this id on this node");
     return c.json(s.vouchers.positionJson(id, payee));
   });
 
-  // Public: the signed mandate, its policy and allowlist. Safe to expose (the mandate is public on chain and commits
-  // to both via policyHash and payeesRoot); agents verify those hashes and enforce the policy before signing.
-  app.get("/v1/mandates/:id/policy", (c) => {
+  // Public, like the position read: the node's own record of the refusals of one request of a Budget, each signed with
+  // the node's receipt key. An agent that was told "the node refused you" by a seller asks its node here; a refusal
+  // that is not in this list did not come from this node. Only vouchers the agent signed leave a record, and the
+  // request hash keeps the list to one request (it is not a way to enumerate a Budget's refusals).
+  app.get("/v1/budgets/:id/refusals", (c) => {
     const id = param(c.req.param("id"), zBytes32, "id");
-    const m = store.mandate(id);
-    if (!m) throw new ApiError(404, "UNKNOWN_MANDATE", "No open mandate with this id on this node");
-    const summary = store.mandateSummary(m, nowSec());
-    return c.json({ id: m.id, status: summary.status, mandate: summary.mandate, policy: summary.policy, payees: summary.payees });
+    const requestHash = param(c.req.query("requestHash"), zBytes32, "requestHash");
+    const payee = c.req.query("payee");
+    const cumulative = c.req.query("cumulative");
+    if (!store.budget(id)) throw new ApiError(404, "UNKNOWN_BUDGET", "No open budget with this id on this node");
+    const rows = store.refusalsOf({
+      budgetId: id,
+      requestHash,
+      ...(payee ? { payee: param(payee, zAddress, "payee") } : {}),
+      ...(cumulative ? { cumulative: param(cumulative, zUint, "cumulative") } : {}),
+      limit: 20,
+    });
+    return c.json({
+      budgetId: id,
+      requestHash,
+      hub: chain.hub,
+      network: chain.network,
+      /** The key every record below is signed with; the same as `nodeKey` in /v1/info. */
+      node: chain.nodeKey,
+      refusals: rows.map((r) => s.vouchers.signedRefusal(r)).filter((r) => r !== null),
+    });
+  });
+
+  // Public: the signed budget, its policy and allowlist. Safe to expose (the budget is public on chain and commits
+  // to both via policyHash and payeesRoot); agents verify those hashes and enforce the policy before signing.
+  app.get("/v1/budgets/:id/policy", (c) => {
+    const id = param(c.req.param("id"), zBytes32, "id");
+    const m = store.budget(id);
+    if (!m) throw new ApiError(404, "UNKNOWN_BUDGET", "No open budget with this id on this node");
+    const summary = store.budgetSummary(m, nowSec());
+    return c.json({ id: m.id, status: summary.status, budget: summary.budget, policy: summary.policy, payees: summary.payees });
   });
 
   app.get("/v1/receipts/:callId/proof", async (c) => {
@@ -446,45 +429,57 @@ export function createApi(s: NodeServices): Hono<Vars> {
     if (!call) throw new ApiError(404, "NOT_FOUND", "call not found");
     const batch = call.batch_seq !== null ? store.batch(String(call.batch_seq)) : undefined;
     const proof = call.proof ? (JSON.parse(call.proof) as Hex[]) : [];
-    // True only if this node's operator settled the batch, signed the leaf, and the Merkle proof verifies on chain.
+    // A call its payee settled itself (`settle_own`) is in no batch: there is no root, leaf or Merkle proof to show, and
+    // `onchainVerified` stays null. What can be checked on chain is that the hub's settled position covers the call.
+    const seller = call.seller_settlement_seq !== null ? store.sellerSettlement(call.seller_settlement_seq) : undefined;
+    const hubSettled = seller ? await chain.chain.settledOf(call.budget_id, call.payee).catch(() => null) : null;
+    const fields = receiptFieldsOf(call);
+    const attestation = { callId, budgetId: call.budget_id, payee: call.payee, amount: fields.amount, cumulative: fields.cumulative, requestHash: call.request_hash, timestamp: BigInt(call.timestamp), voucherSig: call.agent_signature };
+    // True only if this node settled the batch, signed the acceptance, and the Merkle proof verifies on chain.
     const onchainVerified =
-      batch && batch.status === "confirmed" ? await receiptVerifiedOnchain(chain, batch.batch_id, call.leaf, call.node_signature, proof) : null;
+      batch && batch.status === "confirmed" ? await receiptVerifiedOnchain(chain.chain, chain.operator, chain.nodeKey, batch.batch_id, fields, attestation, call.node_signature, proof) : null;
     const receipt: ClearingReceipt = {
       callId: call.call_id,
-      mandateId: call.mandate_id,
+      budgetId: call.budget_id,
       payee: call.payee,
       amount: call.amount,
       cumulative: call.cumulative,
       requestHash: call.request_hash,
       timestamp: call.timestamp,
-      leaf: call.leaf,
+      voucherSig: call.agent_signature,
+      digest: call.leaf,
       nodeSignature: call.node_signature,
-      node: chain.operator.address,
+      node: chain.nodeKey,
     };
     return c.json({
       receipt,
       status: call.status,
+      /** "batch" or "seller" once settled, else null. */
+      settledBy: settledByOf(call),
+      /** Set only for a call settled by its payee: the settled position the node booked, and what the hub says now. */
+      sellerSettlement: seller
+        ? {
+            id: seller.id,
+            previous: seller.previous,
+            cumulative: seller.cumulative,
+            detectedAt: seller.detected_at,
+            hubSettled: hubSettled === null ? null : hubSettled.toString(),
+            /** True when the hub's settled position of this (Budget, payee) is at or past this call. Null if unreadable. */
+            covered: hubSettled === null ? null : hubSettled >= BigInt(call.cumulative),
+          }
+        : null,
       batchId: batch?.batch_id ?? null,
       batchStatus: batch?.status ?? null,
       receiptsRoot: batch?.receipts_root ?? null,
+      /** The Merkle leaf, once the call is in a batch: it commits to the batch id, so it does not exist before. */
+      leaf: batch ? receiptLeaf(chain.hub, chain.network, batch.batch_id, fields) : null,
       proof,
-      leaf: call.leaf,
       txHash: batch?.tx_hash ?? null,
-      explorerUrl: batch?.tx_hash ? explorerTx(config.chainId, batch.tx_hash) : null,
+      explorerUrl: batch?.tx_hash ? explorerTx(config.network, batch.tx_hash) : null,
       onchainVerified,
     });
   });
 
-  app.get("/v1/agents/:address/cosign", (c) => {
-    const address = param(c.req.param("address"), zAddress, "address");
-    return c.json(s.settlement.pendingCosigns(address));
-  });
-
-  app.post("/v1/cosign/:hspPaymentId", async (c) => {
-    const id = param(c.req.param("hspPaymentId"), zBytes32, "hspPaymentId");
-    const { signerProof } = await body(c, cosignSchema);
-    return c.json(await s.settlement.cosign(id, signerProof));
-  });
 
   app.get("/v1/events", (c) => {
     // EventSource cannot send headers: the recovery key may come as ?token= (while it is active); sessions use the cookie.
@@ -517,7 +512,7 @@ export function createApi(s: NodeServices): Hono<Vars> {
       stream.onAbort(close);
       try {
         let sent = 0;
-        await stream.writeSSE({ event: "ready", data: JSON.stringify({ at: nowIso(), node: chain.operator.address }), retry: 3000 });
+        await stream.writeSSE({ event: "ready", data: JSON.stringify({ at: nowIso(), node: chain.operator }), retry: 3000 });
         if (lastId !== null) {
           for (const e of events.since(lastId)) {
             if (!visible(e)) continue;
@@ -556,45 +551,53 @@ export function createApi(s: NodeServices): Hono<Vars> {
     const p = c.get("provider");
     const b = await body(c, voucherSchema);
     if (b.providerId !== p.id) throw new ApiError(403, "PROVIDER_MISMATCH", "providerId does not match the API key");
-    if (b.network !== net.caip2) throw new ApiError(400, "NETWORK_MISMATCH", `network must be ${net.caip2}`);
+    if (b.network !== net.network) throw new ApiError(400, "NETWORK_MISMATCH", `network must be ${net.network}`);
     if (b.payload.payee !== p.payee) throw new ApiError(400, "PAYEE_MISMATCH", "voucher payee is not this provider's payee");
     if (b.payload.requestHash !== b.requestHash) {
       throw new ApiError(400, "REQUEST_HASH_MISMATCH", "payload.requestHash differs from the provider's requestHash");
     }
-    const r = await s.vouchers.accept(p, b.payload);
+    let r;
+    try {
+      r = await s.vouchers.accept(p, b.payload);
+    } catch (err) {
+      if (err instanceof UnsignedVoucherError) {
+        const limited = unsignedVoucher(c, `provider:${p.id}`, err);
+        if (limited) return limited;
+      }
+      throw err;
+    }
     if (r.ok) return c.json({ receipt: r.receipt, position: r.position });
-    return c.json({ error: { code: r.rule as DenialRule, message: r.message, details: r.details } }, 402);
+    return c.json({ error: { code: r.rule as DenialRule, message: r.message, details: r.details }, refusal: r.refusal }, 402);
   });
 
   // ------------------------------------------------------------------- admin
 
-  app.get("/v1/overview", admin, (c) => c.json({ ...overview(s.db, store, config.chainId, nowSec()), token: s.token }));
+  app.get("/v1/overview", admin, (c) => c.json({ ...overview(s.db, store, config.network, nowSec()), token: s.token }));
 
-  app.get("/v1/mandates", admin, (c) => {
+  /** A Budget with the payee check's verdict for each payee it holds one for (`payeeChecks`, null with the check off). */
+  const budgetJson = (m: BudgetRow, now: number) => ({ ...store.budgetSummary(m, now), payeeChecks: s.payees.payeeChecks(m) });
+
+  app.get("/v1/budgets", admin, (c) => {
     const now = nowSec();
-    return c.json(store.mandates().map((m) => store.mandateSummary(m, now)));
+    return c.json(store.budgets().map((m) => budgetJson(m, now)));
   });
 
-  app.get("/v1/mandates/:id", admin, async (c) => {
+  app.get("/v1/budgets/:id", admin, async (c) => {
     const id = param(c.req.param("id"), zBytes32, "id");
-    const m = store.mandate(id);
-    if (!m) throw new ApiError(404, "NOT_FOUND", "mandate not found");
-    const [onchain, onboarding] = await Promise.all([
-      chain.mandate(m.id).catch(() => undefined),
-      m.open_tx_hash ? chain.onboarding(m.open_tx_hash as Hex, m.agent as Address).catch(() => null) : Promise.resolve(null),
-    ]);
+    const m = store.budget(id);
+    if (!m) throw new ApiError(404, "NOT_FOUND", "budget not found");
+    const onchain = await chain.chain.budget(m.id).catch(() => undefined);
     const positions = s.db
       .all<{ payee: Address; cumulative: string; settled: string }>(
-        "SELECT payee, cumulative, settled FROM positions WHERE mandate_id = ? ORDER BY payee",
+        "SELECT payee, cumulative, settled FROM positions WHERE budget_id = ? ORDER BY payee",
         m.id,
       )
       .map((p) => ({ ...p, pending: (BigInt(p.cumulative) - BigInt(p.settled)).toString() }));
     return c.json({
-      ...store.mandateSummary(m, nowSec()),
-      ownerSignature: m.owner_signature,
+      ...budgetJson(m, nowSec()),
       revokedBy: m.revoked_by,
       revokeTxHash: m.revoke_tx_hash,
-      openTxExplorerUrl: m.open_tx_hash ? explorerTx(config.chainId, m.open_tx_hash) : null,
+      openTxExplorerUrl: m.open_tx_hash ? explorerTx(config.network, m.open_tx_hash) : null,
       onchain:
         onchain === undefined
           ? null
@@ -603,29 +606,35 @@ export function createApi(s: NodeServices): Hono<Vars> {
             : {
                 open: true,
                 spent: onchain.spent.toString(),
-                totalCap: onchain.totalCap.toString(),
-                revokedAt: onchain.revokedAt === 0n ? null : Number(onchain.revokedAt),
-                validUntil: Number(onchain.validUntil),
+                cap: onchain.cap.toString(),
+                escrow: onchain.escrow.toString(),
+                revokedAt: onchain.revokedAt === null ? null : onchain.revokedAt.toString(),
+                validUntil: onchain.validUntil.toString(),
               },
       positions,
-      recentCalls: store.listCalls({ mandateId: m.id, limit: 50 }).items,
-      denials: store.listDenials({ mandateId: m.id, limit: 50 }),
+      recentCalls: store.listCalls({ budgetId: m.id, limit: 50 }).items,
+      denials: store.listDenials({ budgetId: m.id, limit: 50 }),
       spendSeries: store.spendSeries(m.id, nowSec()),
       spendRecent: store.spendRecent(m.id, nowSec()),
-      onboarding,
     });
   });
 
-  app.post("/v1/mandates", admin, async (c) => {
-    const b = await body(c, createMandateSchema);
-    const row = await s.mandates.create(b);
-    return c.json(store.mandateSummary(row, nowSec()), 201);
+  app.post("/v1/budgets", admin, async (c) => {
+    const b = await body(c, createBudgetSchema);
+    const row = await s.budgets.create(b);
+    // Read escrow and credit now, so a Budget shows its funds before its first Call. A failed read is not fatal: the
+    // funds check reads again before deciding any Call, and refuses while it cannot.
+    await s.funds.refresh(row).catch((err: unknown) => log.warn("funds read at registration failed", { budgetId: row.id, err }));
+    // Every payee on the list is judged now. A blocked payee does not stop the registration: the owner decides, and
+    // the verdicts travel with the answer so the dashboard can show them.
+    await s.payees.checkBudget(row);
+    return c.json(budgetJson(row, nowSec()), 201);
   });
 
-  app.post("/v1/mandates/:id/revoke", async (c) => {
+  app.post("/v1/budgets/:id/revoke", async (c) => {
     const id = param(c.req.param("id"), zBytes32, "id");
-    const m = store.mandate(id);
-    if (!m) throw new ApiError(404, "NOT_FOUND", "mandate not found");
+    const m = store.budget(id);
+    if (!m) throw new ApiError(404, "NOT_FOUND", "budget not found");
     const actor = access.actor(c);
     let by: string;
     if (actor.type !== "anonymous" && access.hasPlatform(actor, "agents.manage")) {
@@ -634,9 +643,9 @@ export function createApi(s: NodeServices): Hono<Vars> {
     } else {
       const { signature } = await body(c, revokeSchema);
       if (!signature) throw new ApiError(401, "UNAUTHORIZED", "admin bearer token or an agent/owner revoke signature required");
-      by = await s.mandates.authorizeSignedRevoke(m, signature);
+      by = s.budgets.authorizeSignedRevoke(m, signature);
     }
-    return c.json(await s.mandates.revoke(m.id, by));
+    return c.json(await s.budgets.revoke(m.id, by));
   });
 
   app.get("/v1/providers/:id", admin, (c) => {
@@ -689,11 +698,11 @@ export function createApi(s: NodeServices): Hono<Vars> {
     }
     const cursor = c.req.query("cursor");
     if (cursor && !/^\d+$/.test(cursor)) throw new ApiError(400, "VALIDATION_ERROR", "invalid cursor");
-    const mandateId = c.req.query("mandateId");
+    const budgetId = c.req.query("budgetId");
     const payee = c.req.query("payee");
     return c.json(
       store.listCalls({
-        mandateId: mandateId ? param(mandateId, zBytes32, "mandateId") : undefined,
+        budgetId: budgetId ? param(budgetId, zBytes32, "budgetId") : undefined,
         payee: payee ? param(payee, zAddress, "payee") : undefined,
         status: status || undefined,
         providerId: c.req.query("providerId") || undefined,
@@ -706,19 +715,50 @@ export function createApi(s: NodeServices): Hono<Vars> {
   app.get("/v1/denials", admin, (c) => c.json(store.listDenials({ limit: limitOf(c) })));
 
   app.get("/v1/batches", admin, (c) => {
-    return c.json(store.batches(limitOf(c)).map((b) => batchSummaryJson(b, config.chainId)));
+    return c.json(store.batches(limitOf(c)).map((b) => batchSummaryJson(b, config.network)));
   });
 
   app.get("/v1/batches/:id", admin, (c) => {
     const b = store.batch(c.req.param("id"));
     if (!b) throw new ApiError(404, "NOT_FOUND", "batch not found");
-    return c.json(store.batchDetailJson(b, config.chainId));
+    return c.json(store.batchDetailJson(b, config.network));
   });
 
   app.post("/v1/settlements", async (c) => {
     const actor = access.platform(c, "settlements.run");
     const out = await s.settlement.settle("manual");
     s.auth.audit.write(auditActor(actor), "settlement.run", { meta: { trigger: "manual" } });
+    return c.json(out);
+  });
+
+  // Decision 9: gross per counterparty next to net, by batch confirmation time. ?account= gives one party's books.
+  app.get("/v1/settlements/export", admin, (c) => {
+    const iso = (name: string, def: string) => {
+      const raw = c.req.query(name);
+      if (raw === undefined || raw === "") return def;
+      const t = Date.parse(raw);
+      if (Number.isNaN(t)) throw new ApiError(400, "VALIDATION_ERROR", `${name} must be an ISO 8601 date or time`);
+      return new Date(t).toISOString();
+    };
+    const from = iso("from", new Date(0).toISOString());
+    const to = iso("to", new Date(Date.now() + 1000).toISOString());
+    if (from >= to) throw new ApiError(400, "VALIDATION_ERROR", "from must be before to");
+    const account = c.req.query("account");
+    const format = c.req.query("format") ?? "json";
+    if (format !== "json" && format !== "csv") throw new ApiError(400, "VALIDATION_ERROR", "format must be json or csv");
+    const out = settlementExport(s.db, { network: config.network, hub: chain.hub, token: chain.token, from, to, account: account ? param(account, zAddress, "account") : null });
+    if (format === "json") return c.json(out);
+    return c.body(settlementExportCsv(out), 200, {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="payminto-settlements-${from.slice(0, 10)}-${to.slice(0, 10)}.csv"`,
+    });
+  });
+
+  app.get("/v1/payouts", admin, (c) => c.json(s.payouts.list(limitOf(c))));
+  app.post("/v1/payouts", async (c) => {
+    const actor = access.platform(c, "settlements.run");
+    const out = await s.payouts.run("manual");
+    s.auth.audit.write(auditActor(actor), "payout.run", { meta: { trigger: "manual" } });
     return c.json(out);
   });
 
@@ -732,7 +772,7 @@ export function createApi(s: NodeServices): Hono<Vars> {
 
   app.get("/v1/netting/preview", admin, (c) => c.json(s.settlement.preview()));
 
-  mountAuth(app, access, { metrics: s.metrics, chainId: config.chainId, tooMany, limits: { ...DEFAULT_AUTH_LIMITS, ...(config.auth?.rateLimitPerMin ? { authPerMin: config.auth.rateLimitPerMin } : {}), ...(config.auth?.setupPerMin ? { setupPerMin: config.auth.setupPerMin } : {}), ...(config.auth?.emailPerHour ? { emailPerHour: config.auth.emailPerHour } : {}) } });
+  mountAuth(app, access, { metrics: s.metrics, network: config.network, tooMany, limits: { ...DEFAULT_AUTH_LIMITS, ...(config.auth?.rateLimitPerMin ? { authPerMin: config.auth.rateLimitPerMin } : {}), ...(config.auth?.setupPerMin ? { setupPerMin: config.auth.setupPerMin } : {}), ...(config.auth?.emailPerHour ? { emailPerHour: config.auth.emailPerHour } : {}) } });
 
   // ------------------------------------------------------------------ global search (PRODUCT.md 5.4 and 10.13)
 
@@ -765,7 +805,19 @@ export function createApi(s: NodeServices): Hono<Vars> {
     return c.json(s.search.addRecent(x.user.id, b));
   });
 
-  if (s.gateway) mountGateway(app, s.gateway, { access, auth: s.auth, customers: s.customers, clientIp: ipOf, sseClosers: s.sseClosers, publicUrl: config.publicUrl });
+  mountPayees(app, s.payees, { access, store, chain });
+
+  if (s.gateway) {
+    mountGateway(app, s.gateway, {
+      access,
+      auth: s.auth,
+      customers: s.customers,
+      clientIp: ipOf,
+      sseClosers: s.sseClosers,
+      publicUrl: config.publicUrl,
+      unsignedVoucher: (c, err) => unsignedVoucher(c, `ip:${ipOf(c)}`, err),
+    });
+  }
   if (s.agents) {
     mountAgents(app, s.agents, { access, auth: s.auth });
     // Ops tools and skill paywalls call this API in-process; nothing leaves the node.

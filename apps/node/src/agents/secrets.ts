@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 /**
  * The documented local dev key (docs/OPERATIONS.md): base64 of the 32 ASCII bytes "payminto-dev-agent-secrets-key!!".
- * The node uses it when AGENT_SECRETS_KEY is unset on a local chain and refuses it on HashKey Chain.
+ * The node uses it when AGENT_SECRETS_KEY is unset on a local chain and refuses it on NEAR testnet.
  */
 export const DEV_AGENT_SECRETS_KEY = "cGF5bWludG8tZGV2LWFnZW50LXNlY3JldHMta2V5ISE=";
 

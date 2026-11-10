@@ -13,6 +13,7 @@ WORKDIR /app
 # Every workspace manifest, so the lockfile matches; only the node and its dependencies are installed.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/chain/package.json packages/chain/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/models/package.json packages/models/
 COPY apps/node/package.json apps/node/
@@ -28,17 +29,19 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8787 \
     DB_PATH=/data/clearing.db \
-    BACKUP_DIR=/data/backups \
-    DEPLOYMENTS_DIR=/app/deployments
+    BACKUP_DIR=/data/backups
 WORKDIR /app
 COPY --from=deps /app/package.json /app/pnpm-workspace.yaml ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
+COPY --from=deps /app/packages/chain/node_modules ./packages/chain/node_modules
 COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
 COPY --from=deps /app/packages/models/node_modules ./packages/models/node_modules
 COPY --from=deps /app/apps/node/node_modules ./apps/node/node_modules
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/chain/package.json packages/chain/
 COPY packages/protocol/src packages/protocol/src
+COPY packages/chain/src packages/chain/src
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/sdk/src packages/sdk/src
 COPY packages/models/package.json packages/models/
@@ -47,12 +50,8 @@ COPY apps/node/package.json apps/node/
 COPY apps/node/src apps/node/src
 COPY apps/node/migrations apps/node/migrations
 COPY apps/node/scripts apps/node/scripts
-# Live deployments (133.json, 177.json) ship with the image. The local anvil deployment is written at runtime by the
-# compose `local` profile into a volume mounted at /app/deployments-local, which this symlink points at.
-COPY contracts/deployments/ deployments/
-RUN mkdir -p /data /app/deployments-local \
- && ln -sfn /app/deployments-local/31337.json /app/deployments/31337.json \
- && chown -R node:node /data /app/deployments-local
+RUN mkdir -p /data \
+ && chown -R node:node /data
 USER node
 WORKDIR /app/apps/node
 VOLUME ["/data"]

@@ -3,15 +3,24 @@ import type { Database } from "./db/database.ts";
 export const EVENT_TYPES = [
   "call.accepted",
   "call.denied",
-  "mandate.opened",
-  "mandate.revoked",
+  "budget.opened",
+  "budget.revoked",
   "batch.started",
   "batch.submitted",
   "batch.included",
   "batch.confirmed",
   "batch.failed",
-  "hsp.updated",
+  "payout.confirmed",
+  "payout.failed",
   "funds.warning",
+  // A payee settled its own voucher on the hub and the node booked it (settlement.ts).
+  "seller.settled",
+  // Something only the operator can resolve; also counted in payminto_operator_alerts_total for paging.
+  "operator.alert",
+  // The payee check (payees/service.ts): a call waits for the owner's decision about a payee (`request`, `approveAt`),
+  // and an owner decided or withdrew a decision (`approval`, and `withdrawn: true` for a withdrawal).
+  "payee.approval_requested",
+  "payee.approval_decided",
   // Merchant AI agents (docs/AGENTS.md section 6): lifecycle, every state change, and each step. All carry merchant_id
   // and run_id.
   "agent_run.queued",
