@@ -191,7 +191,7 @@ export class IntentsService {
   readonly #log: Logger;
   readonly #hub: AccountId;
   readonly #clock: () => number;
-  readonly #locks = new Map<string, Mutex>();
+  readonly #locks = new Map<string, { mutex: Mutex; users: number }>();
   readonly #options = new Map<string, { at: number; rows: Promise<IntentsOption[]> }>();
   #lastCall: LastCall | null = null;
   #rateRemaining: number | null = null;
@@ -248,10 +248,16 @@ export class IntentsService {
     return this.config.managerPublicKey ? { managerPublicKey: this.config.managerPublicKey } : {};
   }
 
-  #lock(paymentId: string): Mutex {
-    let m = this.#locks.get(paymentId);
-    if (!m) this.#locks.set(paymentId, (m = new Mutex()));
-    return m;
+  /** Runs `fn` alone for this payment; the lock is dropped once nobody waits on it. */
+  async #locked<T>(paymentId: string, fn: () => Promise<T>): Promise<T> {
+    let l = this.#locks.get(paymentId);
+    if (!l) this.#locks.set(paymentId, (l = { mutex: new Mutex(), users: 0 }));
+    l.users++;
+    try {
+      return await l.mutex.run(fn);
+    } finally {
+      if (--l.users === 0) this.#locks.delete(paymentId);
+    }
   }
 
   // ------------------------------------------------------------------ the merchant's NEAR account
@@ -473,7 +479,7 @@ export class IntentsService {
     const origin = this.origins.find((o) => o.assetId === b.origin_asset);
     if (!origin) throw new ApiError(400, "ORIGIN_NOT_OFFERED", `${b.origin_asset} is not an origin this checkout offers`);
     if (!this.kit.isOriginAddress(origin, b.refund_to)) throw new ApiError(400, "INVALID_REFUND_ADDRESS", `the refund address is not a valid ${origin.chainName} address`);
-    return this.#lock(p0.id).run(async () => {
+    return this.#locked(p0.id, async () => {
       const p = this.#payments.row(p0.id)!;
       const m = this.#merchants.merchant(p.merchant_id);
       const a = this.availability(p, m);
