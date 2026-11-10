@@ -108,10 +108,11 @@ export class NearReader {
     return { value, blockHeight: r.block_height, blockHash: r.block_hash };
   }
 
-  /** The hub's record of a settled batch, or null when the hub has none. */
-  async batch(id: Id32): Promise<ReadAt<Batch | null>> {
+  /** The hub's record of the batch `settler` settled under `id`, or null when the hub has none. */
+  async batch(id: Id32, settler: AccountId): Promise<ReadAt<Batch | null>> {
     assertId32(id, "batch id");
-    const r = await this.view<RawBatch | null>(this.hub, "batch", { batch_id: id });
+    assertAccountId(settler, "settler");
+    const r = await this.view<RawBatch | null>(this.hub, "batch", { settler, batch_id: id });
     return { ...r, value: r.value === null ? null : parseBatch(r.value) };
   }
 
@@ -124,11 +125,15 @@ export class NearReader {
     return { ...r, value: rows.map((p, i) => (p === null ? null : parsePayment(ids[i]!, p))) };
   }
 
-  /** The hub's own `verify_receipt`: it rebuilds the leaf from the fields and walks the proof to the stored root. */
-  async verifyReceipt(batchId: Id32, fields: ReceiptFields, proof: readonly Id32[]): Promise<ReadAt<boolean>> {
+  /**
+   * The hub's own `verify_receipt` for the batch `settler` settled under `batchId`: it rebuilds the leaf from the
+   * fields and walks the proof to the stored root.
+   */
+  async verifyReceipt(batchId: Id32, settler: AccountId, fields: ReceiptFields, proof: readonly Id32[]): Promise<ReadAt<boolean>> {
     assertId32(batchId, "batch id");
+    assertAccountId(settler, "settler");
     proof.forEach((p) => assertId32(p, "proof node"));
-    const r = await this.view<boolean>(this.hub, "verify_receipt", { batch_id: batchId, fields: receiptFieldsJson(fields), proof: [...proof] });
+    const r = await this.view<boolean>(this.hub, "verify_receipt", { settler, batch_id: batchId, fields: receiptFieldsJson(fields), proof: [...proof] });
     if (typeof r.value !== "boolean") throw invalid("verify_receipt", r.value);
     return r;
   }
@@ -192,6 +197,8 @@ export type ReceiptCheck = {
   hub: AccountId;
   network: Network;
   batchId: Id32;
+  /** The settler whose batch this is. Batch ids belong to their settler. */
+  settler: AccountId;
   /** Final block the batch was read at. */
   blockHeight: number;
   /** The root the hub stores for the batch, or null when the hub has no such batch. */
@@ -214,21 +221,26 @@ export function rootFromProof(leaf: Id32, proof: readonly Id32[]): Id32 {
 }
 
 /**
- * Proves one Call against NEAR: reads the batch root the hub stores, rebuilds the leaf and the root here from the
- * receipt fields and proof, and asks the hub's `verify_receipt` too. Verified only when both agree.
+ * Proves one Call against NEAR: reads the batch root the hub stores for `settler` and `batchId`, rebuilds the leaf and
+ * the root here from the receipt fields and proof, and asks the hub's `verify_receipt` too. Verified only when both
+ * agree. The settler is the receipt's Budget's settler, because `settle_batch` takes only Budgets that name the caller.
  */
-export async function checkReceiptOnChain(reader: NearReader, a: { network: Network; batchId: Id32; fields: ReceiptFields; proof: readonly Id32[] }): Promise<ReceiptCheck> {
+export async function checkReceiptOnChain(
+  reader: NearReader,
+  a: { network: Network; batchId: Id32; settler: AccountId; fields: ReceiptFields; proof: readonly Id32[] },
+): Promise<ReceiptCheck> {
   const leaf = receiptLeaf(reader.hub, a.network, a.batchId, a.fields);
   const recomputedRoot = rootFromProof(leaf, a.proof);
-  const batch = await reader.batch(a.batchId);
+  const batch = await reader.batch(a.batchId, a.settler);
   const storedRoot = batch.value?.root ?? null;
   const rootMatches = storedRoot !== null && storedRoot === recomputedRoot;
-  const hubVerified = batch.value === null ? null : (await reader.verifyReceipt(a.batchId, a.fields, a.proof)).value;
+  const hubVerified = batch.value === null ? null : (await reader.verifyReceipt(a.batchId, a.settler, a.fields, a.proof)).value;
   return {
     rpcUrl: reader.rpcUrl,
     hub: reader.hub,
     network: a.network,
     batchId: a.batchId,
+    settler: a.settler,
     blockHeight: batch.blockHeight,
     storedRoot,
     leaf,

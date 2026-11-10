@@ -38,7 +38,7 @@ export type NearRpcChainOptions = {
  * - `invalid_response`: the RPC or the hub answered with something this client does not understand.
  *
  * When `outcomeUnknown` is true, never sign a new transaction for the same intent without first reading the chain:
- * `txState(txHash)`, or `batch(batchId)` for a settlement. A second `settle` of the same batch id is still safe,
+ * `txState(txHash)`, or `batch(batchId, operator)` for a settlement. A second `settle` of the same batch id is still safe,
  * because the hub refuses it with `BATCH_EXISTS`.
  */
 export type NearRpcErrorKind = "read_only" | "rejected" | "failed" | "timeout" | "unavailable" | "invalid_response";
@@ -90,6 +90,7 @@ type RawBudget = {
   revoked_at: string | null;
   payees: string[];
   policy_hash: string;
+  storage_reserve_bytes?: string;
 };
 type RawBatch = { root: string; settler: string; gross: string; net: string; at: string };
 type RawPayment = { id: string; merchant: string; amount: string; payer: string; at: string };
@@ -159,9 +160,10 @@ export class NearRpcChain implements Chain {
     return this.#u128(await this.#view(this.token, "ft_balance_of", { account_id: account }), "ft_balance_of");
   }
 
-  async batch(id: Id32): Promise<Batch | null> {
+  async batch(id: Id32, settler: AccountId): Promise<Batch | null> {
     assertId32(id, "batch id");
-    const raw = await this.#view<RawBatch | null>(this.hub, "batch", { batch_id: id });
+    assertAccountId(settler, "settler");
+    const raw = await this.#view<RawBatch | null>(this.hub, "batch", { settler, batch_id: id });
     if (raw === null || raw === undefined) return null;
     if (!isId32(raw.root) || !isAccountId(raw.settler)) throw invalid("batch", raw);
     return { root: raw.root, settler: raw.settler, gross: this.#u128(raw.gross, "gross"), net: this.#u128(raw.net, "net"), at: this.#u128(raw.at, "at") };
@@ -185,10 +187,11 @@ export class NearRpcChain implements Chain {
     return balance !== null && balance !== undefined;
   }
 
-  async verifyReceipt(batchId: Id32, fields: ReceiptFields, proof: readonly Id32[]): Promise<boolean> {
+  async verifyReceipt(batchId: Id32, settler: AccountId, fields: ReceiptFields, proof: readonly Id32[]): Promise<boolean> {
     assertId32(batchId, "batch id");
+    assertAccountId(settler, "settler");
     proof.forEach((p) => assertId32(p, "proof node"));
-    const result = await this.#view<boolean>(this.hub, "verify_receipt", { batch_id: batchId, fields: receiptFieldsArgs(fields), proof: [...proof] });
+    const result = await this.#view<boolean>(this.hub, "verify_receipt", { settler, batch_id: batchId, fields: receiptFieldsArgs(fields), proof: [...proof] });
     if (typeof result !== "boolean") throw invalid("verify_receipt", result);
     return result;
   }
@@ -219,11 +222,13 @@ export class NearRpcChain implements Chain {
     return (await this.#view<boolean>(this.hub, "is_settler", { account })) === true;
   }
 
-  /** The hub's immutable deployment parameters. Not part of `Chain`. */
-  async config(): Promise<{ admin: AccountId; token: AccountId; network: string }> {
-    const c = await this.#view<{ admin: string; token: string; network: string }>(this.hub, "config", {});
+  /** The hub's deployment parameters, and the admin `propose_admin` named, if any. Not part of `Chain`. */
+  async config(): Promise<{ admin: AccountId; pendingAdmin: AccountId | null; token: AccountId; network: string }> {
+    const c = await this.#view<{ admin: string; pending_admin?: string | null; token: string; network: string }>(this.hub, "config", {});
     if (!c || !isAccountId(c.admin) || !isAccountId(c.token) || typeof c.network !== "string") throw invalid("config", c);
-    return c;
+    const pending = c.pending_admin ?? null;
+    if (pending !== null && !isAccountId(pending)) throw invalid("config", c);
+    return { admin: c.admin, pendingAdmin: pending, token: c.token, network: c.network };
   }
 
   /** The hub's liability totals, for the solvency check against `balanceOf(hub)`. Not part of `Chain`. */
@@ -260,8 +265,8 @@ export class NearRpcChain implements Chain {
 
   /**
    * Calls `settle_batch` as the operator and resolves once the outcome is final.
-   * Safe to retry: a replayed batch id is refused with `ChainError("BATCH_EXISTS")`, and `batch(batchId)` shows the
-   * first result. An error with `outcomeUnknown` means: read `batch(batchId)` before doing anything else.
+   * Safe to retry: a replayed batch id is refused with `ChainError("BATCH_EXISTS")`, and `batch(batchId, operator)`
+   * shows the first result. An error with `outcomeUnknown` means: read that batch before doing anything else.
    */
   async settle(a: SettleArgs): Promise<TxHash> {
     assertId32(a.batchId, "batch id");
@@ -471,6 +476,7 @@ function parseBudget(id: Id32, raw: RawBudget): Budget {
     revokedAt: raw.revoked_at === null ? null : u(raw.revoked_at, "revoked_at"),
     payees: [...raw.payees],
     policyHash: raw.policy_hash,
+    ...(raw.storage_reserve_bytes === undefined ? {} : { storageReserveBytes: u(raw.storage_reserve_bytes, "storage_reserve_bytes") }),
   };
 }
 
