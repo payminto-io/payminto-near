@@ -41,11 +41,11 @@ pnpm local --check
 
 Do `pnpm local --check`.
 It starts the same stack on free ports, does the guide's steps through the routes the browser uses, checks every result against the chain through a client that holds no key, and stops.
-It covers the signer's refusals, a deposit, a new Budget, a paid call, a call arriving live through the dashboard's event stream, two refusals, a payee that waits for the owner and is paid after approval, settlement, a proof, a checkout payment, a payout, a revoke, and a revoke without gas by an owner who holds no NEAR, whose balance changes by 0 yoctoNEAR.
-On 2026-11-10 it ended with this line and exit code 0:
+It covers the signer's refusals, a deposit, a new Budget, a paid call, a call arriving live through the dashboard's event stream, two refusals, a payee that waits for the owner and is paid after approval, settlement, a proof, a checkout payment, a payout, a revoke, a revoke without gas by an owner who holds no NEAR, whose balance changes by 0 yoctoNEAR, a payment from another chain delivered and read on chain, and an underpaid deposit returned.
+On 2026-11-11 it ended with this line and exit code 0:
 
 ```text
-21 of 21 checks passed in 149.5 s.
+24 of 24 checks passed in 193.5 s.
 ```
 
 Nothing in either command reaches testnet or mainnet, and neither needs an account, a wallet extension or a secret.
@@ -343,15 +343,15 @@ The calls in the demo cost 0.002 to 0.005 USDC each, a machine makes thousands o
 
 | Environment | Status |
 |---|---|
-| Simulated hub (in memory) | The demo, the swarm, the market worker's dry run and every TypeScript test suite: 2,053 tests passed in 15 packages on 2026-11-10, with 15 sandbox tests skipped |
-| Sandbox (a local NEAR node, near-sandbox 2.14.0) | `pnpm local`, `pnpm local --check`, `pnpm demo --chain sandbox` and `pnpm swarm --chain sandbox`: every on-chain step a real transaction against a locked hub. `pnpm local --check` ends with `21 of 21 checks passed in 149.5 s.`, the demo with `26 of 26 checks passed in 97.2 s.` and the swarm with `17 of 17 checks passed.` The dashboard's payee approval was also made by hand in a browser against `pnpm local`. The contract's own sandbox tests and the sandbox suites of the chain client, the demo and the relayer exist and were not run for this page |
+| Simulated hub (in memory) | The demo, the swarm, the market worker's dry run and every TypeScript test suite: 2,314 tests passed in 15 packages on 2026-11-11, with 15 sandbox tests skipped |
+| Sandbox (a local NEAR node, near-sandbox 2.14.0) | `pnpm local`, `pnpm local --check`, `pnpm demo --chain sandbox` and `pnpm swarm --chain sandbox`: every on-chain step a real transaction against a locked hub. `pnpm local --check` ends with `24 of 24 checks passed in 193.5 s.`, the demo with `26 of 26 checks passed in 97.2 s.` and the swarm with `17 of 17 checks passed.` The dashboard's payee approval was also made by hand in a browser against `pnpm local`. The contract's own sandbox tests and the sandbox suites of the chain client, the demo and the relayer exist and were not run for this page |
 | NEAR testnet | Not deployed yet. The deploy script supports it and has a dry run; a person runs it with their own accounts, and this repository records no testnet deployment |
 | NEAR mainnet | Not supported. The node has no mainnet mode, and the deploy script and the relayer refuse mainnet accounts and RPC URLs. The Agent Market quote reads a mainnet marketplace and pays nothing |
 
 `pnpm swarm --chain sandbox` was run for this page on 2026-11-10, on this commit.
 It created `swarm.test.near` and 25 real sub-accounts, had each agent fund itself and then open and fund its own Budget from its own account, and printed 299 paid calls, 82.934 USDC gross, 71.114 USDC net, 5 transfers and 2 transactions, the same as the simulated hub, then `17 of 17 checks passed.`
 
-`pnpm local --check` was run for this page on 2026-11-10, on this commit, and ended with `21 of 21 checks passed in 149.5 s.` and exit code 0.
+`pnpm local --check` was run for this page on 2026-11-11, on this commit, and ended with `24 of 24 checks passed in 193.5 s.` and exit code 0.
 `pnpm local` was started on spare ports, printed `Ready in 107.5 s.`, and stopped cleanly on Ctrl-C.
 
 ## Deploy your own hub on testnet
@@ -385,15 +385,15 @@ pnpm test
 cd contracts-near && cargo test
 ```
 
-| Command | What it runs | Result on 2026-11-10 |
+| Command | What it runs | Result on 2026-11-11 |
 |---|---|---|
 | `pnpm typecheck` | `tsc` for every package | Passed |
-| `pnpm test` | The TypeScript suites on the simulated hub, with no network; each package keeps its own vitest cache | 2,053 tests passed in 15 packages; 15 sandbox tests skipped |
-| `pnpm local --check` | The whole product on a sandbox (a local NEAR node): the browser guide as a script, each result read from the chain | `21 of 21 checks passed in 149.5 s.` |
-| `pnpm demo`, `pnpm demo --chain sandbox` | The demo story on the simulated hub, then on a sandbox | `25 of 25 checks passed in 4.1 s.`, `26 of 26 checks passed in 97.2 s.` |
-| `pnpm swarm` | The swarm on the simulated hub | `17 of 17 checks passed.`, finished in 4.7 s |
-| `cd contracts-near && cargo test --lib` | The contract's unit tests | 87 passed |
-| `cd contracts-near && cargo test` | The unit tests and the contract's near-sandbox tests against the committed wasm | Only `--lib` was run for this page |
-| `pnpm --filter @payminto/chain test:sandbox`, `pnpm --filter @payminto/demo test:sandbox`, `pnpm --filter @payminto/relayer test:sandbox` | The sandbox suites of the RPC client, the demo and the relayer | Not run for this page |
+| `pnpm test` | The TypeScript suites on the simulated hub, with no network; each package keeps its own vitest cache | 2,314 tests passed in 15 packages; 15 sandbox tests skipped |
+| `pnpm local --check` | The whole product on a sandbox (a local NEAR node): the browser guide as a script, each result read from the chain, including an any-chain payment and a returned deposit | `24 of 24 checks passed in 193.5 s.` |
+| `pnpm demo`, `pnpm demo --chain sandbox` | The demo story on the simulated hub, then on a sandbox | `25 of 25 checks passed`, `26 of 26 checks passed in 101.3 s.` |
+| `pnpm swarm`, `pnpm swarm --chain sandbox` | The swarm on the simulated hub, then on a sandbox | `17 of 17 checks passed.` both times |
+| `cd contracts-near && cargo test` | The contract's unit tests (including every audit proof of concept as a regression test) and its near-sandbox tests against the committed wasm | 129 unit and 12 sandbox tests passed |
+| `pnpm --filter @payminto/chain test:sandbox`, `pnpm --filter @payminto/relayer test:sandbox` | The sandbox suites of the RPC client and the relayer | Passed |
+| `docker compose build` | The node and dashboard images | Both built; the node image loads every package it imports and the dashboard image serves `/login` and `/embed.js` |
 
 The CI workflow in `.github/workflows` runs the typecheck, the tests, the dashboard build, both demos, the contract's format, lint and tests, and the Docker image build.

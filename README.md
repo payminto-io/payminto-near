@@ -125,7 +125,7 @@ The trust model and known limits are in [docs/SECURITY.md](docs/SECURITY.md).
 
 | Where | State |
 |---|---|
-| Simulated hub (in memory) | `pnpm demo`, `pnpm swarm`, and 2,053 TypeScript tests in 15 packages pass |
+| Simulated hub (in memory) | `pnpm demo`, `pnpm swarm`, and 2,314 TypeScript tests in 15 packages pass |
 | Local NEAR node (near-sandbox 2.14.0) | `pnpm local`, `pnpm local --check`, and the sandbox demo and swarm pass, with every on-chain step a real transaction against the locked hub |
 | NEAR testnet | Not deployed yet; the deploy script supports it and has a dry run ([docs/WALKTHROUGH.md](docs/WALKTHROUGH.md#deploy-your-own-hub-on-testnet)) |
 | NEAR mainnet | The hub and the clearing node do not run on mainnet. The any-chain rail alone has a live mode (`pnpm local --intents live`) on the real 1Click API, built and tested against recorded answers; no real payment has run on it yet ([docs/LIVE_RUN.md](docs/LIVE_RUN.md)) |

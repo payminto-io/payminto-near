@@ -81,10 +81,10 @@ It is built so that it cannot sign for testnet or mainnet:
 
 `pnpm local --check` starts the same stack on free ports, runs the guide's steps as a script through the routes the browser uses, asserts each result against the chain through a client that holds no key, prints a checks block and stops.
 The exit code is 0 only when every check passes.
-Run for this guide on 2026-11-10, it ended with:
+Run for this guide on 2026-11-11, it ended with:
 
 ```text
-21 of 21 checks passed in 149.5 s.
+24 of 24 checks passed in 193.5 s.
 ```
 
 `pnpm local --reset` deletes `apps/local/data` and exits.

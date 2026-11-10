@@ -117,3 +117,15 @@ jobs:
           OPERATOR_ACCOUNT: node.ci.testnet
           OPERATOR_KEY: unused-at-build-time
           NODE_SIGNING_SEED: unused-at-build-time
+
+      # The dashboard image must serve its pages and public/ (embed.js is the merchants' drop-in pay button).
+      - name: Dashboard image serves pages and embed.js
+        run: |
+          docker run -d --name dashboard -p 127.0.0.1:3000:3000 payminto/dashboard:local
+          for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/login && break; sleep 1; done
+          for path in /login /embed.js; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000$path")
+            echo "$path $code"
+            [ "$code" = "200" ] || { docker logs dashboard; exit 1; }
+          done
+          docker rm -f dashboard

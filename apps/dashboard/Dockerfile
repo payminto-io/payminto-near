@@ -32,6 +32,8 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 WORKDIR /app
 COPY --from=build --chown=node:node /app/apps/dashboard/.next/standalone ./
 COPY --from=build --chown=node:node /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
+# Next.js standalone output leaves public/ out; it holds embed.js, the drop-in pay button merchants load from here.
+COPY --from=build --chown=node:node /app/apps/dashboard/public ./apps/dashboard/public
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
