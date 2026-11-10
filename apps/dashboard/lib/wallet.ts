@@ -510,6 +510,18 @@ export async function mainnetAccount(): Promise<AccountId | null> {
   }
 }
 
+const mainnetListeners = new Set<(account: AccountId | null) => void>();
+
+/** Calls back with the mainnet account whenever this page connects or disconnects it. Returns an unsubscribe. */
+export function subscribeMainnet(cb: (account: AccountId | null) => void): () => void {
+  mainnetListeners.add(cb);
+  return () => void mainnetListeners.delete(cb);
+}
+
+const mainnetChanged = (account: AccountId | null) => {
+  for (const l of mainnetListeners) l(account);
+};
+
 /** Opens the mainnet wallet once (when needed) and returns the account it shared; any other account than `expected` is refused. */
 export async function connectMainnet(expected?: AccountId): Promise<AccountId> {
   try {
@@ -517,6 +529,7 @@ export async function connectMainnet(expected?: AccountId): Promise<AccountId> {
     let account = (await d.account()) ?? (await d.connect(expected));
     // Another account is connected: open the wallet once more so the person can pick the right one.
     if (expected && account !== expected) account = await d.connect(expected);
+    mainnetChanged(account);
     if (expected && account !== expected) {
       throw new WalletError("wrong_account", `This needs ${expected} on ${MAINNET_LABEL}, and your wallet is connected as ${account}. Switch accounts in your wallet, then try again.`);
     }
@@ -532,6 +545,8 @@ export async function disconnectMainnet(): Promise<void> {
   } catch (e) {
     const err = toWalletError(e);
     if (err.kind !== "not_connected") throw err;
+  } finally {
+    mainnetChanged(null);
   }
 }
 

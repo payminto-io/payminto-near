@@ -179,7 +179,7 @@ const INTENTS_LIVE = demo("intents-live");
 
 const methodRows: MerchantMethod[] = merchants.flatMap((m) => [
   { merchant_id: m.id, method: "wallet" as const, enabled: true, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
-  { merchant_id: m.id, method: "oneclick" as const, enabled: m.id === ACME_ID && !INTENTS_SETUP, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
+  { merchant_id: m.id, method: "oneclick" as const, enabled: m.id === ACME_ID && !INTENTS_SETUP && !INTENTS_LIVE, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
   { merchant_id: m.id, method: "voucher" as const, enabled: m.id !== gid("mer", "globex"), fee_bps: 25, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
 ]);
 

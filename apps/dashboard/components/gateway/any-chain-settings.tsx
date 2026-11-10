@@ -18,6 +18,7 @@ import {
   sendOnMainnet,
   signMessage,
   signMessageOnMainnet,
+  subscribeMainnet,
   walletErrorMessage,
   type Nep413Proof,
 } from "@/lib/wallet";
@@ -28,7 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Address, Panel } from "@/components/app/primitives";
 import { BlockSkeleton, ErrorState } from "@/components/app/states";
-import { useTxFlow, type TxPlan } from "@/components/ds/tx-flow";
+import { TxFlowProvider, useTxFlow, type TxPlan } from "@/components/ds/tx-flow";
 import { IntentsLabel } from "@/components/checkout/intents";
 import { FormRow } from "./kit";
 
@@ -97,7 +98,12 @@ export function AnyChainSettings({ merchantId }: { merchantId: string }) {
     }
     return <ErrorState className="mt-5" error={q.error} onRetry={() => void q.refetch()} />;
   }
-  return <Settings merchantId={merchantId} p={q.data} refetch={() => void q.refetch()} refreshing={q.isFetching} canPayout={can("payout.change")} canToggle={can("business.update")} />;
+  // The storage deposit's flow lives here, so its outcome stays on screen after the step it came from is gone.
+  return (
+    <TxFlowProvider>
+      <Settings merchantId={merchantId} p={q.data} refetch={() => void q.refetch()} refreshing={q.isFetching} canPayout={can("payout.change")} canToggle={can("business.update")} />
+    </TxFlowProvider>
+  );
 }
 
 function Settings({ merchantId, p, refetch, refreshing, canPayout, canToggle }: { merchantId: string; p: IntentsPayout; refetch: () => void; refreshing: boolean; canPayout: boolean; canToggle: boolean }) {
@@ -221,8 +227,11 @@ export function MainnetConnection() {
   useEffect(() => {
     let live = true;
     void mainnetAccount().then((a) => live && setAccount(a));
+    // Signing on this page connects it; the note follows.
+    const off = subscribeMainnet((a) => live && setAccount(a));
     return () => {
       live = false;
+      off();
     };
   }, []);
   return (
@@ -236,7 +245,7 @@ export function MainnetConnection() {
           {account ? (
             <>
               Connected on {MAINNET_LABEL} as <span className="hash text-foreground">{account}</span>.{" "}
-              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => void disconnectMainnet().then(() => setAccount(null))}>
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => void disconnectMainnet()}>
                 Disconnect
               </button>
             </>

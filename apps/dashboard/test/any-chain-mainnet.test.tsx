@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { nep413Digest, storageDepositTx } from "@payminto/protocol";
-import { setMainnetWalletDriver, setWalletDriver } from "@/lib/wallet";
+import { connectMainnet, setMainnetWalletDriver, setWalletDriver } from "@/lib/wallet";
 import type { IntentsPayout } from "@/lib/schemas";
 import { MainnetConnection, signPayoutProof, StorageStep } from "@/components/gateway/any-chain-settings";
 import { FakeWallet } from "./fake-wallet";
@@ -87,6 +87,16 @@ describe("live mode: the any-chain payout account on NEAR mainnet", () => {
     const note = screen.getByRole("note", { name: "NEAR mainnet wallet" });
     expect(within(note).getByText(/Real money/)).toBeInTheDocument();
     expect(within(note).getByText(/the message that proves the account is yours, and its USDC storage deposit/)).toBeInTheDocument();
+  });
+
+  it("shows the mainnet account once signing connected it, and forgets it on Disconnect", async () => {
+    render(<MainnetConnection />);
+    expect(await screen.findByText(/No mainnet wallet is connected yet/)).toBeInTheDocument();
+    await act(() => connectMainnet(ACCOUNT));
+    expect(await screen.findByText(ACCOUNT)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    expect(await screen.findByText(/No mainnet wallet is connected yet/)).toBeInTheDocument();
+    expect(testnet.account_).toBe("owner.testnet");
   });
 });
 
