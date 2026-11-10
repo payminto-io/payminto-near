@@ -234,6 +234,7 @@ export const METHOD_COPY: Record<PayMethod, { label: string; hint: string }> = {
 export const METHOD_FEE_LABEL: Record<PaymentMethod, string> = {
   wallet: "Wallet payment fee",
   voucher: "AI agent with Budget fee",
+  oneclick: "Any-chain payment fee",
 };
 
 /** Quotes already seen this visit, so the amount shows without waiting when the node re-quotes. */
