@@ -35,7 +35,7 @@ function HubStandingFields({ nodeKey }: { nodeKey: string | undefined }) {
           <span className="flex flex-col gap-0.5">
             <span className="num">{nearText(s.storageYocto)}</span>
             <span className={s.storageYocto < r.minStorageYocto ? "text-xs text-warning" : "text-xs text-muted-foreground"}>
-              {s.storageYocto < r.minStorageYocto ? `Below the ${nearText(r.minStorageYocto)} one full batch can cost` : `One full batch can cost up to ${nearText(r.minStorageYocto)}`}
+              {s.storageYocto < r.minStorageYocto ? `Below the ${nearText(r.minStorageYocto)} that 100 batch records cost` : `100 batch records cost ${nearText(r.minStorageYocto)}`}
             </span>
           </span>
         ) : (

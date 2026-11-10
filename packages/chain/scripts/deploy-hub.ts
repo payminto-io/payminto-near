@@ -41,7 +41,6 @@ import { isAccountId, isId32, isPublicKey, publicKeyBytes, publicKeyToString, to
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { NearRpcError, sendBuiltOnce, sendWalletTx } from "../src/node.ts";
 import { maxSettleBatchStorageCost, storageBytes, storageCost } from "../src/storage.ts";
-import { MAX_CLAIMS } from "../src/constants.ts";
 import type { AccountId, Network } from "../src/types.ts";
 
 export type DeployNetwork = "sandbox" | "testnet";
@@ -61,10 +60,11 @@ export type DeployOptions = {
   storageDeposit?: bigint;
   /**
    * yoctoNEAR the admin puts into the settler's storage balance when it is below `minSettlerStorage`. Default 1 NEAR,
-   * which pays for about 440 first-time payees.
+   * which pays for about 3,500 batch records of a 64-character settler: the settler pays only for its own batch records, its receipt keys and
+   * checkout payments, since each Budget's owner prepays its payees' settlement storage.
    */
   settlerStorage?: bigint;
-  /** The settler's storage balance the script insists on before locking. Default: one worst-case batch of 100 claims. */
+  /** The settler's storage balance the script insists on before locking. Default: the records of 100 batches. */
   minSettlerStorage?: bigint;
   /** NEAR of its own the hub account must hold beyond its storage lock and the settler's balance. Default 0.1 NEAR. */
   minHubBalance?: bigint;
@@ -100,6 +100,12 @@ export type DeployReport = {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_WASM = resolve(HERE, "../../../contracts-near/out/hub.wasm");
+/**
+ * The NEAR code hash (base58 of the sha256) of the committed hub v2, `contracts-near/out/hub.wasm` as built by
+ * `contracts-near/build.sh`. The script refuses to deploy the default wasm when its hash is anything else; an explicit
+ * `--wasm` path skips this check, for testing another build.
+ */
+export const HUB_CODE_HASH = "EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx";
 /** A common NEP-141 registration price; the live run reads the token's own bound and uses the higher value. */
 const DEFAULT_STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n;
 const EMPTY_CODE_HASH = "11111111111111111111111111111111";
@@ -161,11 +167,14 @@ export async function deployHub(o: DeployOptions): Promise<DeployReport> {
   const digest = createHash("sha256").update(wasm).digest();
   const network: Network = `near:${o.network}`;
   const codeHash = base58.encode(digest);
+  if (o.wasmPath === undefined && codeHash !== HUB_CODE_HASH) {
+    throw new Error(`${DEFAULT_WASM} has code hash ${codeHash}, not the committed hub's ${HUB_CODE_HASH}: rebuild it with sh contracts-near/build.sh, or pass --wasm to deploy another build`);
+  }
   const checkoutHex = checkoutKeyHex(o.checkoutKey);
   const receiptHex = checkoutKeyHex(o.receiptKey ?? o.checkoutKey);
   const receiptKey = publicKeyToString(hexToBytes(receiptHex));
   const settlerStorage = o.settlerStorage ?? DEFAULT_SETTLER_STORAGE;
-  const minSettlerStorage = o.minSettlerStorage ?? maxSettleBatchStorageCost(MAX_CLAIMS);
+  const minSettlerStorage = o.minSettlerStorage ?? maxSettleBatchStorageCost(100);
   const minHubBalance = o.minHubBalance ?? DEFAULT_MIN_HUB_BALANCE;
   if (settlerStorage < minSettlerStorage) throw new Error(`--settler-storage ${settlerStorage} is below --min-settler-storage ${minSettlerStorage}`);
   const report: DeployReport = { network, hub: o.hub, wasmSha256Hex: digest.toString("hex"), codeHash, steps: {}, locked: false, settlerStorageYocto: null, receiptKeyRegistered: false };
@@ -274,7 +283,7 @@ export async function deployHub(o: DeployOptions): Promise<DeployReport> {
   // refuses them with INSUFFICIENT_STORAGE once it is empty. Anyone may fund it; here the admin does.
   const prepaid = deployed ? await read("settler storage balance", storageOf, 0n) : 0n;
   const prefund = fundStorageTx(o.hub, o.settler, settlerStorage);
-  log(`\n[check_settler_storage] ${o.settler} holds ${near(prepaid)} of storage balance; the minimum is ${near(minSettlerStorage)} (one batch of ${MAX_CLAIMS} claims to new 64-character payees)`);
+  log(`\n[check_settler_storage] ${o.settler} holds ${near(prepaid)} of storage balance; the minimum is ${near(minSettlerStorage)} (the records of 100 batches by a 64-character settler)`);
   await run("fund_settler_storage", o.admin, o.hub, [call("fund_storage", { account: o.settler }, 30n, settlerStorage)], prepaid >= minSettlerStorage, () => sendWalletTx(client, o.admin, prefund));
 
   // 6. The settler's receipt key, which settle_own checks acceptances against. Only the settler can register it.

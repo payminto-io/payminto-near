@@ -8,6 +8,7 @@
       "account_id": "hub.payminto.testnet",
       "method_name": "batch",
       "args": {
+        "settler": "node.payminto.testnet",
         "batch_id": "abababababababababababababababababababababababababababababababab"
       }
     }

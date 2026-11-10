@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { generateKey, Near, type KeyPair } from "near-kit";
 import { Sandbox } from "near-kit/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { deployHub, type DeployReport } from "../scripts/deploy-hub.ts";
+import { HUB_CODE_HASH, deployHub, type DeployReport } from "../scripts/deploy-hub.ts";
 import {
   budgetIdOf,
   buildReceiptTree,
@@ -184,7 +184,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
     expect(Object.values(report.steps).every((s) => s !== "planned" && s !== "skipped" && s !== "left to the settler")).toBe(true);
     expect((await root.getAccount(hub.id)).codeHash).toBe(report.codeHash);
     expect((await root.getAccessKeys(hub.id)).keys).toHaveLength(0);
-    expect(await chain.config()).toEqual({ admin: admin.id, token: token.id, network: NETWORK });
+    expect(await chain.config()).toEqual({ admin: admin.id, pendingAdmin: null, token: token.id, network: NETWORK });
     expect(await chain.isSettler(node.id)).toBe(true);
     expect(await chain.isRegistered(hub.id)).toBe(true);
     expect(reader.readOnly).toBe(true);
@@ -199,6 +199,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
     expect(await reader.storageOf(node.id)).toBe(prefunded);
     expect(report.settlerStorageYocto).toBe(prefunded.toString());
     expect(prefunded).toBeGreaterThan(maxSettleBatchStorageCost(100));
+    expect(report.codeHash).toBe(HUB_CODE_HASH);
 
     // A second run finds every step done and changes nothing.
     const again = await deployHub({ network: "sandbox", rpcUrl: sandbox.rpcUrl, hub: hub.id, admin: admin.id, token: token.id, settler: node.id, checkoutKey: CHECKOUT.publicKey, hubKey: hub.key.secretKey, adminKey: admin.key.secretKey, log: () => {} });
@@ -242,37 +243,41 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
     await assertSolvent();
   }, 180_000);
 
-  it("charges a batch's storage to the settler's prepaid balance, never to the hub, and returns it on payout (review F3)", async () => {
+  it("charges new pairs to the Budget's prepaid reserve and the batch record to the settler, never the hub, and returns credit storage on payout (review F3, F4)", async () => {
     const hubNear = async () => {
       const a = await root.rpc.call<{ amount: string; storage_usage: number }>("query", { request_type: "view_account", finality: "final", account_id: hub.id });
       return { amount: BigInt(a.amount), bytes: a.storage_usage };
-    };
-    /** The hub's own NEAR: its balance, less what its storage locks, less the storage balance it holds for the node. */
-    const hubOwn = async () => {
-      const [n, held] = [await hubNear(), await chain.storageOf(node.id)];
-      return n.amount - storageCost(n.bytes) - held;
     };
     const payees = Array.from({ length: 5 }, (_, i) => `fresh${i}.${sandbox.rootAccount.id}`);
     for (const p of payees) await token.near.call(token.id, "register", { account_id: p }, { signerId: token.id, waitUntil: "FINAL" });
     const tb = terms(bob.id, agentB, "f6");
     const b = budgetIdOf(hub.id, NETWORK, tb);
+    /** The storage reserve the hub holds for Bob's Budget, in bytes: NEAR its owner prepaid and nobody has used yet. */
+    const reserveOf = async () => Number((await root.view<{ storage_reserve_bytes: string }>(hub.id, "budget", { budget_id: b }, { finality: "final" }))!.storage_reserve_bytes);
+    /** The hub's own NEAR: its balance, less what its storage locks, the node's storage balance and Bob's reserve. */
+    const hubOwn = async () => {
+      const [n, held, reserve] = [await hubNear(), await chain.storageOf(node.id), await reserveOf()];
+      return n.amount - storageCost(n.bytes) - held - storageCost(reserve);
+    };
     await sendWalletTx(bob.near, bob.id, openBudgetTx(hub.id, tb, ONE_NEAR.toString()));
     await sendWalletTx(bob.near, bob.id, depositBudgetTx(token.id, hub.id, b, 50n));
 
-    const [ownBefore, nearBefore, prepaidBefore] = [await hubOwn(), await hubNear(), await chain.storageOf(node.id)];
+    const [ownBefore, nearBefore, prepaidBefore, reserveBefore] = [await hubOwn(), await hubNear(), await chain.storageOf(node.id), await reserveOf()];
     const claims = payees.map((p, i) => voucher(b, p, agentB, 2n, 2n, 300 + i));
     await chain.settle({ batchId: "08".repeat(32), root: "ee".repeat(32), claims, expectedNet: computeNetting(payees.map((p) => ({ owner: bob.id, payee: p, delta: 2n }))).entries });
-    const [nearAfter, prepaidAfter] = [await hubNear(), await chain.storageOf(node.id)];
-    const written = payees.reduce((sum, p) => sum + storageBytes.settled(p) + storageBytes.credit(p, node.id), storageBytes.batch(node.id));
-    expect(nearAfter.bytes - nearBefore.bytes).toBe(written);
-    expect(prepaidBefore - prepaidAfter).toBe(storageCost(written));
+    const [nearAfter, prepaidAfter, reserveAfter] = [await hubNear(), await chain.storageOf(node.id), await reserveOf()];
+    const pairs = payees.reduce((sum, p) => sum + storageBytes.settled(p) + storageBytes.credit(p, { budget: b }), 0);
+    expect(nearAfter.bytes - nearBefore.bytes).toBe(pairs + storageBytes.batch(node.id));
+    expect(reserveBefore - reserveAfter).toBe(pairs);
+    expect(prepaidBefore - prepaidAfter).toBe(storageCost(storageBytes.batch(node.id)));
     expect(await hubOwn()).toBe(ownBefore);
 
-    // Paying the creditors out removes their credit entries, and the settler that paid for them gets that storage back.
+    // Paying the creditors out removes their credit entries, and the Budget whose settlement paid for them gets the bytes back.
     await chain.payout(payees);
-    const freed = payees.reduce((sum, p) => sum + storageBytes.credit(p, node.id), 0);
+    const freed = payees.reduce((sum, p) => sum + storageBytes.credit(p, { budget: b }), 0);
     expect((await hubNear()).bytes).toBe(nearAfter.bytes - freed);
-    expect((await chain.storageOf(node.id)) - prepaidAfter).toBe(storageCost(freed));
+    expect((await reserveOf()) - reserveAfter).toBe(freed);
+    expect(await chain.storageOf(node.id)).toBe(prepaidAfter);
     // The one thing the hub spends is the single yoctoNEAR that NEP-141 requires on each transfer.
     expect(await hubOwn()).toBe(ownBefore - BigInt(payees.length));
 
@@ -282,7 +287,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
     expect(await chain.storageOf(node.id)).toBe(0n);
     const next = { batchId: "09".repeat(32), root: "ee".repeat(32), claims: [voucher(b, payees[0]!, agentB, 1n, 3n, 310)], expectedNet: computeNetting([{ owner: bob.id, payee: payees[0]!, delta: 1n }]).entries };
     expect(await code(chain.settle(next))).toBe("INSUFFICIENT_STORAGE");
-    expect(await chain.batch(next.batchId)).toBeNull();
+    expect(await chain.batch(next.batchId, node.id)).toBeNull();
     expect(await chain.settledOf(b, payees[0]!)).toBe(2n);
     await sendWalletTx(alice.near, alice.id, fundStorageTx(hub.id, node.id, prepaid));
     expect(await chain.storageOf(node.id)).toBe(prepaid);
@@ -319,7 +324,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
 
     // Without offset the same gross does not fit in escrow: one side alone is refused and changes nothing.
     expect(await code(chain.settle({ batchId: "02".repeat(32), root: tree.root, claims: [a2], expectedNet: computeNetting([{ owner: alice.id, payee: bob.id, delta: 100n }]).entries }))).toBe("INSUFFICIENT_ESCROW");
-    expect(await chain.batch("02".repeat(32))).toBeNull();
+    expect(await chain.batch("02".repeat(32), node.id)).toBeNull();
 
     // The read-only client never signs.
     await expect(reader.settle(args)).rejects.toMatchObject({ kind: "read_only" });
@@ -327,7 +332,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
 
     const hash = await chain.settle(args);
     expect(await chain.txState(hash)).toEqual({ status: "final" });
-    expect(await chain.batch(batchId)).toMatchObject({ root: tree.root, settler: node.id, gross, net });
+    expect(await chain.batch(batchId, node.id)).toMatchObject({ root: tree.root, settler: node.id, gross, net });
     expect(gross).toBe(198n);
     expect(net).toBe(2n);
     expect(await chain.settledOf(a, bob.id)).toBe(100n);
@@ -338,7 +343,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
 
     // Retrying the same settlement is refused cleanly by the hub and leaves the first result in place.
     expect(await code(chain.settle(args))).toBe("BATCH_EXISTS");
-    expect(await chain.batch(batchId)).toMatchObject({ root: tree.root, gross: 198n });
+    expect(await chain.batch(batchId, node.id)).toMatchObject({ root: tree.root, gross: 198n });
     expect(await chain.creditOf(bob.id)).toBe(2n);
     // A replayed voucher under a new batch id is stale.
     expect(await code(chain.settle({ ...args, batchId: "03".repeat(32) }))).toBe("STALE_VOUCHER");
@@ -346,11 +351,11 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
 
     // Every receipt proves against the stored root, from the read-only client too, and a tampered one does not.
     for (const r of tree.receipts) {
-      expect(await reader.verifyReceipt(batchId, r, tree.proofOf(r.callId))).toBe(true);
+      expect(await reader.verifyReceipt(batchId, node.id, r, tree.proofOf(r.callId))).toBe(true);
     }
     const first = tree.receipts[0]!;
-    expect(await reader.verifyReceipt(batchId, { ...first, amount: first.amount + 1n }, tree.proofOf(first.callId))).toBe(false);
-    expect(await reader.verifyReceipt("09".repeat(32), first, tree.proofOf(first.callId))).toBe(false);
+    expect(await reader.verifyReceipt(batchId, node.id, { ...first, amount: first.amount + 1n }, tree.proofOf(first.callId))).toBe(false);
+    expect(await reader.verifyReceipt("09".repeat(32), node.id, first, tree.proofOf(first.callId))).toBe(false);
 
     // Bob moves his earned credit into his own Budget's escrow from his wallet: escrow rises, cap does not.
     const before = await chain.totals();
@@ -438,7 +443,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
       expect(sends).toBe(1);
       // The transaction landed, and settling the same batch again, once the RPC answers, is refused without changes.
       expect(await finalState(hash)).toEqual({ status: "final" });
-      expect(await chain.batch(dropped.batchId)).toMatchObject({ gross: 4n });
+      expect(await chain.batch(dropped.batchId, node.id)).toMatchObject({ gross: 4n });
       mode = "pass";
       expect(await code(flaky.settle(dropped))).toBe("BATCH_EXISTS");
       expect(sends).toBe(2);
@@ -453,7 +458,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
       expect(late).toMatchObject({ kind: "timeout", outcomeUnknown: true });
       expect(sends).toBe(3);
       expect(await finalState((late as NearRpcError).txHash!)).toEqual({ status: "final" });
-      expect(await chain.batch(stalled.batchId)).toMatchObject({ gross: 5n });
+      expect(await chain.batch(stalled.batchId, node.id)).toMatchObject({ gross: 5n });
       await assertSolvent();
     } finally {
       proxy.closeAllConnections();

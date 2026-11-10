@@ -49,7 +49,7 @@ async fn offset_settles_more_gross_than_escrow_and_payout_balances() -> TestResu
     assert_eq!(w.budget(&ba).await?["spent"], "100");
     assert_eq!(w.budget(&bb).await?["escrow"], "5");
     assert_eq!(w.credit(&b).await?, 2);
-    let batch: serde_json::Value = w.view(&w.hub, "batch", json!({ "batch_id": id32(2) })).await?;
+    let batch = w.batch(id32(2)).await?;
     assert_eq!(
         (batch["gross"].as_str().unwrap(), batch["net"].as_str().unwrap()),
         ("198", "2")
@@ -225,7 +225,7 @@ async fn callbacks_cannot_be_called_directly() -> TestResult<()> {
             json!({ "account": attacker, "amount": "1000" }),
         )
         .await?;
-    result.assert_failure();
+    assert_refused(result, "NOT_SELF");
     assert_eq!(w.credit(&attacker).await?, 0);
     let result = w
         .call(
@@ -235,7 +235,7 @@ async fn callbacks_cannot_be_called_directly() -> TestResult<()> {
             json!({ "budget_id": id32(1), "amount": "1000" }),
         )
         .await?;
-    result.assert_failure();
+    assert_refused(result, "NOT_SELF");
     Ok(())
 }
 
@@ -377,6 +377,30 @@ async fn revoke_reclaim_and_settle_own_flow_after_the_grace_period() -> TestResu
     assert_eq!(w.token_balance(&a).await?, owner_before + 60);
     assert_eq!(w.budget(&ba).await?["escrow"], "0");
     w.assert_solvent().await?;
+
+    // After the deadline the owner prunes the settled entry and gets the storage it freed and the unused reserve back,
+    // and the real runtime carries the NEP-297 event.
+    let reserve = w.reserve_bytes(&ba).await?;
+    let (_, storage_before) = w.near_account(&w.hub).await?;
+    let pruned = w
+        .call(&a, &w.hub, "prune", json!({ "budget_id": ba, "payees": [s] }))
+        .await?
+        .assert_success();
+    let freed = storage_before - w.near_account(&w.hub).await?.1;
+    assert!(freed > 0, "the settled entry is gone");
+    let event = pruned
+        .logs()
+        .into_iter()
+        .find_map(|l| l.strip_prefix("EVENT_JSON:").map(str::to_string))
+        .expect("a budget_pruned event");
+    let event: serde_json::Value = serde_json::from_str(&event)?;
+    assert_eq!(event["event"], "budget_pruned");
+    assert_eq!(event["data"][0]["refunded_bytes"], (freed + reserve).to_string());
+    assert_eq!(w.reserve_bytes(&ba).await?, 0);
+    let settled: String = w
+        .view(&w.hub, "settled_of", json!({ "budget_id": ba, "payee": s }))
+        .await?;
+    assert_eq!(settled, "0");
     Ok(())
 }
 
@@ -462,21 +486,22 @@ async fn settle_own_refuses_vouchers_the_node_never_accepted() -> TestResult<()>
     Ok(())
 }
 
-/// Review finding F3: 100 one-unit claims to 100 new payees write about 23 kB, and the hub pays for none of it.
-/// The hub's own balance is what it holds beyond its storage lock and the node's prepaid storage balance.
+/// Review finding F3 and audit finding F4: 100 one-unit claims to 100 new 64-character payees write about 33 kB. The owner's
+/// prepaid storage reserve pays for every payee, the settler for its batch record only, and the hub for nothing.
+/// The hub's own balance is what it holds beyond its storage lock, the node's storage balance and the reserves.
 #[tokio::test]
 async fn one_hundred_claims_to_new_payees_do_not_reduce_the_hubs_free_balance() -> TestResult<()> {
     let w = World::start().await?;
     let owner = w.create("owner").await?;
     w.mint(&owner, 1_000).await?;
     let key = agent(1);
-    let budget = w.open_budget(&owner, &key, 1_000, DAY_MS, &[], 1).await?;
-    w.deposit(&owner, &budget, 100).await?;
+    let budget = w.open_budget_for(&owner, &key, 1_000, DAY_MS, &[], 100, 1).await?;
+    w.deposit(&owner, &budget, 101).await?;
 
     let mut claims = Vec::new();
     let mut expected: std::collections::BTreeMap<String, serde_json::Value> = Default::default();
     for i in 0..100 {
-        let payee = acct(&format!("new-payee-{i}.sandbox"));
+        let payee = acct(&format!("{i:064x}"));
         claims.push(voucher(&w.hub, &key, &budget, &payee, 1, 1));
         expected.insert(payee.to_string(), net_entry(&payee, 0, 1));
     }
@@ -485,19 +510,27 @@ async fn one_hundred_claims_to_new_payees_do_not_reduce_the_hubs_free_balance() 
     let free_before = w.hub_own_balance().await?;
     let (_, storage_before) = w.near_account(&w.hub).await?;
     let prepaid_before = w.storage_of(&w.node).await?;
+    let reserve_before = w.reserve_bytes(&budget).await?;
     w.settle(&w.node, id32(1), claims, expected.into_values().collect())
         .await?
         .assert_success();
     let free_after = w.hub_own_balance().await?;
     let (_, storage_after) = w.near_account(&w.hub).await?;
-    let prepaid_after = w.storage_of(&w.node).await?;
+    let from_settler = prepaid_before - w.storage_of(&w.node).await?;
+    let from_reserve = reserve_before - w.reserve_bytes(&budget).await?;
 
     let grown = storage_after - storage_before;
     assert!(grown > 100 * 200, "100 settled and 100 credit entries: {grown} bytes");
+    let batch_record = 1 + 4 + w.node.len() as u64 + 32 + 32 + 4 + w.node.len() as u64 + 16 + 16 + 8 + 40;
     assert_eq!(
-        prepaid_before - prepaid_after,
-        u128::from(grown) * BYTE_COST,
-        "the settler's storage balance paid for exactly the bytes written"
+        from_settler,
+        u128::from(batch_record) * BYTE_COST,
+        "the settler paid for its batch record only"
+    );
+    assert_eq!(
+        from_reserve + batch_record,
+        grown,
+        "the owner's reserve paid for every payee"
     );
     assert!(
         free_after >= free_before,
@@ -505,9 +538,23 @@ async fn one_hundred_claims_to_new_payees_do_not_reduce_the_hubs_free_balance() 
         free_before - free_after.min(free_before)
     );
     println!(
-        "100 claims to new payees: {grown} bytes, {} yoctoNEAR from the settler's storage balance, hub own balance +{} yoctoNEAR",
-        prepaid_before - prepaid_after,
+        "100 claims to new payees: {grown} bytes, {from_reserve} from the Budget's reserve, {batch_record} from the settler's storage balance, hub own balance +{} yoctoNEAR",
         free_after - free_before
+    );
+
+    // 64-character payees cost exactly a pair each, so the reserve is used up, and one more new payee is beyond what
+    // the owner prepaid: that batch is refused whole.
+    assert_eq!(w.reserve_bytes(&budget).await?, 0);
+    let extra = acct(&format!("{:064x}", 1000));
+    assert_refused(
+        w.settle(
+            &w.node,
+            id32(2),
+            vec![voucher(&w.hub, &key, &budget, &extra, 1, 1)],
+            vec![net_entry(&extra, 0, 1), net_entry(&owner, 1, 0)],
+        )
+        .await?,
+        "INSUFFICIENT_RESERVE",
     );
     w.assert_solvent().await?;
     Ok(())
@@ -572,13 +619,21 @@ async fn settlement_storage_is_prepaid_refused_without_it_and_returned_on_payout
     .assert_success();
     let funded = w.storage_of(&w.node).await?;
     assert_eq!(funded, near_api::NearToken::from_millinear(100).as_yoctonear());
+    let reserve_before = w.reserve_bytes(&budget).await?;
     w.settle(&w.node, id32(1), vec![claim], net).await?.assert_success();
     let (_, storage_settled) = w.near_account(&w.hub).await?;
     let charged = funded - w.storage_of(&w.node).await?;
-    assert_eq!(charged, u128::from(storage_settled - storage_before) * BYTE_COST);
+    let from_reserve = reserve_before - w.reserve_bytes(&budget).await?;
+    assert_eq!(
+        charged + u128::from(from_reserve) * BYTE_COST,
+        u128::from(storage_settled - storage_before) * BYTE_COST,
+        "the settler's balance and the Budget's reserve paid for exactly the bytes written"
+    );
 
-    // The payout's real callback removes the emptied credit entry and returns its storage to the settler.
+    // The payout's real callback removes the emptied credit entry and returns its storage to the Budget's reserve,
+    // which paid for it.
     let free_before = w.hub_own_balance().await?;
+    let reserve_settled = w.reserve_bytes(&budget).await?;
     w.call(&owner, &w.hub, "payout", json!({ "accounts": [seller] }))
         .await?
         .assert_success();
@@ -587,9 +642,14 @@ async fn settlement_storage_is_prepaid_refused_without_it_and_returned_on_payout
     let freed = storage_settled - storage_paid;
     assert!(freed > 0, "the credit entry is removed");
     assert_eq!(
-        w.storage_of(&w.node).await? + charged - funded,
-        u128::from(freed) * BYTE_COST,
-        "the settler got back exactly the freed bytes"
+        w.reserve_bytes(&budget).await? - reserve_settled,
+        freed,
+        "the Budget's reserve got back exactly the freed bytes"
+    );
+    assert_eq!(
+        w.storage_of(&w.node).await?,
+        funded - charged,
+        "and the settler nothing"
     );
     // The one thing the hub spends is the single yoctoNEAR that NEP-141 requires on each transfer.
     assert_eq!(w.hub_own_balance().await? + 1, free_before);

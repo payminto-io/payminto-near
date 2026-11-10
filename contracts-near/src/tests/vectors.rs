@@ -2,6 +2,7 @@
 //! Those files are owned by the chain package and are read here, never written.
 
 use super::*;
+use crate::crypto::verify_signature;
 use crate::netting::Netting;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::Value;
@@ -97,9 +98,13 @@ fn signature_rule_matches() {
         let digest = id32(&case, "digest_hex").0;
         let sig = Sig64::from_hex(s(&case, "signature_hex")).unwrap().0;
         let hub = case["hub"].as_bool().unwrap();
-        assert_eq!(verify_signature(&digest, &sig, &pk), hub, "{name}: the hub's verify_signature");
         assert_eq!(
-            near_sdk::env::ed25519_verify(&sig, &digest, &pk),
+            verify_signature(&digest, &sig, &pk),
+            hub,
+            "{name}: the hub's verify_signature"
+        );
+        assert_eq!(
+            near_sdk::env::ed25519_verify(&sig, digest, &pk),
             hub,
             "{name}: env::ed25519_verify"
         );
@@ -110,6 +115,19 @@ fn signature_rule_matches() {
             Ok(_) => "ok",
         };
         assert_eq!(key, s(&case, "key"), "{name}: key verdict");
+        // The hub's own key check, which `open_budget`, `register_receipt_key` and `set_checkout_key` apply, agrees
+        // wherever the key is a point. It cannot tell a non-point, which nothing can sign for anyway.
+        match key {
+            "ok" => assert!(
+                crate::crypto::is_acceptable_public_key(&pk),
+                "{name}: the hub refuses a strong key"
+            ),
+            "small_order" | "non_canonical" => assert!(
+                !crate::crypto::is_acceptable_public_key(&pk),
+                "{name}: the hub accepts a weak key"
+            ),
+            _ => {}
+        }
         assert_eq!(
             case["valid"].as_bool().unwrap(),
             hub && key == "ok",
@@ -154,6 +172,9 @@ fn budget_ids_match() {
             payees: canonical,
             policy_hash: id32(i, "policy_hash"),
             salt: id32(i, "salt"),
+            // Not part of the id: the hub ties the flag to an empty list.
+            allow_any_payee: false,
+            max_payees: 0,
         };
         let budget = budget_id(s(i, "hub"), s(i, "network"), s(i, "owner"), &terms);
         assert_eq!(budget.to_hex(), s(&case, "budget_id"), "{}", s(&case, "name"));
@@ -351,9 +372,10 @@ fn storage_bytes_match() {
     setup();
     let file = load("storage.json");
     assert_eq!(s(&file, "byte_cost_yocto").parse::<u128>().unwrap(), byte_cost());
+    assert_eq!(file["pair_bytes"].as_u64().unwrap(), crate::PAIR_BYTES);
     assert_eq!(
-        file["reserved_settle_own_bytes"].as_u64().unwrap(),
-        RESERVED_SETTLE_OWN_BYTES
+        file["max_any_payees"].as_u64().unwrap(),
+        u64::from(crate::MAX_ANY_PAYEES)
     );
     assert_eq!(file["revoke_bytes"].as_u64().unwrap(), REVOKE_BYTES);
     let all = cases("storage.json");
@@ -367,18 +389,23 @@ fn storage_bytes_match() {
                 h.hub.settled.insert((id(1), name("payee")), 7);
             }
             "credit" => {
+                let funder = match &case["funder"] {
+                    Value::Null => None,
+                    f if f["settler"].is_string() => Some(Funder::Settler(acct(s(f, "settler")))),
+                    f => Some(Funder::Budget(id32(f, "budget"))),
+                };
                 h.hub.credits.insert(
                     name("account"),
                     Credit {
                         amount: 7,
                         in_flight: 0,
-                        funder: case["funder"].as_str().map(acct),
+                        funder,
                     },
                 );
             }
             "batch" => {
                 h.hub.batches.insert(
-                    id(1),
+                    (name("settler"), id(1)),
                     BatchRecord {
                         root: id(2),
                         settler: name("settler"),

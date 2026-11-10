@@ -1070,8 +1070,9 @@ function hubView(method: string, args: Record<string, unknown>): unknown {
       // What the demo hub owes an account: its credit from settled batches, less what payouts sent.
       return creditOf(String(args.account)).toString();
     case "batch": {
+      // Batch ids belong to their settler: the demo hub has one, the operator.
       const b = batches.find((x) => x.id === args.batch_id && x.status === "confirmed");
-      if (!b || !b.receiptsRoot) return null;
+      if (args.settler !== OPERATOR || !b || !b.receiptsRoot) return null;
       return { root: b.receiptsRoot, settler: OPERATOR, gross: b.gross, net: b.net, at: String(new Date(b.confirmedAt ?? b.createdAt).getTime()) };
     }
     // What a (Budget, Payee) pair has settled on the hub, by a batch or by the seller itself.
@@ -1086,7 +1087,7 @@ function hubView(method: string, args: Record<string, unknown>): unknown {
     case "verify_receipt": {
       const batchId = String(args.batch_id);
       const tree = trees.get(batchId);
-      if (!tree) return false;
+      if (args.settler !== OPERATOR || !tree) return false;
       const f = args.fields as Record<string, string>;
       const leaf = receiptLeaf(HUB, NETWORK, batchId, {
         callId: f.call_id!,
@@ -1478,6 +1479,7 @@ export class MockClearingApi implements ClearingApi {
       receipt,
       status: c.status,
       batchId: b.id,
+      settler: OPERATOR,
       batchStatus: b.status,
       receiptsRoot: b.receiptsRoot,
       proof,

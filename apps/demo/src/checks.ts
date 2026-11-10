@@ -20,8 +20,11 @@ export function checkReport(r: Report): Check[] {
   const st = r.storage;
   const g = r.guards;
   const { unlisted: un, lookalike: lk, approval: ap } = r.payeeCheck;
-  // On a real chain the hub account's growth is exactly what the settler paid for, and the hub's own balance did not fall.
-  const hubPaidNothing = st.hubBytesGrown === null || (st.hubOwnChange !== null && BigInt(st.hubBytesGrown) * STORAGE_BYTE_COST === st.charged && st.hubOwnChange >= 0n);
+  // On a real chain the hub account's growth is exactly what the settler and the Budgets' reserves paid for, and the
+  // hub's own balance fell by no more than the reserve bytes its owners had prepaid.
+  const fromReserves = st.fromReserves * STORAGE_BYTE_COST;
+  const hubPaidNothing =
+    st.hubBytesGrown === null || (st.hubOwnChange !== null && BigInt(st.hubBytesGrown) * STORAGE_BYTE_COST === st.charged + fromReserves && st.hubOwnChange + fromReserves >= 0n);
   const checks = [
     c("chain is labeled", labeled(r), r.label),
     c(
@@ -80,9 +83,9 @@ export function checkReport(r: Report): Check[] {
     c("a batch settled on the hub, and its transaction is final", r.settlement.batches > 0 && r.settlement.gross > 0n && r.settlement.txFinal, `${r.settlement.batches} batch(es), tx ${r.settlement.txHashes.map((h) => h.slice(0, 10)).join(", ") || "none"}`),
     c("tokens moved are less than gross cleared", r.settlement.net < r.settlement.gross, `gross ${r.settlement.gross}, moved ${r.settlement.net}`),
     c(
-      "storage for the batch was charged to the settler's prepaid balance, not to the hub",
-      st.prepaidBefore > 0n && st.charged > 0n && st.charged <= st.prepaidBefore && hubPaidNothing,
-      `${st.charged} yoctoNEAR from ${st.settler}` + (st.hubBytesGrown === null ? "" : `; hub grew ${st.hubBytesGrown} bytes, own balance ${st.hubOwnChange! >= 0n ? "+" : ""}${st.hubOwnChange}`),
+      "the batch's storage was charged to the owners' prepaid reserves and the settler's prepaid balance, not to the hub",
+      st.prepaidBefore > 0n && st.charged > 0n && st.charged <= st.prepaidBefore && st.fromReserves > 0n && hubPaidNothing,
+      `${st.fromReserves} bytes from the Budgets' reserves, ${st.charged} yoctoNEAR from ${st.settler}` + (st.hubBytesGrown === null ? "" : `; hub grew ${st.hubBytesGrown} bytes, own balance ${st.hubOwnChange! >= 0n ? "+" : ""}${st.hubOwnChange}`),
     ),
     c(
       "fund_from_credit moved earned credit into escrow, not cap",

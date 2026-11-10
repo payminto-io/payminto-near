@@ -64,9 +64,9 @@ const fieldsOf = (r: ClearingReceipt): ReceiptFields => ({
 
 const done = (lines: VerifyLine[]): VerifyResult => ({ ok: lines.every((l) => l.ok !== false), lines });
 
-/** What the hub stores for one batch. Fails when the hub has no such batch. */
-export async function verifyBatch(chain: Pick<Chain, "batch">, batchId: Id32): Promise<VerifyResult> {
-  const b = await chain.batch(batchId);
+/** What the hub stores for the batch `settler` settled under `batchId`. Fails when the hub has no such batch. */
+export async function verifyBatch(chain: Pick<Chain, "batch">, batchId: Id32, settler: AccountId): Promise<VerifyResult> {
+  const b = await chain.batch(batchId, settler);
   if (!b) return done([{ ok: false, what: `batch ${batchId} is stored on the hub`, detail: "the hub has no such batch" }]);
   return done([{ ok: true, what: `batch ${batchId} is stored on the hub`, detail: `root ${b.root}, settled by ${b.settler}, gross ${b.gross}, net ${b.net}, at ${new Date(Number(b.at)).toISOString()}` }]);
 }
@@ -86,7 +86,8 @@ export async function verifyReceipt(chain: Pick<Chain, "hub" | "network" | "batc
     what: "the receipt names this hub and network",
     detail: `file: ${file.hub} on ${file.network}; chain: ${chain.hub} on ${chain.network}`,
   });
-  const [batch, budget] = await Promise.all([chain.batch(file.batchId), chain.budget(r.budgetId)]);
+  // Batch ids belong to their settler: the batch is read under the operator the file names, which must be the Budget's.
+  const [batch, budget] = await Promise.all([chain.batch(file.batchId, file.operator), chain.budget(r.budgetId)]);
   lines.push(batch ? { ok: true, what: `batch ${file.batchId} is stored on the hub`, detail: `root ${batch.root}, settled by ${batch.settler}, gross ${batch.gross}, net ${batch.net}` } : { ok: false, what: `batch ${file.batchId} is stored on the hub`, detail: "the hub has no such batch" });
   lines.push(budget ? { ok: true, what: `Budget ${r.budgetId} is on the hub`, detail: `owner ${budget.owner}, settler ${budget.settler}, agent key ${budget.agentPk}` } : { ok: false, what: `Budget ${r.budgetId} is on the hub`, detail: "the hub has no such Budget" });
   if (batch && budget) {
@@ -117,7 +118,7 @@ export async function verifyReceipt(chain: Pick<Chain, "hub" | "network" | "batc
       detail: `leaf ${leaf}, ${file.proof.length} steps, stored root ${batch.root}`,
     });
   }
-  lines.push({ ok: await chain.verifyReceipt(file.batchId, f, file.proof), what: "the hub's own verify_receipt view agrees", detail: `${chain.hub}.verify_receipt(batch, fields, proof)` });
+  lines.push({ ok: await chain.verifyReceipt(file.batchId, file.operator, f, file.proof), what: "the hub's own verify_receipt view agrees", detail: `${chain.hub}.verify_receipt(settler, batch, fields, proof)` });
   const attested = nodeDigest({ ...f, timestamp: BigInt(r.timestamp) });
   lines.push({
     ok: null,

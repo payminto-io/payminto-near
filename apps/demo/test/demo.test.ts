@@ -71,14 +71,16 @@ describe("the checks themselves", () => {
     expect(names({ ...report, guards: { ...report.guards, ownerToAccomplice: "SETTLED" } })).toEqual(["an owner's self-signed voucher with no node acceptance is refused by settle_own"]);
     expect(names({ ...report, guards: { ...report.guards, datedAfterRevoke: "SETTLED" } })).toEqual(["a voucher signed by the agent key after the revoke cannot be settled"]);
     expect(names({ ...report, guards: { ...report.guards, leakedKeyAlone: "BAD_ACCEPTANCE" } })).toEqual(["a voucher signed by the agent key after the revoke cannot be settled"]);
-    const STORAGE = "storage for the batch was charged to the settler's prepaid balance, not to the hub";
+    const STORAGE = "the batch's storage was charged to the owners' prepaid reserves and the settler's prepaid balance, not to the hub";
     expect(names({ ...report, storage: { ...report.storage, charged: 0n } })).toEqual([STORAGE]);
-    // On a real chain: the hub account grew by more than the settler paid for, or the hub's own balance fell.
-    const charged = 5_000n * 10n ** 19n;
-    const real = { ...report.storage, charged, hubBytesGrown: 5_000, hubOwnChange: 0n };
+    expect(names({ ...report, storage: { ...report.storage, fromReserves: 0n } })).toEqual([STORAGE]);
+    // On a real chain: the hub account grew by more than the settler and the reserves paid for, or the hub's own
+    // balance fell by more than the reserve bytes the owners had prepaid.
+    const charged = 200n * 10n ** 19n;
+    const real = { ...report.storage, charged, fromReserves: 4_800n, hubBytesGrown: 5_000, hubOwnChange: -4_800n * 10n ** 19n };
     expect(names({ ...report, storage: real })).toEqual([]);
     expect(names({ ...report, storage: { ...real, hubBytesGrown: 5_001 } })).toEqual([STORAGE]);
-    expect(names({ ...report, storage: { ...real, hubOwnChange: -1n } })).toEqual([STORAGE]);
+    expect(names({ ...report, storage: { ...real, hubOwnChange: -4_800n * 10n ** 19n - 1n } })).toEqual([STORAGE]);
     expect(names({ ...report, storage: { ...report.storage, receiptKeyOnHub: false } })).toEqual(["the node's receipt key is registered on the hub"]);
     expect(names({ ...report, settleOwn: { ...report.settleOwn, checkedAgainst: "declared-keys" } })).toEqual(["settle_own credited exactly what the node never settled, with the node's acceptance checked against the hub"]);
   });
@@ -132,12 +134,15 @@ describe("the receipt verifier on the receipt file the story wrote", () => {
     expect(await failedOf(tamper(f))).toEqual(["the voucher signature verifies against the Budget's agent key on chain", PATH, HUB_VIEW]);
     expect(await failedOf({ ...f, proof: f.proof.slice(1) })).toEqual([PATH, HUB_VIEW]);
     expect(await failedOf({ ...f, batchId: "ab".repeat(32) })).toEqual([`batch ${"ab".repeat(32)} is stored on the hub`, HUB_VIEW]);
-    expect(await failedOf({ ...f, operator: "someone-else.testnet" })).toEqual(["the batch was settled by the Budget's own settler"]);
+    // Batch ids belong to their settler: under another operator the hub has no such batch.
+    expect(await failedOf({ ...f, operator: "someone-else.testnet" })).toEqual([`batch ${f.batchId} is stored on the hub`, HUB_VIEW]);
     expect(await failedOf({ ...f, hub: "other-hub.testnet" })).toEqual(["the receipt names this hub and network"]);
   });
 
   it("reports a stored batch, and fails on a missing one", async () => {
-    expect((await verifyBatch(stack.hub.chain, load().batchId)).ok).toBe(true);
-    expect((await verifyBatch(stack.hub.chain, "ab".repeat(32))).ok).toBe(false);
+    expect((await verifyBatch(stack.hub.chain, load().batchId, stack.hub.chain.operator)).ok).toBe(true);
+    expect((await verifyBatch(stack.hub.chain, "ab".repeat(32), stack.hub.chain.operator)).ok).toBe(false);
+    // Batch ids belong to their settler: the same id under another account is not that batch.
+    expect((await verifyBatch(stack.hub.chain, load().batchId, "someone-else.testnet")).ok).toBe(false);
   });
 });

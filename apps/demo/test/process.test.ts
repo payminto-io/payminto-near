@@ -74,8 +74,14 @@ describe("verify:near arguments", () => {
   });
 
   it("exits 2 when the hub cannot be read", async () => {
-    const r = await runVerifierCli(["--rpc-url", "http://127.0.0.1:9", "--hub", "hub.test.near", "--batch", "ab".repeat(32)]);
+    const r = await runVerifierCli(["--rpc-url", "http://127.0.0.1:9", "--hub", "hub.test.near", "--batch", "ab".repeat(32), "--settler", "node.test.near"]);
     expect(r.code).toBe(2);
     expect(r.output).toMatch(/cannot read the hub/);
+  });
+
+  it("exits 2 for a batch with no settler: batch ids belong to their settler", async () => {
+    const r = await runVerifierCli(["--rpc-url", "http://127.0.0.1:9", "--hub", "hub.test.near", "--batch", "ab".repeat(32)]);
+    expect(r.code).toBe(2);
+    expect(r.output).toMatch(/a batch alone needs --settler/);
   });
 });

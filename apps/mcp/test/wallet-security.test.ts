@@ -404,7 +404,8 @@ describe("M3: prove_receipt proves the call that was asked for", () => {
       return real ? { ...real, settler: "another-settler.testnet" } : null;
     } };
     const p = await (await open({ chain: reader })).prove(a);
-    expect(p).toMatchObject({ proven: false, independentlyVerifiedOnchain: false, settler: OPERATOR, budgetSettler: "another-settler.testnet", settledByBudgetSettler: false });
+    // The hub keeps batch ids per settler, so under the settler this Budget names there is no such batch at all.
+    expect(p).toMatchObject({ proven: false, independentlyVerifiedOnchain: false, settler: null, budgetSettler: "another-settler.testnet", settledByBudgetSettler: false });
     expect(p.notVerifiedBecause).toMatch(/the hub names settler another-settler\.testnet for this Budget, but its verified terms name node\.payminto\.testnet/);
   });
 });

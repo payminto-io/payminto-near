@@ -64,8 +64,8 @@ class FlakyChain implements Chain {
   balanceOf(a: AccountId) {
     return this.inner.balanceOf(a);
   }
-  batch(id: Id32) {
-    return this.inner.batch(id);
+  batch(id: Id32, settler: AccountId) {
+    return this.inner.batch(id, settler);
   }
   payments(ids: readonly Id32[]): Promise<Array<ChainPayment | null>> {
     return this.inner.payments(ids);
@@ -82,8 +82,8 @@ class FlakyChain implements Chain {
   txState(h: TxHash): Promise<TxState> {
     return this.inner.txState(h);
   }
-  verifyReceipt(id: Id32, f: ReceiptFields, p: readonly Id32[]) {
-    return this.inner.verifyReceipt(id, f, p);
+  verifyReceipt(id: Id32, settler: AccountId, f: ReceiptFields, p: readonly Id32[]) {
+    return this.inner.verifyReceipt(id, settler, f, p);
   }
   async payout(accounts: readonly AccountId[]): Promise<TxHash> {
     this.payoutCalls.push([...accounts]);

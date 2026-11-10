@@ -1,4 +1,5 @@
 import { publicKeyBytes, toHex } from "./bytes.ts";
+import { DEFAULT_MAX_PAYEES } from "./constants.ts";
 import { canonicalPayees } from "./digest.ts";
 import type { Acceptance, AccountId, BudgetTerms, CheckoutTerms, Claim, Id32, PublicKey, Sig64 } from "./types.ts";
 
@@ -17,22 +18,31 @@ const call = (methodName: string, args: Record<string, unknown>, tgas: bigint, d
   params: { methodName, args, gas: (tgas * TGAS).toString(), deposit },
 });
 
-/** JSON shape of BudgetTerms in `open_budget`. Amounts and times are decimal strings, ids are Id32 hex. */
+/**
+ * JSON shape of BudgetTerms in `open_budget`. Amounts and times are decimal strings, ids are Id32 hex. The hub never
+ * reads an empty list as "any payee": a Budget with no list says so with `allow_any_payee` and declares in
+ * `max_payees` how many distinct payees it can ever pay (`t.maxPayees`, default `DEFAULT_MAX_PAYEES`).
+ */
 export function budgetTermsArgs(t: BudgetTerms): Record<string, unknown> {
+  const payees = canonicalPayees(t.payees);
+  const any = payees.length === 0;
   return {
     agent_pk: toHex(publicKeyBytes(t.agentPk)),
     settler: t.settler,
     cap: t.cap.toString(),
     valid_until: t.validUntil.toString(),
-    payees: canonicalPayees(t.payees),
+    payees,
     policy_hash: t.policyHash,
     salt: t.salt,
+    allow_any_payee: any,
+    max_payees: any ? (t.maxPayees ?? DEFAULT_MAX_PAYEES) : 0,
   };
 }
 
 /**
  * The caller becomes the owner, so `t.owner` must be the signing account. `storageDeposit` is yoctoNEAR: the hub keeps
- * `openBudgetStorageCost(t)` of it, for the record, a later revoke and the `settle_own` reserve, and refunds the rest.
+ * `openBudgetStorageCost(t)` of it, for the record, a later revoke and the settlement storage of every payee the Budget
+ * can pay, and refunds the rest.
  */
 export const openBudgetTx = (hub: AccountId, t: BudgetTerms, storageDeposit: string): WalletTx => ({
   receiverId: hub,
@@ -80,6 +90,30 @@ export const reclaimTx = (hub: AccountId, budgetId: Id32): WalletTx => ({
   actions: [call("reclaim", { budget_id: budgetId }, 100n, "0")],
 });
 
+/**
+ * After the settlement deadline, the owner removes the Budget's `settled` entries for `payees` (at most
+ * `MAX_PRUNE_PAYEES`) and gets back the storage they freed plus the unused storage reserve, in NEAR.
+ */
+export const pruneTx = (hub: AccountId, budgetId: Id32, payees: readonly AccountId[]): WalletTx => ({
+  receiverId: hub,
+  actions: [call("prune", { budget_id: budgetId, payees: [...payees] }, 100n, "0")],
+});
+
+/**
+ * Step one of replacing the hub's admin, signed by the admin: names the next admin, or withdraws the proposal with
+ * null. `deposit` pays for the name in the hub's root record (at least one yoctoNEAR; the excess is refunded).
+ */
+export const proposeAdminTx = (hub: AccountId, next: AccountId | null, deposit = "10000000000000000000000"): WalletTx => ({
+  receiverId: hub,
+  actions: [call("propose_admin", { new_admin: next }, 30n, deposit)],
+});
+
+/** Step two, signed by the proposed account with a full-access key: it becomes the admin. Exactly one yoctoNEAR. */
+export const acceptAdminTx = (hub: AccountId): WalletTx => ({
+  receiverId: hub,
+  actions: [call("accept_admin", {}, 30n, ONE_YOCTO)],
+});
+
 export const payoutTx = (hub: AccountId, accounts: readonly AccountId[]): WalletTx => ({
   receiverId: hub,
   actions: [call("payout", { accounts: [...accounts] }, 300n, "0")],
@@ -105,8 +139,8 @@ export function acceptanceArgs(a: Acceptance): Record<string, unknown> {
 /**
  * The payee settles its own latest voucher, with the node's acceptance of that call. A voucher with no acceptance
  * cannot be settled this way. `storageDeposit` is yoctoNEAR for new storage once the Budget's prepaid reserve is used
- * up; the hub takes only what the call really writes and refunds the rest, and zero is right for a Budget's first
- * sixteen or so payees.
+ * up; the hub takes only what the call really writes and refunds the rest, and zero is right while the Budget's owner
+ * has prepaid for the payee, which it always has for a listed payee.
  */
 export const settleOwnTx = (hub: AccountId, claim: Claim, acceptance: Acceptance, storageDeposit = "0"): WalletTx => ({
   receiverId: hub,
@@ -124,8 +158,8 @@ export const registerReceiptKeyTx = (hub: AccountId, key: PublicKey): WalletTx =
 });
 
 /**
- * Adds `yocto` yoctoNEAR to `account`'s storage balance at the hub. Anyone may fund any account. `settle_batch`,
- * `register_receipt_key` and checkout payments draw on the settler's balance for the bytes they write.
+ * Adds `yocto` yoctoNEAR to `account`'s storage balance at the hub. Anyone may fund any account but the hub and
+ * the token. `settle_batch` (for its batch record), `register_receipt_key` and checkout payments draw on it.
  */
 export const fundStorageTx = (hub: AccountId, account: AccountId, yocto: bigint): WalletTx => ({
   receiverId: hub,

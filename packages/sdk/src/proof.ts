@@ -62,11 +62,12 @@ export async function verifyReceiptOnchain(o: {
 
   // The leaf commits to milliseconds; the node attests whole seconds.
   const fields = { callId: r.callId, budgetId: r.budgetId, payee: r.payee, amount, cumulative, requestHash: r.requestHash, timestampMs: BigInt(r.timestamp) * 1000n, voucherSig: r.voucherSig };
-  const batch = await o.chain.batch(o.batchId);
+  // Batch ids belong to their settler, so the hub is asked for the trusted operator's batch under that id.
+  const batch = await o.chain.batch(o.batchId, o.operator);
   const settler = batch?.settler ?? null;
   const settlerIsNode = settler === o.operator;
   const localProofValid = batch !== null && verifyMerkleProof(batch.root, receiptLeaf(o.chain.hub, o.chain.network, o.batchId, fields), o.proof);
-  const merkleVerified = await o.chain.verifyReceipt(o.batchId, fields, o.proof);
+  const merkleVerified = await o.chain.verifyReceipt(o.batchId, o.operator, fields, o.proof);
 
   const reason = !digestMatches
     ? "digest does not match the receipt fields"

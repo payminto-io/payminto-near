@@ -1195,7 +1195,7 @@ export class AgentWallet {
         if (pol && pol.budget.settler !== budget.settler) mismatch ??= `the hub names settler ${budget.settler} for this Budget, but its verified terms name ${pol.budget.settler}`;
         check = await verifyReceiptOnchain({ chain: this.#chain, operator: budget.settler, nodeKey, agentPk: this.publicKey, receipt: mine, batchId: p.batchId, proof: p.proof });
         independentlyVerifiedOnchain = check.verified && mismatch === null;
-        onchainRoot = (await this.#chain.batch(p.batchId))?.root ?? null;
+        onchainRoot = (await this.#chain.batch(p.batchId, budget.settler))?.root ?? null;
       } catch (err) {
         chainError = err instanceof Error ? err.message : String(err);
       }

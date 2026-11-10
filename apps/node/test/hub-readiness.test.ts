@@ -40,7 +40,7 @@ describe("hub readiness", () => {
     expect(wrong[0]!.message).toContain(other.publicKey);
   });
 
-  it("reports a storage balance below one full batch", async () => {
+  it("reports a storage balance below 100 batch records", async () => {
     const key = testKey(90);
     const low = hub(MIN_SETTLE_STORAGE_YOCTO / 2n);
     await low.registerReceiptKey(OPERATOR, key.publicKey);
@@ -50,7 +50,7 @@ describe("hub readiness", () => {
 
     const empty = hub(0n);
     expect((await hubReadinessProblems(new ChainClient(empty, key))).map((p) => p.check)).toEqual(["receipt_key_registered", "settle_storage_balance"]);
-    // The threshold is one worst-case batch of 100 claims, about 0.37 NEAR.
-    expect(MIN_SETTLE_STORAGE_YOCTO).toBe(369_130_000_000_000_000_000_000n);
+    // The threshold is the records of 100 batches by a 64-character settler, 0.281 NEAR.
+    expect(MIN_SETTLE_STORAGE_YOCTO).toBe(281_000_000_000_000_000_000_000n);
   });
 });

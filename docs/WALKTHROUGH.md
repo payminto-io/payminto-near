@@ -73,7 +73,7 @@ pnpm demo --chain sandbox
 
 Do `pnpm demo --chain sandbox`.
 See the label SANDBOX, and a transaction hash for every on-chain step.
-See the hub deployed from the committed `contracts-near/out/hub.wasm` and then locked: `code hash CMKbhRxTnjQsgFZpDPsEqTz55h6iDvxy8qYXpAhJUtqc (sha256 of contracts-near/out/hub.wasm), 0 access keys: locked`.
+See the hub deployed from the committed `contracts-near/out/hub.wasm` and then locked: `code hash EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx (sha256 of contracts-near/out/hub.wasm), 0 access keys: locked`.
 See the same paid calls, the same batch and the same 2 transfers as in step 2, each as a transaction.
 Every check reads its facts from the chain through a client that holds no key, never from the node's database.
 The first run downloads the near-sandbox binary once, about 30 MB, from NEAR's release bucket.
@@ -371,7 +371,7 @@ The dry run needs no key; it makes read-only RPC calls to look the accounts up, 
 Run for this page with a real public key in place of the placeholder, it printed the wasm's hash and every step as `planned`:
 
 ```text
-wasm <repo>/contracts-near/out/hub.wasm: 289790 bytes, sha256 a8a5339259dfb01b48b2d04b319aa357aead63f3e47e7a69855fed095a152c37, code hash CMKbhRxTnjQsgFZpDPsEqTz55h6iDvxy8qYXpAhJUtqc
+wasm <repo>/contracts-near/out/hub.wasm: 337826 bytes, sha256 cf978c32ec76c2967c05384e1533b298c9cbe623274e9542bc07987d9babcd3f, code hash EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx
 ```
 
 The same command without `--dry-run` and with `--confirm-lock` deploys the hub, registers it with the token, sets the settler and the checkout key, prefunds the settler's storage balance, registers the node's receipt key when it is given the settler's key, verifies the code hash, and deletes every key on the hub account.

@@ -21,11 +21,19 @@ export type BudgetTerms = {
   cap: bigint;
   /** Unix milliseconds. */
   validUntil: bigint;
-  /** Allowed payees, at most 16. Empty means any payee. Canonicalized (sorted, unique) before hashing. */
+  /**
+   * Allowed payees, at most 16, canonicalized (sorted, unique) before hashing. Empty means any payee: the wallet
+   * builder then sends the hub's explicit `allow_any_payee`, with `maxPayees` as the most distinct payees it can pay.
+   */
   payees: AccountId[];
   policyHash: Id32;
   /** Lets one owner open several Budgets with otherwise equal terms. */
   salt: Id32;
+  /**
+   * Only for an empty `payees` list: the most distinct payees the Budget can ever pay, 1 to `MAX_ANY_PAYEES`.
+   * Defaults to `DEFAULT_MAX_PAYEES`. The owner prepays settlement storage for that many payees. Not part of the id.
+   */
+  maxPayees?: number;
 };
 
 /** On-chain Budget state. */
@@ -44,6 +52,11 @@ export type Budget = {
   revokedAt: bigint | null;
   payees: AccountId[];
   policyHash: Id32;
+  /**
+   * Storage bytes the owner prepaid at `open_budget` for this Budget's settlement records and not used yet: each new
+   * payee's `settled` and credit entries come out of it, and `prune` refunds the rest. Absent when not read.
+   */
+  storageReserveBytes?: bigint;
 };
 
 /** The fields an agent signs for one call. `amount` and `requestHash` bind the signature to that specific call. */

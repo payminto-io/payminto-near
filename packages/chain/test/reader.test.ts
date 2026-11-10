@@ -28,6 +28,8 @@ const fields: ReceiptFields = {
 };
 
 const RPC = "https://rpc.testnet.near.org";
+/** The settler whose batch the vector is, as in the fixtures. */
+const SETTLER = "node.payminto.testnet";
 
 /** Decodes what the reader posted, in the fixture's request shape. */
 function sent(init: RequestInit | undefined): Fixture["request"] {
@@ -54,14 +56,14 @@ const reader = (f: typeof fetch, timeoutMs?: number) => new NearReader({ rpcUrl:
 
 describe("NearReader views", () => {
   it("reads a batch at final finality and reports the block", async () => {
-    const r = await reader(replay("batch")).batch(vec.batch_id);
+    const r = await reader(replay("batch")).batch(vec.batch_id, SETTLER);
     expect(r.value).toEqual({ root: vec.root, settler: "node.payminto.testnet", gross: 15000n, net: 9000n, at: 1800000060000n });
     expect(r.blockHeight).toBe(219_402_871);
     expect(r.blockHash).toMatch(/^[1-9A-HJ-NP-Za-km-z]{43,44}$/);
   });
 
   it("returns null for a batch the hub never stored", async () => {
-    expect((await reader(replay("batch-missing")).batch("ab".repeat(32))).value).toBeNull();
+    expect((await reader(replay("batch-missing")).batch("ab".repeat(32), SETTLER)).value).toBeNull();
   });
 
   it("reads payments aligned with the ids asked for", async () => {
@@ -72,21 +74,21 @@ describe("NearReader views", () => {
 
   it("sends verify_receipt the same field JSON as the server client", async () => {
     expect(receiptFieldsJson(fields)).toEqual(receiptFieldsArgs(fields));
-    expect((await reader(replay("verify-receipt")).verifyReceipt(vec.batch_id, fields, r2.proof)).value).toBe(true);
+    expect((await reader(replay("verify-receipt")).verifyReceipt(vec.batch_id, SETTLER, fields, r2.proof)).value).toBe(true);
   });
 });
 
 describe("NearReader errors", () => {
   it("names a missing hub account as not_found", async () => {
-    await expect(reader(replay("unknown-account")).batch(vec.batch_id)).rejects.toMatchObject({ kind: "not_found", what: `${vec.hub}.batch` });
+    await expect(reader(replay("unknown-account")).batch(vec.batch_id, SETTLER)).rejects.toMatchObject({ kind: "not_found", what: `${vec.hub}.batch` });
   });
 
   it("maps a hub panic to contract_error with the hub code", async () => {
-    await expect(reader(replay("contract-panic")).verifyReceipt(vec.batch_id, fields, r2.proof)).rejects.toMatchObject({ kind: "contract_error", hubCode: "UNKNOWN_BUDGET" });
+    await expect(reader(replay("contract-panic")).verifyReceipt(vec.batch_id, SETTLER, fields, r2.proof)).rejects.toMatchObject({ kind: "contract_error", hubCode: "UNKNOWN_BUDGET" });
   });
 
   it("reads a panic that older nodes put inside a successful answer", async () => {
-    const e = await reader(replay("legacy-panic")).batch(vec.batch_id).catch((x: unknown) => x);
+    const e = await reader(replay("legacy-panic")).batch(vec.batch_id, SETTLER).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(NearReadError);
     expect(e).toMatchObject({ kind: "contract_error", hubCode: null });
   });
@@ -94,20 +96,20 @@ describe("NearReader errors", () => {
   it("aborts a slow RPC at the deadline", async () => {
     const hang = ((_: unknown, init?: RequestInit) =>
       new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))) as typeof fetch;
-    await expect(reader(hang, 20).batch(vec.batch_id)).rejects.toMatchObject({ kind: "timeout" });
+    await expect(reader(hang, 20).batch(vec.batch_id, SETTLER)).rejects.toMatchObject({ kind: "timeout" });
   });
 
   it("reports an unreachable RPC and a rate limit as unavailable", async () => {
     const down = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
-    await expect(reader(down).batch(vec.batch_id)).rejects.toMatchObject({ kind: "unavailable" });
+    await expect(reader(down).batch(vec.batch_id, SETTLER)).rejects.toMatchObject({ kind: "unavailable" });
     const limited = (async () => new Response("Too Many Requests", { status: 429 })) as typeof fetch;
-    await expect(reader(limited).batch(vec.batch_id)).rejects.toMatchObject({ kind: "unavailable" });
+    await expect(reader(limited).batch(vec.batch_id, SETTLER)).rejects.toMatchObject({ kind: "unavailable" });
   });
 
   it("refuses an answer that is not a batch", async () => {
     const odd = (async () =>
       new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: { block_hash: "x", block_height: 1, logs: [], result: [...new TextEncoder().encode('{"root":"nope"}')] } }))) as typeof fetch;
-    await expect(reader(odd).batch(vec.batch_id)).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(reader(odd).batch(vec.batch_id, SETTLER)).rejects.toMatchObject({ kind: "invalid_response" });
   });
 });
 
@@ -125,8 +127,8 @@ describe("NearReader.txState", () => {
 
 describe("checkReceiptOnChain", () => {
   it("verifies when the recomputed root equals the stored root and the hub agrees", async () => {
-    const c = await checkReceiptOnChain(reader(replay("batch", "verify-receipt")), { network: vec.network, batchId: vec.batch_id, fields, proof: r2.proof });
-    expect(c).toMatchObject({ rpcUrl: RPC, hub: vec.hub, batchId: vec.batch_id, storedRoot: vec.root, recomputedRoot: vec.root, leaf: r2.leaf_hex, rootMatches: true, hubVerified: true, verified: true });
+    const c = await checkReceiptOnChain(reader(replay("batch", "verify-receipt")), { network: vec.network, batchId: vec.batch_id, settler: SETTLER, fields, proof: r2.proof });
+    expect(c).toMatchObject({ rpcUrl: RPC, hub: vec.hub, batchId: vec.batch_id, settler: SETTLER, storedRoot: vec.root, recomputedRoot: vec.root, leaf: r2.leaf_hex, rootMatches: true, hubVerified: true, verified: true });
   });
 
   it("fails an altered receipt: the root no longer matches and the hub says false", async () => {
@@ -138,14 +140,14 @@ describe("checkReceiptOnChain", () => {
       return new Response(JSON.stringify({ ...answer, result: { ...answer.result, result: [...new TextEncoder().encode("false")] } }));
     }) as typeof fetch;
     const altered = { ...fields, amount: fields.amount + 1n };
-    const c = await checkReceiptOnChain(reader(f), { network: vec.network, batchId: vec.batch_id, fields: altered, proof: r2.proof });
+    const c = await checkReceiptOnChain(reader(f), { network: vec.network, batchId: vec.batch_id, settler: SETTLER, fields: altered, proof: r2.proof });
     expect(c).toMatchObject({ storedRoot: vec.root, rootMatches: false, hubVerified: false, verified: false });
     expect(c.recomputedRoot).not.toBe(vec.root);
     expect(rootFromProof(r2.leaf_hex, r2.proof)).toBe(vec.root);
   });
 
   it("does not verify a batch the hub does not have", async () => {
-    const c = await checkReceiptOnChain(reader(replay("batch-missing")), { network: vec.network, batchId: "ab".repeat(32), fields, proof: r2.proof });
+    const c = await checkReceiptOnChain(reader(replay("batch-missing")), { network: vec.network, batchId: "ab".repeat(32), settler: SETTLER, fields, proof: r2.proof });
     expect(c).toMatchObject({ storedRoot: null, rootMatches: false, hubVerified: null, verified: false });
   });
 });

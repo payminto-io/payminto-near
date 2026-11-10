@@ -203,8 +203,8 @@ describe("payminto MCP server", () => {
   it("checks proofs against the root the hub stores, not the node's word", async () => {
     const callId = wallet.receipts(1)[0]!.callId;
     // A chain reader that sees another root for the batch: the node's proof no longer verifies.
-    const lying = { hub: chain.hub, network: chain.network, budget: chain.budget.bind(chain), verifyReceipt: chain.verifyReceipt.bind(chain), batch: async (id: Id32) => {
-      const b = await chain.batch(id);
+    const lying = { hub: chain.hub, network: chain.network, budget: chain.budget.bind(chain), verifyReceipt: chain.verifyReceipt.bind(chain), batch: async (id: Id32, settler: string) => {
+      const b = await chain.batch(id, settler);
       return b ? { ...b, root: "ee".repeat(32) } : null;
     } };
     const other = await AgentWallet.connect({ nodeUrl: node.url, agentKey: AGENT_SEED, budgetId, chain: () => lying, receipts: wallet.agent.receipts, signWithoutPayeeCheck: true });
