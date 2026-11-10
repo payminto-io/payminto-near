@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
+import { signWithTorsionedR } from "../src/testing.ts";
 import { ed25519VerifyAsHub, isStrongPublicKey, keypairFromSeed, publicKeyProblem, signDigest, verifyDigest, type PublicKey } from "../src/index.ts";
 
 type Vector = {
@@ -72,5 +73,15 @@ describe("the hub's ed25519 rule, from packages/chain/vectors/signatures.json", 
     offCurve[0] = 2;
     expect(ed25519VerifyAsHub(offCurve, hexToBytes(digest), hexToBytes(sig))).toBe(false);
     expect(publicKeyProblem(`ed25519:${"1".repeat(32)}` as PublicKey)).toBe("small_order");
+  });
+
+  it("the test helper signWithTorsionedR makes what the audit made: cofactored yes, hub no", () => {
+    const kp = keypairFromSeed(new Uint8Array(32).fill(3));
+    const digest = "cd".repeat(32);
+    for (const nonce of [1, 2, 3]) {
+      const sig = signWithTorsionedR(kp.secretKey, digest, nonce);
+      expect(ed25519.verify(hexToBytes(sig), hexToBytes(digest), ed25519.getPublicKey(kp.secretKey))).toBe(true);
+      expect(verifyDigest(kp.publicKey, digest, sig)).toBe(false);
+    }
   });
 });
