@@ -150,7 +150,7 @@ The design and its decisions are in [docs/superpowers/specs/2026-11-10-near-clea
 | NEAR client | near-kit 0.20.2, near-sandbox 2.14.0, borsh 2.0.0, `@noble/curves` and `@noble/hashes` 2.4.0, `@hot-labs/near-connect` 0.12.0 for wallets in the dashboard |
 | Server | Node.js with built-in type stripping and `node:sqlite`, Hono 4 with `@hono/node-server`, zod 4 |
 | Agents | `@modelcontextprotocol/sdk` 1.32, `@anthropic-ai/sdk` for the default model provider; the other providers are called over HTTP |
-| Dashboard | Next.js 16.3.3, React 19.2.4, Tailwind CSS 4, Radix UI, TanStack Query, Recharts, lucide-react |
+| Dashboard | Next.js 16.4.5, React 19.2.4, Tailwind CSS 4, Radix UI, TanStack Query, Recharts, lucide-react |
 | Tests and build | Vitest 5 and TypeScript 7 (the dashboard uses Vitest 4 and TypeScript 5.9.3), pnpm 9 |
 | Standards | x402 v2 headers with Payminto's own `payminto-voucher` scheme; NEP-141, NEP-145, NEP-366 and NEP-413; Sputnik DAO v2 proposals; the Model Context Protocol |
 | Services read at run time | A NEAR RPC endpoint; the NearBlocks API for account age in the payee check; the NEAR AI Agent Market API; NEAR AI Cloud |

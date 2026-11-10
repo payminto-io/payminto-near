@@ -20,5 +20,10 @@
     "swarm": "node apps/node/scripts/check-runtime.mjs && node apps/swarm/src/cli.ts",
     "node": "pnpm --filter @payminto/node start",
     "backup": "pnpm --filter @payminto/node backup"
+  },
+  "pnpm": {
+    "overrides": {
+      "minimatch@>=7.0.0 <11.0.1": "11.0.4"
+    }
   }
 }
