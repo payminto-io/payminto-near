@@ -182,7 +182,7 @@ export default function TeamPage() {
                       change.mutate(pending);
                     }}
                     disabled={change.isPending}
-                    className={pending.kind === "remove" ? "bg-destructive text-white hover:bg-destructive/90" : undefined}
+                    className={pending.kind === "remove" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
                   >
                     {pending.kind === "role" ? "Change role" : "Remove"}
                   </AlertDialogAction>

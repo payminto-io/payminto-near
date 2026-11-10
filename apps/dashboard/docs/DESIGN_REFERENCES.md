@@ -25,15 +25,15 @@ Vercel returned no indexed sidebar screens, so Attio's collapsible web sidebar s
 
 What we kept: the account switcher on top, Settings, Help and the user menu pinned at the bottom (Stripe pins Developers the same way), and the 64 px icon rail with a flyout per section.
 
-## Mandates as spend controls
+## Budgets as spend controls
 
-- [Revolut Business, card spend controls](https://mobbin.com/screens/f3bc2b86-b6c6-47d6-a2db-640502c359a9): a list of controls where each row has an icon, a name and its current setting, which is the model for the mandate "Spend controls" panel.
+- [Revolut Business, card spend controls](https://mobbin.com/screens/f3bc2b86-b6c6-47d6-a2db-640502c359a9): a list of controls where each row has an icon, a name and its current setting, which is the model for the budget "Spend controls" panel.
 - [Airwallex, card details](https://mobbin.com/screens/68dac915-4d2f-4239-9c04-f10cb5a85b90): "Card controls" with a used-of-limit bar and the reset rule beside it, which we use for the daily cap row.
 - [Wise, card limits](https://mobbin.com/screens/63f79444-67f7-4c71-a964-cfee71cad090): each limit stated as a sentence with "remaining" under its bar, so every cap reads in plain words.
-- [Navan, budget detail](https://mobbin.com/screens/bfe4fd2e-f11f-4088-960e-eb24ace86ab4): one large spent versus left bar above the analysis, which became the mandate budget hero with settled, pending and remaining segments.
+- [Navan, budget detail](https://mobbin.com/screens/bfe4fd2e-f11f-4088-960e-eb24ace86ab4): one large spent versus left bar above the analysis, which became the Budget hero with settled, pending and remaining segments.
 - [Cursor, spending limit](https://mobbin.com/screens/32551509-499c-4cdb-9002-a850b00bca24): a single "used / limit" figure pinned to the right of the bar, which we copy for every cap.
 
-## Create mandate wizard
+## Create budget wizard
 
 - [Mercury, send money review](https://mobbin.com/screens/cd2dc4bc-de9e-447e-93bf-c12e92c2f2dc): a named step list and a final label/value review before the irreversible action, which our three-step wizard keeps.
 - [Navan, set your limits](https://mobbin.com/screens/1835b7cc-8f00-499d-bd95-d6bf5b30da2a): a live preview of the resulting policy beside the inputs, which is why the wizard shows a plain-language policy summary while you type.

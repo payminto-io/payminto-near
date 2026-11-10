@@ -68,8 +68,8 @@ export function detect(text: string): Detected {
   const t = text.trim();
   if (t.length < 2) return { kind: "short" };
   for (const [re, type] of ID_PREFIX) if (re.test(t)) return { kind: "id", type };
-  if (/^0x[0-9a-fA-F]{64}$/.test(t)) return { kind: "tx_hash" };
-  if (/^0x[0-9a-fA-F]{40}$/.test(t)) return { kind: "address" };
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(t)) return { kind: "tx_hash" };
+  if (/^0x[0-9a-fA-F]{40}$/.test(t) || /^[a-z0-9_-]+(\.[a-z0-9_-]+)*\.(testnet|near)$/.test(t)) return { kind: "address" };
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return { kind: "email" };
   if (/^\d+(\.\d+)?$/.test(t)) return { kind: "amount" };
   return { kind: "text" };

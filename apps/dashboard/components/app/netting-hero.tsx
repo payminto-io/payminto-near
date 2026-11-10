@@ -39,10 +39,10 @@ export function NettingHero({ figures, settled, action }: { figures: BeforeAfter
           <p className="text-xs font-medium tracking-[0.06em] text-muted-foreground uppercase">Without bundling</p>
           <p className="mt-2 flex items-baseline gap-2">
             <span className="num text-[2.5rem] leading-none font-semibold tracking-[-0.03em] text-muted-foreground">{formatInt(before.transfers)}</span>
-            <span className="text-sm text-muted-foreground">on-chain transfers</span>
+            <span className="text-sm text-muted-foreground">on-chain {before.transfers === 1 ? "transfer" : "transfers"}</span>
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            One per charge, moving <Money atomic={before.amount} maxFraction={4} className="text-foreground" />
+            One per Call, moving <Money atomic={before.amount} className="text-foreground" />
           </p>
           <Ticks count={before.transfers} tone="before" />
         </div>
@@ -52,7 +52,7 @@ export function NettingHero({ figures, settled, action }: { figures: BeforeAfter
             <ArrowDown className="size-4 lg:hidden" aria-hidden />
             <ArrowRight className="size-4 max-lg:hidden" aria-hidden />
           </span>
-          {fewer > 0 && (
+          {fewer > 1 && (
             <span className="num rounded-full bg-accent px-2.5 py-1 text-xs font-semibold whitespace-nowrap text-accent-foreground">
               {formatRatio(fewer)}x fewer
             </span>
@@ -66,7 +66,7 @@ export function NettingHero({ figures, settled, action }: { figures: BeforeAfter
             <span className="text-sm text-muted-foreground">on-chain {after.transfers === 1 ? "transfer" : "transfers"}</span>
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            Moving <Money atomic={after.amount} maxFraction={4} className="text-foreground" />
+            Moving <Money atomic={after.amount} className="text-foreground" />
             {valueSavedPct > 0 && <span className="text-positive">, {valueSavedPct.toFixed(1)}% less</span>}
           </p>
           <Ticks count={after.transfers} tone="after" />
@@ -77,7 +77,7 @@ export function NettingHero({ figures, settled, action }: { figures: BeforeAfter
         </div>
       </div>
       <p className="sr-only">
-        Without bundling, {before.transfers} transfers. With bundling, {after.transfers} transfers.
+        Without bundling, {before.transfers} {before.transfers === 1 ? "transfer" : "transfers"}. With bundling, {after.transfers} {after.transfers === 1 ? "transfer" : "transfers"}.
       </p>
     </section>
   );

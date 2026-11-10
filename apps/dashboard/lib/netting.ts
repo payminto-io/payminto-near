@@ -3,8 +3,6 @@
  * `netTransfers` mirrors ClearingHub._payNet exactly (greedy two-pointer over parties in first-seen order),
  * so the projection the dashboard draws is the same set of transfers the hub will emit.
  */
-import { getAddress } from "viem";
-
 export type Obligation = { from: string; to: string; amount: string; calls?: number };
 export type Transfer = { from: string; to: string; amount: string };
 
@@ -13,7 +11,7 @@ export function netPositions(obligations: readonly Obligation[]): { party: strin
   const order: string[] = [];
   const bal = new Map<string, bigint>();
   const touch = (who: string, delta: bigint) => {
-    const k = getAddress(who);
+    const k = who;
     if (!bal.has(k)) {
       order.push(k);
       bal.set(k, 0n);
@@ -59,8 +57,8 @@ export function sumAmounts(rows: readonly { amount: string }[]): bigint {
 export function aggregateObligations(rows: readonly Obligation[]): Required<Obligation>[] {
   const map = new Map<string, Required<Obligation>>();
   for (const r of rows) {
-    const from = getAddress(r.from);
-    const to = getAddress(r.to);
+    const from = r.from;
+    const to = r.to;
     const key = `${from}>${to}`;
     const prev = map.get(key);
     if (prev) {
@@ -232,7 +230,7 @@ function round(n: number) {
 export type BeforeAfter = {
   /** Without netting: one ERC-20 transfer per accepted call, moving the gross amount. */
   before: { transfers: number; amount: bigint };
-  /** With netting: the hub's net wallet-to-wallet transfers. */
+  /** With netting: the net amounts the hub moves, from owners' escrow to creditors' balances on the hub. */
   after: { transfers: number; amount: bigint };
   /** How many times fewer on-chain transfers netting needs, 0 when there is nothing to settle. */
   fewer: number;

@@ -7,7 +7,7 @@ const standalone = process.env.NEXT_OUTPUT === "standalone" ? { output: "standal
 
 const nextConfig: NextConfig = {
   ...standalone,
-  transpilePackages: ["@payminto/protocol"],
+  transpilePackages: ["@payminto/protocol", "@payminto/chain", "@payminto/near-addons", "@payminto/payee-check"],
   reactStrictMode: true,
   poweredByHeader: false,
   agentRules: false,

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { RotateCw, Square } from "lucide-react";
-import { toHex } from "viem";
+import { toHex } from "@payminto/protocol";
 import { useApi } from "@/lib/session";
 import { ak, useAgent, useAgentAccess, useAiConnections, useAiProviders, useBusinessId, useFollowRun } from "@/lib/agents-queries";
 import { TRIGGER_LABEL, canCancel, canRunAgain, isTerminal, providerName, runErrorText, whoAnswers } from "@/lib/agents";
@@ -49,7 +49,7 @@ function RunPage({ id }: { id: string }) {
     onError: (e) => toast.error(e.message),
   });
   const again = useMutation({
-    mutationFn: (r: AgentRun) => api.agents.startRun(r.agent_id, r.input ?? "", toHex(crypto.getRandomValues(new Uint8Array(16))).slice(2)),
+    mutationFn: (r: AgentRun) => api.agents.startRun(r.agent_id, r.input ?? "", toHex(crypto.getRandomValues(new Uint8Array(16)))),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ak.all });
       router.push(`/agents/runs/${r.id}`);

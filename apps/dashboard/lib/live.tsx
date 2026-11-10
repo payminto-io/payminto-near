@@ -5,6 +5,10 @@ import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useSession } from "./session";
 import { AGENT_RUN_EVENT_TYPES, EVENT_TYPES, type AgentRunEventType, type EventType, type NodeEvent } from "./schemas";
 import { qk } from "./queries";
+import { retainEvents } from "./operator-alerts";
+
+/** The approvals and waiting Calls of every Budget (lib/use-payee-approvals.ts keys all start with it). */
+export const PAYEE_APPROVAL_KEYS: QueryKey = ["payee-approvals"];
 
 /** Every AI agent screen's cache (lib/agents-queries.ts keys all start with it). */
 const AGENT_KEYS: QueryKey = ["agents"];
@@ -19,17 +23,26 @@ const KEEP = 60;
 
 /** Which cached screens each event makes stale. */
 const INVALIDATES: Record<EventType, QueryKey[]> = {
-  "call.accepted": [qk.overview, ["calls"], qk.preview, qk.providers, qk.mandates, ["ledger"], qk.trialBalance],
-  "call.denied": [qk.overview, qk.denials, qk.mandates],
-  "mandate.opened": [qk.mandates, qk.overview],
-  "mandate.revoked": [qk.mandates, qk.overview],
+  "call.accepted": [qk.overview, ["calls"], qk.preview, qk.providers, qk.budgets, ["ledger"], qk.trialBalance],
+  "call.denied": [qk.overview, qk.denials, qk.budgets],
+  "budget.opened": [qk.budgets, qk.overview],
+  "budget.revoked": [qk.budgets, qk.overview],
   "batch.started": [qk.batches],
   "batch.submitted": [qk.batches],
   "batch.included": [qk.batches],
-  "batch.confirmed": [qk.batches, qk.overview, qk.preview, ["calls"], qk.mandates, qk.providers, ["ledger"], qk.trialBalance],
+  "batch.confirmed": [qk.batches, qk.overview, qk.preview, ["calls"], qk.budgets, qk.providers, ["ledger"], qk.trialBalance, ["proof"]],
   "batch.failed": [qk.batches, qk.overview, qk.preview],
-  "hsp.updated": [qk.batches],
-  "funds.warning": [qk.mandates, qk.preview],
+  "funds.warning": [qk.budgets, qk.preview],
+  "payout.confirmed": [["payouts"], qk.budgets],
+  "payout.failed": [["payouts"]],
+  // A seller settled its own voucher on the hub: its Calls are settled with no batch, escrow moved to the seller's hub
+  // credit, and what waits for the next settlement shrank.
+  "seller.settled": [qk.overview, ["calls"], qk.preview, qk.budgets, qk.providers, ["ledger"], qk.trialBalance, ["proof"], ["payouts"]],
+  // Shown as a warning (components/app/operator-warnings.tsx). A batch the hub holds under another settler is failed.
+  "operator.alert": [qk.batches, qk.overview, qk.preview, ["calls"]],
+  // The payee check: a Call waits for the owner, or an owner decided. The Budget page shows both without a reload.
+  "payee.approval_requested": [qk.budgets, PAYEE_APPROVAL_KEYS, qk.denials],
+  "payee.approval_decided": [qk.budgets, PAYEE_APPROVAL_KEYS],
   // AI agent runs (docs/AGENTS.md section 6): the run page follows its own run; lists and last runs refresh here.
   ...(Object.fromEntries(AGENT_RUN_EVENT_TYPES.map((t) => [t, t === "agent_run.step" ? [] : [AGENT_KEYS]])) as Record<AgentRunEventType, QueryKey[]>),
 };
@@ -72,7 +85,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     };
 
     const onEvent = (e: NodeEvent) => {
-      setValue((v) => ({ status: "live", events: [e, ...v.events].slice(0, KEEP), lastEventAt: Date.now(), wasLive: true }));
+      setValue((v) => ({ status: "live", events: retainEvents([e, ...v.events], KEEP), lastEventAt: Date.now(), wasLive: true }));
       schedule(INVALIDATES[e.type] ?? []);
     };
 

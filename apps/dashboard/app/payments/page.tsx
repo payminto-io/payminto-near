@@ -74,8 +74,8 @@ function Payments() {
           agentOnly
             ? "Payments made by AI agents, automatically or from a budget."
             : platformView
-              ? "Every payment to every business on this server. Money lands in each business's own payout wallet."
-              : "Every checkout, link and API payment. Money lands in your payout wallet; Payminto only keeps track."
+              ? "Every payment to every business on this server. The hub credits each business's own payout account."
+              : "Every checkout, link and API payment. The hub credits your payout account; Payminto keeps the records."
         }
         actions={
           <>

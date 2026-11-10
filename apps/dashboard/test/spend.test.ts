@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetSplit, daysLeft, describeDaysLeft, describeTimeLeft } from "@/lib/spend";
+import { budgetSplit, daysLeft, describeDaysLeft, describeTimeLeft, spendableNow } from "@/lib/spend";
 
 describe("budgetSplit", () => {
   it("splits the cap into settled, pending and remaining", () => {
@@ -49,5 +49,19 @@ describe("describeTimeLeft", () => {
     expect(describeTimeLeft(now / 1000 + 12 * 3600 - 30, now)).toBe("11 h left");
     expect(describeTimeLeft(now / 1000 + 5 * 86_400, now)).toBe("5 days left");
     expect(describeTimeLeft(now / 1000 - 10, now)).toBe("Expired 1 day ago");
+  });
+});
+
+describe("spendableNow", () => {
+  it("shows escrow minus what waits to settle when that is less than the remaining cap", () => {
+    // The Budget the local stack seeds: 25.00 cap with 24.974 left, but only 6.998 in escrow and 0.004 waiting.
+    expect(spendableNow({ escrow: "6998000", spend: { pending: "4000", remaining: "24974000" } })).toEqual({ atomic: "6994000", why: expect.stringMatching(/escrow/) });
+  });
+  it("says nothing when the cap is the tighter limit, or the escrow is unknown", () => {
+    expect(spendableNow({ escrow: "30000000", spend: { pending: "0", remaining: "5000000" } })).toBeNull();
+    expect(spendableNow({ escrow: null, spend: { pending: "0", remaining: "5000000" } })).toBeNull();
+  });
+  it("never goes below zero when what waits to settle already uses the escrow", () => {
+    expect(spendableNow({ escrow: "1000", spend: { pending: "5000", remaining: "9000" } })?.atomic).toBe("0");
   });
 });

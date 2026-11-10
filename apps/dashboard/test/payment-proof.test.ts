@@ -1,117 +1,85 @@
 import { describe, expect, it } from "vitest";
-import { encodeAbiParameters, encodeEventTopics, getAddress, keccak256, toBytes, type Address, type Hex } from "viem";
-import { canonicalOrder, metadataHash, orderHash } from "@payminto/protocol";
-import { ATTESTATION_FIELDS, expectedCheckIds, plainCheckTitle, proofEventsAbi, proofVerdict, runProofChecks, type ChainLog, type ChainReader } from "@/lib/payment-proof";
+import { canonicalJson, sha256Text, type ChainPayment, type TxState } from "@payminto/protocol";
+import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, type PaymentReader, type ProofCheck, type ServedOrder } from "@/lib/payment-proof";
 import type { OrderCommitment, PaymentProof } from "@/lib/schemas";
 
-const TOKEN = getAddress("0x8fe3cb719ee4410e236cd6b72ab1fcdc06ef53c6");
-const PAYER = getAddress("0x00000000000000000000000000000000000000a1");
-const ROUTER = getAddress("0x00000000000000000000000000000000000000b2");
-const PAYOUT = getAddress("0x00000000000000000000000000000000000000c3");
-const TX = keccak256(toBytes("tx")) as Hex;
-const NONCE = keccak256(toBytes("nonce")) as Hex;
-const UID = keccak256(toBytes("uid")) as Hex;
+const check = (state: ProofCheck["state"]): ProofCheck => ({ id: "x", label: "x", state, detail: "" });
 
-const order: OrderCommitment = { payment_id: "pay_aaaaaaaaaaaaaaaaaaaaaaaa", amount: "25000000", token: TOKEN, payout: PAYOUT, reference: null, description: "Pro plan", line_items: [{ name: "Pro plan", quantity: 1, unit_amount: "25000000" }], metadata_hash: metadataHash({}) };
-const served = { raw: canonicalOrder({ ...order, token: TOKEN, payout: PAYOUT, metadata_hash: metadataHash({}) }), order };
-const HASH = orderHash({ ...order, token: TOKEN, payout: PAYOUT, metadata_hash: metadataHash({}) });
+describe("proofVerdict", () => {
+  it("is verified only when every check ran and passed", () => {
+    expect(proofVerdict([check("pass"), check("pass")]).state).toBe("verified");
+  });
+  it("is unverified while chain checks are skipped, so a partial result never reads as verified", () => {
+    expect(proofVerdict([check("pass"), check("skip")])).toMatchObject({ state: "unverified", passed: 1, skipped: 1 });
+  });
+  it("fails on any failed check, or when nothing ran", () => {
+    expect(proofVerdict([check("pass"), check("fail")]).state).toBe("failed");
+    expect(proofVerdict([check("skip")]).state).toBe("failed");
+  });
+});
 
+describe("plain words", () => {
+  it("lists the checks and names them for a reader", () => {
+    expect(expectedCheckIds()).toEqual(["tx", "record", "transfer", "order"]);
+    expect(plainCheckTitle("tx", { merchant: "Acme Store", network: "NEAR testnet" })).toBe("The payment is final on NEAR testnet");
+  });
+});
+
+const HUB_ID = "ab".repeat(32);
+const TX = "9vC3q2GdkKZ7v1pGQX5qRpX7n2bT8fW1sLmYhZc4eDuA";
+const order: OrderCommitment = { payment_id: "pay_1", amount: "25000000", token: "usdc.testnet", payout: "acme-store.testnet", reference: null, description: "Pro plan", line_items: [{ name: "Pro plan", quantity: 1, unit_amount: "25000000" }], metadata_hash: "0".repeat(64) };
+const served: ServedOrder = { raw: canonicalJson(order), order };
 const proof: PaymentProof = {
-  payment_id: order.payment_id,
+  payment_id: "pay_1",
   status: "paid",
-  chain_id: 133,
-  token: TOKEN,
-  payout: PAYOUT,
-  deposit_address: getAddress("0x00000000000000000000000000000000000000d4"),
+  network: "near:testnet",
+  hub: "hub.payminto.testnet",
+  token: "usdc.testnet",
+  payout: "acme-store.testnet",
   amount_due: "25000000",
   amount_paid: "25000000",
   credit_amount: "25000000",
   method: "wallet",
-  payer: PAYER,
+  payer: "mira.testnet",
   tx_hash: TX,
-  block_number: 100,
-  finality_tag: "safe",
-  order_hash: HASH,
-  authorization_nonce: NONCE,
-  eas_enabled: true,
-  attestation: { uid: UID, schema: null, attester: null, eas: null },
-  paid_at: null,
+  hub_payment_id: HUB_ID,
+  order_hash: sha256Text(served.raw),
+  paid_at: "2026-11-01T10:00:00.000Z",
 };
-
-const transfer = (from: Address, to: Address, value: bigint): ChainLog => ({
-  address: TOKEN,
-  topics: encodeEventTopics({ abi: proofEventsAbi, eventName: "Transfer", args: { from, to } }) as Hex[],
-  data: encodeAbiParameters([{ type: "uint256" }], [value]),
+const record: ChainPayment = { id: HUB_ID, merchant: "acme-store.testnet", amount: 25_000_000n, payer: "mira.testnet", at: 1n };
+const reader = (over: { record?: ChainPayment | null; tx?: TxState } = {}): PaymentReader => ({
+  rpcUrl: "https://rpc.testnet.near.org",
+  hub: "hub.payminto.testnet",
+  payments: async (ids) => ({ value: ids.map(() => (over.record === undefined ? record : over.record)), blockHeight: 219_402_871, blockHash: "block" }),
+  // NEAR finds a transaction by its hash and its signer: the payer.
+  txState: async (hash, sender) => (hash === TX && sender === "mira.testnet" ? (over.tx ?? { status: "final" }) : { status: "unknown" }),
 });
+const states = (r: { checks: ProofCheck[] }) => Object.fromEntries(r.checks.map((c) => [c.id, c.state]));
 
-function reader(over: Partial<{ logs: ChainLog[]; safe: bigint; amount: bigint; revoked: bigint }> = {}): ChainReader {
-  return {
-    receipt: async () => ({
-      status: "success",
-      blockNumber: 100n,
-      logs: over.logs ?? [
-        { address: TOKEN, topics: encodeEventTopics({ abi: proofEventsAbi, eventName: "AuthorizationUsed", args: { authorizer: PAYER, nonce: NONCE } }) as Hex[], data: "0x" },
-        transfer(PAYER, ROUTER, 25_000_000n),
-        transfer(ROUTER, PAYOUT, 24_875_000n),
-      ],
-    }),
-    blockAt: async () => over.safe ?? 120n,
-    attestation: async (_eas, uid) => ({
-      uid,
-      attester: PAYER,
-      revocationTime: over.revoked ?? 0n,
-      data: encodeAbiParameters(ATTESTATION_FIELDS, [keccak256(toBytes("ref")), HASH, PAYER, PAYOUT, TOKEN, over.amount ?? 25_000_000n, TX]),
-    }),
-  };
-}
-
-describe("runProofChecks", () => {
-  it("passes every check when the chain agrees with the node", async () => {
+describe("runProofChecks on NEAR", () => {
+  it("verifies a payment the hub recorded to the merchant, in a final transaction, with a matching order", async () => {
     const r = await runProofChecks(proof, served, reader());
-    expect(r.checks.map((c) => [c.id, c.state])).toEqual([
-      ["tx", "pass"],
-      ["transfer", "pass"],
-      ["auth", "pass"],
-      ["final", "pass"],
-      ["order", "pass"],
-      ["eas", "pass"],
-    ]);
-    expect(r.events).toHaveLength(3);
+    expect(states(r)).toEqual({ tx: "pass", record: "pass", transfer: "pass", order: "pass" });
+    expect(r.read).toEqual({ rpcUrl: "https://rpc.testnet.near.org", hub: "hub.payminto.testnet", blockHeight: 219_402_871 });
+    expect(states(await runProofChecks({ ...proof, payer: null }, served, reader())).tx).toBe("skip");
+    expect(proofVerdict(r.checks).state).toBe("verified");
   });
-  it("fails when the payout got less than it is owed, or the block is not final yet", async () => {
-    const r = await runProofChecks(proof, served, reader({ logs: [transfer(PAYER, PAYOUT, 1n)], safe: 99n }));
-    const state = Object.fromEntries(r.checks.map((c) => [c.id, c.state]));
-    expect(state.transfer).toBe("fail");
-    expect(state.auth).toBe("fail");
-    expect(state.final).toBe("fail");
+  it("fails when the hub credited someone else or a different amount", async () => {
+    expect(states(await runProofChecks(proof, served, reader({ record: { ...record, merchant: "attacker.testnet" } }))).transfer).toBe("fail");
+    expect(states(await runProofChecks(proof, served, reader({ record: { ...record, amount: 1n } }))).transfer).toBe("fail");
   });
-  it("catches a tampered order or attestation", async () => {
-    const r = await runProofChecks(proof, { ...served, raw: served.raw.replace("Pro plan", "Something else") }, reader({ amount: 1n }));
-    const state = Object.fromEntries(r.checks.map((c) => [c.id, c.state]));
-    expect(state.order).toBe("fail");
-    expect(state.eas).toBe("fail");
+  it("fails when the hub has no record, or the transaction is not final", async () => {
+    const r = await runProofChecks(proof, served, reader({ record: null, tx: { status: "failed", error: "NOT_PAYEE" } }));
+    expect(states(r)).toMatchObject({ tx: "fail", record: "fail", transfer: "fail" });
+    expect(proofVerdict(r.checks).state).toBe("failed");
   });
-  it("says so instead of failing when EAS is off", async () => {
-    const r = await runProofChecks({ ...proof, eas_enabled: false, attestation: null }, served, reader());
-    expect(r.checks.find((c) => c.id === "eas")?.state).toBe("skip");
+  it("fails an order that does not hash to the fingerprint or is not canonical", async () => {
+    expect(states(await runProofChecks({ ...proof, order_hash: "cd".repeat(32) }, served, reader())).order).toBe("fail");
+    expect(states(await runProofChecks(proof, { ...served, raw: JSON.stringify(order, null, 1) }, reader())).order).toBe("fail");
   });
-});
-
-describe("proof page wording", () => {
-  it("lists the wallet signature check only for signed payments", () => {
-    expect(expectedCheckIds("wallet")).toEqual(["tx", "transfer", "auth", "final", "order", "eas"]);
-    expect(expectedCheckIds("deposit")).toEqual(["tx", "transfer", "final", "order", "eas"]);
-  });
-  it("says each check in plain words", () => {
-    const ctx = { merchant: "Acme Store", network: "HashKey Chain" };
-    expect(plainCheckTitle("tx", ctx)).toBe("The payment is on HashKey Chain");
-    expect(plainCheckTitle("transfer", ctx)).toBe("The money reached Acme Store");
-    for (const id of expectedCheckIds("wallet")) expect(plainCheckTitle(id, ctx)).not.toMatch(/EAS|nonce|Transfer\(|\u2014/);
-  });
-  it("verifies only when every check that ran passed", () => {
-    const c = (state: "pass" | "fail" | "skip") => ({ id: "x", label: "x", detail: "", state });
-    expect(proofVerdict([c("pass"), c("pass"), c("skip")])).toEqual({ state: "verified", passed: 2, run: 2, skipped: 1, failed: 0 });
-    expect(proofVerdict([c("pass"), c("fail")]).state).toBe("failed");
-    expect(proofVerdict([c("skip")]).state).toBe("failed");
+  it("skips every chain check without a reader, so the receipt never reads as verified on the server's word", async () => {
+    const r = await runProofChecks(proof, served, null);
+    expect(states(r)).toEqual({ tx: "skip", record: "skip", transfer: "skip", order: "pass" });
+    expect(proofVerdict(r.checks).state).toBe("unverified");
   });
 });

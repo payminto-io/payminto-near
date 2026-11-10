@@ -17,7 +17,7 @@ function BatchesPagePage() {
     <>
       <PageHeader
         title="Settlements"
-        description="Each settlement is one on-chain transaction that pays many charges at once. It moves only the differences, and every single charge in it can still be verified later."
+        description="Each settlement is one on-chain transaction that pays many Calls at once. It moves only the differences, and every single Call in it can still be verified later."
       />
       <Panel bodyClassName="p-0 sm:p-0">
         {batches.isPending ? (
@@ -47,7 +47,7 @@ function BatchesPagePage() {
                     <BatchStatusChip status={b.status} />
                   </div>
                   <p className="mt-1.5 text-sm text-muted-foreground">
-                    <span className="num">{formatInt(b.calls)}</span> {plural(b.calls, "charge")}, <Money atomic={b.gross} maxFraction={4} /> owed, <Money atomic={b.net} maxFraction={4} /> moved
+                    <span className="num">{formatInt(b.calls)}</span> {plural(b.calls, "Call")}, <Money atomic={b.gross} /> owed, <Money atomic={b.net} /> moved
                   </p>
                   <p className="mt-0.5 text-xs text-subtle">
                     <span className="num">{formatRatio(b.transfers ? b.calls / b.transfers : 0)}</span> {plural(b.transfers ? b.calls / b.transfers : 0, "call")} per transfer, <TimeAgo iso={b.confirmedAt ?? b.createdAt} />
@@ -62,11 +62,11 @@ function BatchesPagePage() {
                 <tr className="border-b text-left text-xs text-muted-foreground">
                   <th className="px-5 py-2.5 font-normal">Settlement</th>
                   <th className="px-3 py-2.5 font-normal">Status</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Charges</th>
+                  <th className="px-3 py-2.5 text-right font-normal">Calls</th>
                   <th className="px-3 py-2.5 text-right font-normal">Owed</th>
                   <th className="px-3 py-2.5 text-right font-normal">Moved on chain</th>
                   <th className="px-3 py-2.5 text-right font-normal">Transfers</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Charges per transfer</th>
+                  <th className="px-3 py-2.5 text-right font-normal">Calls per transfer</th>
                   <th className="px-3 py-2.5 font-normal">Transaction</th>
                   <th className="px-5 py-2.5 text-right font-normal">Settled</th>
                 </tr>
@@ -83,8 +83,8 @@ function BatchesPagePage() {
                       <BatchStatusChip status={b.status} />
                     </td>
                     <td className="num px-3 py-3 text-right">{formatInt(b.calls)}</td>
-                    <td className="px-3 py-3 text-right"><Money atomic={b.gross} maxFraction={4} /></td>
-                    <td className="px-3 py-3 text-right"><Money atomic={b.net} maxFraction={4} /></td>
+                    <td className="px-3 py-3 text-right"><Money atomic={b.gross} /></td>
+                    <td className="px-3 py-3 text-right"><Money atomic={b.net} /></td>
                     <td className="num px-3 py-3 text-right">{b.transfers}</td>
                     <td className="num px-3 py-3 text-right font-medium">{formatRatio(b.transfers ? b.calls / b.transfers : 0)}</td>
                     <td className="px-3 py-3"><Hash value={b.txHash} kind="tx" /></td>

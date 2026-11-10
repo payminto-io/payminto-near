@@ -40,7 +40,7 @@ export function BusinessFilter({ value, onChange, className }: { value: string |
 }
 
 /** Payments an AI agent made: the agent methods (PRODUCT.md section 3.3, "Agent payments"). */
-export const AGENT_METHODS = ["x402", "voucher"] as const;
+export const AGENT_METHODS = ["voucher"] as const;
 export function isAgentPayment(p: { method: string | null }): boolean {
-  return p.method === "x402" || p.method === "voucher";
+  return p.method === "voucher";
 }

@@ -62,7 +62,7 @@ function NewMerchantPagePage() {
         fee_plan_id: plan.id,
         support_email: email.trim() || null,
         brand_color: normalizeBrandColor(color),
-        payout_proof: { timestamp: proof.timestamp, signature: proof.signature },
+        payout_proof: { timestamp: proof.timestamp, public_key: proof.public_key, signature: proof.signature },
         methods,
       });
       void qc.invalidateQueries({ queryKey: ok.all });

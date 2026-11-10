@@ -7,9 +7,14 @@ describe("old URLs redirect (PRODUCT.md 2.4)", () => {
     expect(redirectFor("/operator/merchants")).toBe("/platform/businesses");
     expect(redirectFor("/operator/merchants/mer_1")).toBe("/platform/businesses/mer_1");
     expect(redirectFor("/operator/merchants/new")).toBe("/platform/businesses/new");
-    expect(redirectFor("/operator/fee-plans")).toBe("/platform/pricing");
-    expect(redirectFor("/operator/earnings")).toBe("/platform/earnings");
-    expect(redirectFor("/operator/platform")).toBe("/settings/platform");
+  });
+  it("keeps Budgets at their own paths, with no redirect in or out", () => {
+    expect(redirectFor("/budgets")).toBeNull();
+    expect(redirectFor("/budgets/abc")).toBeNull();
+    for (const r of REDIRECTS) expect(r.source).not.toMatch(/^\/budgets/);
+  });
+  it("does not redirect to deleted pages", () => {
+    for (const r of REDIRECTS) expect(r.destination).not.toMatch(/platform\/(pricing|earnings)|settings\/platform/);
   });
   it("merges denials and screening into Blocked", () => {
     expect(redirectFor("/denials")).toBe("/blocked");

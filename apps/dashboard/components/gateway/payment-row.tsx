@@ -17,7 +17,7 @@ export function PaymentRow({ p, linkTitle, business }: { p: Payment; linkTitle?:
   return (
     <li className={`relative grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-4 py-3 transition-colors duration-150 ease-out hover:bg-muted/40 sm:px-5 md:gap-4 ${withCol ? PAYMENT_COLS_BUSINESS : PAYMENT_COLS}`}>
       <Link href={withBusiness(`/payments/${p.id}`, p.merchant_id)} className="font-semibold after:absolute after:inset-0 md:text-right" aria-label={`Payment ${p.id}`}>
-        <Money atomic={p.amount_due} maxFraction={2} />
+        <Money atomic={p.amount_due} />
       </Link>
       <span className="justify-self-end md:justify-self-start">
         <PaymentStatusChip status={p.status} late={p.late} />

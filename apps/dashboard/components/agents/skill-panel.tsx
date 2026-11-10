@@ -25,7 +25,7 @@ export function SkillPanel({ agent }: { agent: Agent }) {
           </span>
         </Field>
         <Field label="Price per call">
-          <Money atomic={agent.price ?? null} maxFraction={6} />
+          <Money atomic={agent.price ?? null} />
         </Field>
         {agent.input_hint && <Field label="Input hint">{agent.input_hint}</Field>}
         <Field label="Listed" hint="AI agents find this skill and its price in this server's service directory.">

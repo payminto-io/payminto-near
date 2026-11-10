@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agentAccess,
   agentExample,
+  attestationState,
   canCancel,
   canRunAgain,
   curlExample,
@@ -51,9 +52,9 @@ describe("AI agent schemas (docs/AGENTS.md sections 2, 4, 5 and 6)", () => {
   afterAll(() => setView(null));
 
   it("parse every mock screen's data with the wire schemas", { timeout: 20_000 }, async () => {
-    expect(aiProvidersSchema.parse(await api.providers())).toHaveLength(5);
+    expect(aiProvidersSchema.parse(await api.providers()).map((p) => p.id)).toEqual(["anthropic", "openai", "google", "openai_compatible", "replicate", "nearai"]);
     const connections = aiConnectionsSchema.parse(await api.connections());
-    expect(connections.map((c) => c.status).sort()).toEqual(["active", "invalid"]);
+    expect(connections.map((c) => c.status).sort()).toEqual(["active", "active", "invalid"]);
     expect(connections.every((c) => c.key_hint?.length === 4)).toBe(true);
     const agents = agentsSchema.parse(await api.agents());
     expect(new Set(agents.map((a) => a.kind))).toEqual(new Set(["ops", "skill"]));
@@ -64,6 +65,10 @@ describe("AI agent schemas (docs/AGENTS.md sections 2, 4, 5 and 6)", () => {
       expect(steps.length).toBeGreaterThan(0);
       expect(steps.map((s) => s.seq)).toEqual([...steps.map((s) => s.seq)].sort((a, b) => a - b));
     }
+    // The runs on NEAR AI Cloud show every attestation state a model turn can have; the others carry none.
+    const states = new Set<string>();
+    for (const r of page.items) for (const s of timelineSteps(await api.runEvents(r.id))) if (s.kind === "model") states.add(`${attestationState(s.attestation)}${s.attestation?.signatureKind === "gateway" ? ":gateway" : ""}`);
+    expect(states).toEqual(new Set(["none", "partial", "partial:gateway", "failed", "unavailable"]));
     const usage = aiUsageSchema.parse(await api.usage());
     expect(usage.connections.find((u) => u.connection_id === "aic_team_anthropic")!.input_tokens).toBeGreaterThan(0);
   });
@@ -124,6 +129,13 @@ describe("the run timeline", () => {
     expect(steps[1]).toMatchObject({ inputTokens: 1840, outputTokens: 96 });
     expect(steps[2]).toMatchObject({ label: "Read the overview", result: "This week 2,948.75 USDC", done: true, input: { range: "7d" } });
     expect(steps[4]).toMatchObject({ label: "Looked up payments", done: false, result: null });
+  });
+  it("carries the enclave attestation of a model turn, and only a well-formed one", () => {
+    const attestation = { status: "partially_verified", summary: "Signed by the model enclave.", request_hash: "aa", response_hash: "bb", signature_kind: "provider_tee", signer: "0x01", passed: ["signed_text"], failed: [], not_verified: ["enclave_attestation"] };
+    const steps = timelineSteps([ev(1, "model_turn", { turn: 1, stop: "end", attestation }), ev(2, "model_turn", { turn: 2, stop: "end", attestation: { status: "trusted" } }), ev(3, "model_turn", { turn: 3, stop: "end" })]);
+    expect(steps[0]).toMatchObject({ kind: "model", attestation: { status: "partially_verified", summary: "Signed by the model enclave.", requestHash: "aa", responseHash: "bb", signatureKind: "provider_tee", signer: "0x01" } });
+    expect("attestation" in steps[1]!).toBe(false);
+    expect("attestation" in steps[2]!).toBe(false);
   });
   it("counts tokens from the steps until the run reports its usage", () => {
     const events = [ev(1, "model_turn", { input_tokens: 10, output_tokens: 2 }), ev(2, "model_turn", { usage: { inputTokens: 5, outputTokens: 1 } })];
@@ -290,6 +302,6 @@ describe("paid skills", () => {
     expect(url).toBe("https://pay.example.com/v1/skills/product-copy");
     expect(skillUrl({ slug: "x", skill_url: "https://cdn.example/x" }, "https://a")).toBe("https://cdn.example/x");
     expect(curlExample(url!, "It's a flask")).toContain(`-d '{"input":"It'\\''s a flask"}'`);
-    expect(agentExample(url!, "250000", null)).toContain("maxAmount: 250000n");
+    expect(agentExample(url!, "250000", null)).toContain("maxPrice: 250000n");
   });
 });

@@ -1,94 +1,41 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import { toast } from "sonner";
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { Check, ChevronLeft, Copy, ExternalLink, Info } from "lucide-react";
+import { ChevronLeft, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMoney, shortAddress, shortHash } from "@/lib/format";
+import { shortHash } from "@/lib/format";
 import { useDirectory, useExplorer, useToken } from "@/lib/queries";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CopyButton, ExplorerLink } from "@/components/ds/actions";
+import { AccountId } from "@/components/ds/account-id";
+import { Amount } from "@/components/ds/amount";
 
 // ---------------------------------------------------------------------------
-// Money
+// Money, accounts and hashes: the design-system components bound to the node's token and explorer
 // ---------------------------------------------------------------------------
 
+/** An amount in the settlement token. See Amount for the rules. */
 export function Money({
   atomic,
   className,
   unitClassName,
-  maxFraction,
   signed,
+  size,
 }: {
   atomic: string | bigint | null | undefined;
   className?: string;
   unitClassName?: string;
-  maxFraction?: number;
   signed?: boolean;
+  size?: "sm" | "md" | "lg" | "display";
 }) {
   const t = useToken();
-  if (atomic === null || atomic === undefined) return <span className={cn("num text-subtle", className)}>-</span>;
-  const v = BigInt(atomic);
-  const text = formatMoney(v, t.decimals, { maxFraction });
-  return (
-    <span className={cn("num whitespace-nowrap", className)}>
-      {signed && v > 0n ? "+" : ""}
-      {text}
-      <span className={cn("ml-1 text-[0.82em] font-normal text-muted-foreground", unitClassName)}>{t.symbol}</span>
-    </span>
-  );
+  return <Amount atomic={atomic} decimals={t.decimals} unit={t.symbol} className={className} unitClassName={unitClassName} signed={signed} size={size} />;
 }
 
-// ---------------------------------------------------------------------------
-// Copy, address and hash chips
-// ---------------------------------------------------------------------------
+export { CopyButton };
 
-export function CopyButton({ value, label, className }: { value: string; label: string; className?: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button
-      type="button"
-      aria-label={done ? `${label} copied` : `Copy ${label}`}
-      className={cn(
-        "inline-flex size-6 shrink-0 items-center justify-center rounded text-subtle transition-[background-color,color] duration-150 ease-out hover:bg-muted hover:text-foreground focus-visible:outline-2",
-        done && "bg-positive-soft",
-        className,
-      )}
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        void navigator.clipboard?.writeText(value).then(
-          () => {
-            setDone(true);
-            toast.success(`${label.charAt(0).toUpperCase()}${label.slice(1)} copied`, { id: `copied:${label}`, duration: 1200 });
-            setTimeout(() => setDone(false), 1200);
-          },
-          () => toast.error("Could not copy. Select the text and copy it instead."),
-        );
-      }}
-    >
-      {done ? <Check key="done" className="copied-pop size-3.5 text-positive" /> : <Copy key="idle" className="size-3.5" />}
-    </button>
-  );
-}
-
-function ExplorerLink({ href, label }: { href: string | null; label: string }) {
-  if (!href) return null;
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={`Open ${label} in explorer`}
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded text-subtle transition-colors hover:bg-muted hover:text-foreground"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <ExternalLink className="size-3.5" />
-    </a>
-  );
-}
-
-/** A wallet: its name when the node knows it, the truncated address otherwise, always copyable and linkable. */
+/** A NEAR account: its name when the node knows it, the id truncated in the middle, always copyable and linkable. */
 export function Address({
   address,
   showName = true,
@@ -96,36 +43,30 @@ export function Address({
   explorer = true,
   copy = true,
   nameOnly = false,
+  mode = "middle",
 }: {
   address: string | null | undefined;
   showName?: boolean;
   className?: string;
   explorer?: boolean;
   copy?: boolean;
-  /** Show just the wallet's name when it is known; the address stays in the tooltip. */
+  /** Show just the account's name when it is known; the id stays in the title and the copy action. */
   nameOnly?: boolean;
+  mode?: "middle" | "wrap";
 }) {
   const dir = useDirectory();
-  const ex = useExplorer();
-  if (!address) return <span className="text-subtle">-</span>;
-  const party = showName ? dir.lookup(address) : null;
-  return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1 align-middle", className)}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex min-w-0 items-baseline gap-1.5" tabIndex={0}>
-            {party && <span className="truncate font-medium text-foreground">{party.name}</span>}
-            {!(party && nameOnly) && (
-              <span className={cn("hash shrink-0 text-[0.86em]", party ? "text-subtle" : "text-foreground")}>{shortAddress(address)}</span>
-            )}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent className="hash max-w-none">{address}</TooltipContent>
-      </Tooltip>
-      {copy && <CopyButton value={address} label="address" />}
-      {explorer && <ExplorerLink href={ex.address(address)} label="address" />}
-    </span>
-  );
+  const party = showName && address ? dir.lookup(address) : null;
+  if (party && nameOnly && address) {
+    return (
+      <span className={cn("inline-flex min-w-0 items-center gap-1 align-middle", className)}>
+        <span className="truncate font-medium text-foreground" title={address}>
+          {party.name}
+        </span>
+        {copy && <CopyButton value={address} label="account" />}
+      </span>
+    );
+  }
+  return <AccountId value={address} name={party?.name} explorer={explorer} copy={copy} mode={mode} className={className} />;
 }
 
 export function Hash({
@@ -189,7 +130,7 @@ export function PageHeader({
         <h1 className="text-[1.625rem] leading-tight font-semibold tracking-[-0.015em] text-balance">{title}</h1>
         {description && <p className="mt-1.5 max-w-[68ch] text-[0.9375rem] text-muted-foreground">{description}</p>}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch max-sm:[&>*]:h-11">{actions}</div>}
     </header>
   );
 }
@@ -217,7 +158,7 @@ export function Panel({
             {title && <h2 className="text-[0.9375rem] font-semibold">{title}</h2>}
             {description && <p className="mt-0.5 text-[0.8125rem] text-muted-foreground">{description}</p>}
           </div>
-          {actions && <div className="flex items-center gap-2">{actions}</div>}
+          {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
         </div>
       )}
       <div className={cn("p-4 sm:p-5", bodyClassName)}>{children}</div>
@@ -225,14 +166,17 @@ export function Panel({
   );
 }
 
-/** Label/value rows for detail screens. */
+/**
+ * Label/value rows. The list is a size container: from 28rem of its own width each row has a 9rem label column, and
+ * below that the label stacks over the value, so a narrow side panel never squeezes an account id into a sliver.
+ */
 export function Fields({ children, className }: { children: ReactNode; className?: string }) {
-  return <dl className={cn("grid gap-x-6 gap-y-3 text-sm", className)}>{children}</dl>;
+  return <dl className={cn("@container grid gap-x-6 gap-y-3 text-sm", className)}>{children}</dl>;
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-4">
+    <div className="grid min-w-0 grid-cols-1 gap-1 @[28rem]:grid-cols-[9rem_minmax(0,1fr)] @[28rem]:gap-4">
       <dt className="flex items-start gap-1 text-muted-foreground">
         {label}
         {hint && <InfoTip>{hint}</InfoTip>}

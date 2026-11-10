@@ -1,11 +1,12 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { DENIAL_RULES } from "@payminto/protocol";
+import { DENIAL_RULES, type RetryHint } from "@payminto/protocol";
 import { cn } from "@/lib/utils";
-import type { BatchStatus, HspStatus, MandateStatus, PaymentStatus, RefundStatus } from "@/lib/schemas";
+import type { BatchStatus, BudgetStatus, PaymentStatus, RefundStatus } from "@/lib/schemas";
 import { PAYMENT_STATUS_META } from "@/lib/gateway";
-import { RULE_INFO, ruleTitle } from "@/lib/denials";
+import { RULE_INFO, isHubUnreadable, refusalReason, refusalTitle, ruleTitle } from "@/lib/denials";
+import { callStatusLabel } from "@/lib/seller-settlement";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type Tone = "positive" | "warning" | "negative" | "info" | "neutral";
@@ -40,46 +41,12 @@ function Explained({ chip, text }: { chip: ReactNode; text: string }) {
   );
 }
 
-export const HSP_EXPLAIN: Record<HspStatus, { tone: Tone; label: string; text: string }> = {
-  ACCEPT: {
-    tone: "positive",
-    label: "Matched",
-    text: "HashKey settlement receipt: the transfer was seen and matches this settlement (HSP ACCEPT).",
-  },
-  SETTLED: {
-    tone: "positive",
-    label: "Settled",
-    text: "HashKey's coordinator saw the transaction and marked it settled (HSP SETTLED).",
-  },
-  UNSIGNED: {
-    tone: "warning",
-    label: "Not co-signed",
-    text: "Settled on chain from charges the agents signed. The paying agent did not co-sign the HashKey record in time (HSP UNSIGNED).",
-  },
-  REJECT: {
-    tone: "negative",
-    label: "Not matched",
-    text: "The transfer happened on chain, but HashKey's check found something the receipt does not cover, so it does not vouch for it (HSP REJECT).",
-  },
-  PENDING: { tone: "neutral", label: "Waiting", text: "Waiting for the paying agent to co-sign the HashKey record (HSP PENDING)." },
-  COSIGNED: { tone: "info", label: "Co-signed", text: "The paying agent co-signed; waiting for the settlement transaction (HSP COSIGNED)." },
-  SUBMITTED: { tone: "info", label: "Submitted", text: "Sent to HashKey's coordinator; waiting for it to see the transaction (HSP SUBMITTED)." },
-  FAILED: { tone: "negative", label: "Retrying", text: "The HashKey record failed and will be retried. Balances are not affected (HSP FAILED)." },
-};
-
-export function HspChip({ status }: { status: HspStatus | null | undefined }) {
-  if (!status) return <Chip tone="neutral">No HashKey record</Chip>;
-  const e = HSP_EXPLAIN[status];
-  return <Explained chip={<Chip tone={e.tone}>{e.label}</Chip>} text={e.text} />;
-}
-
 const BATCH: Record<BatchStatus, { tone: Tone; label: string }> = {
   building: { tone: "neutral", label: "Preparing" },
-  cosigning: { tone: "info", label: "Co-signing" },
   submitted: { tone: "info", label: "Sending" },
-  included: { tone: "info", label: "Sent" },
   confirmed: { tone: "positive", label: "Final" },
   failed: { tone: "negative", label: "Failed" },
+  unknown: { tone: "warning", label: "Checking the hub" },
 };
 
 export function BatchStatusChip({ status }: { status: BatchStatus }) {
@@ -87,7 +54,7 @@ export function BatchStatusChip({ status }: { status: BatchStatus }) {
   return <Chip tone={b.tone}>{b.label}</Chip>;
 }
 
-const MANDATE: Record<MandateStatus, { tone: Tone; label: string }> = {
+const BUDGET: Record<BudgetStatus, { tone: Tone; label: string }> = {
   pending: { tone: "info", label: "Opening" },
   open: { tone: "positive", label: "Active" },
   revoked: { tone: "neutral", label: "Stopped" },
@@ -95,18 +62,22 @@ const MANDATE: Record<MandateStatus, { tone: Tone; label: string }> = {
   failed: { tone: "negative", label: "Failed" },
 };
 
-export function MandateStatusChip({ status }: { status: MandateStatus }) {
-  const m = MANDATE[status];
+export function BudgetStatusChip({ status }: { status: BudgetStatus }) {
+  const m = BUDGET[status];
   return <Chip tone={m.tone}>{m.label}</Chip>;
 }
 
-export function CallStatusChip({ status }: { status: string }) {
-  if (status === "settled") return <Chip tone="positive">Settled</Chip>;
-  if (status === "settling") return <Chip tone="info">Settling</Chip>;
-  return <Chip tone="warning">In next settlement</Chip>;
+/** A Call's status. One its seller settled on the hub is settled, and says so: it is in no batch and has no Merkle proof. */
+export function CallStatusChip({ status, settledBy }: { status: string; settledBy?: "batch" | "seller" | null }) {
+  const label = callStatusLabel({ status, settledBy });
+  if (status === "settled") return <Chip tone="positive">{label}</Chip>;
+  if (status === "settling") return <Chip tone="info">{label}</Chip>;
+  return <Chip tone="warning">{label}</Chip>;
 }
 
-export function RuleChip({ rule }: { rule: keyof typeof DENIAL_RULES }) {
+/** The rule that refused a Call. With the node's `retry` hint it names a hub that could not be read as that, not as the rule. */
+export function RuleChip({ rule, retry }: { rule: keyof typeof DENIAL_RULES; retry?: RetryHint }) {
+  if (retry && isHubUnreadable(retry)) return <Explained chip={<Chip tone="negative">{refusalTitle(rule, retry)}</Chip>} text={`${refusalReason(rule, retry)} (${rule})`} />;
   return <Explained chip={<Chip tone="negative">{ruleTitle(rule)}</Chip>} text={`${DENIAL_RULES[rule]} (${rule})`} />;
 }
 

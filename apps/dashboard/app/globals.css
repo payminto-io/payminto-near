@@ -27,11 +27,14 @@
   --accent: #e9edf8;
   --accent-foreground: #1b2f86;
   --destructive: #b42318;
+  --destructive-foreground: #ffffff;
   --border: #e1e4ea;
-  --input: #d6dae2;
+  /* Control boundaries (Input, Select, Switch track) hold 3:1 on every ground. */
+  --input: #7a8394;
   --ring: #2443b8;
 
-  --subtle: #8a93a3;
+  /* Quiet text: 4.5:1 or more on every ground. */
+  --subtle: #616b7c;
   --rail: #fafbfc;
   --positive: #0b7a55;
   --positive-soft: #e3f4ec;
@@ -51,7 +54,7 @@
   --chart-bar: #2443b8;
   --chart-line: #2443b8;
   --chart-grid: #e1e4ea;
-  --chart-axis: #8a93a3;
+  --chart-axis: #616b7c;
   --chart-cursor: #eef0f3;
 }
 
@@ -71,11 +74,13 @@
   --accent: #1c2843;
   --accent-foreground: #c9d3fb;
   --destructive: #f07a6e;
+  /* Dark fills lighten the accent, so text on them is dark, as on primary. */
+  --destructive-foreground: #0c121b;
   --border: #222d3d;
-  --input: #2a3648;
+  --input: #6a7690;
   --ring: #8ea2f5;
 
-  --subtle: #6d788b;
+  --subtle: #8691a4;
   --rail: #0f1620;
   --positive: #45c695;
   --positive-soft: #10291f;
@@ -95,7 +100,7 @@
   --chart-bar: #7088ea;
   --chart-line: #8ea2f5;
   --chart-grid: #222d3d;
-  --chart-axis: #6d788b;
+  --chart-axis: #8691a4;
   --chart-cursor: #182231;
 }
 
@@ -118,6 +123,7 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

@@ -2,76 +2,10 @@
  * Pure gateway helpers shared by the hosted checkout and the merchant pages (docs/GATEWAY.md).
  * Amounts stay in token base units as bigint; nothing here goes through floats.
  */
-import { formatUnits, getAddress, isAddress, isAddressEqual, parseUnits, zeroAddress, type Address, type Hex } from "viem";
-import { checkoutTypedData, erc20TransferUri, networks, receiveAuthorizationTypedData, receiveWithAuthorizationTypes, refundRef, routerAuthorization, transferWithAuthorizationTypes } from "@payminto/protocol";
+import { formatAmount, isAccountId, networks, toAtomic, type AccountId, type Network } from "@payminto/protocol";
 import { formatMoney, formatToken } from "./format";
-import { RPC_URL_OVERRIDE } from "./config";
-import type { AuthorizationTemplate, CheckoutView, Payment, PaymentStatus, PaymentTab } from "./schemas";
-
-// ---------------------------------------------------------------------------
-// EIP-681 and EIP-3009 (helpers from @payminto/protocol gateway.ts)
-// ---------------------------------------------------------------------------
-
-/**
- * The QR payload for "Send manually": always rebuilt from the address and amount shown on screen, so the code a payer
- * scans can never disagree with the text they compare it against.
- */
-export function manualPaymentUri(view: Pick<CheckoutView, "token" | "chain_id" | "deposit_address" | "amount_remaining">): string {
-  return erc20TransferUri({ token: getAddress(view.token.address), chainId: view.chain_id, to: getAddress(view.deposit_address), amount: view.amount_remaining });
-}
-
-/** Sign-ready typed data from the view's template and the payer: a transfer to the forwarder, or a receive to the router. */
-export function checkoutSignData(template: AuthorizationTemplate, from: Address) {
-  const domain = { ...template.domain, verifyingContract: getAddress(template.domain.verifyingContract) };
-  const message = { ...template.message, to: getAddress(template.message.to), nonce: template.message.nonce as Hex };
-  if (template.primaryType === "TransferWithAuthorization") {
-    return checkoutTypedData({ domain, types: transferWithAuthorizationTypes, primaryType: "TransferWithAuthorization", message }, getAddress(from));
-  }
-  return checkoutTypedData(
-    {
-      domain,
-      types: receiveWithAuthorizationTypes,
-      primaryType: "ReceiveWithAuthorization",
-      message,
-      router: getAddress(template.router),
-      terms: { paymentRef: template.terms.paymentRef as Hex, payout: getAddress(template.terms.payout), feeRecipient: getAddress(template.terms.feeRecipient), fee: template.terms.fee },
-    },
-    getAddress(from),
-  );
-}
-
-/**
- * A gasless refund (GATEWAY.md sections 6 and 14.2): the payout wallet signs a ReceiveWithAuthorization to the router
- * with terms that pay the refund recipient, no fee, and a nonce bound to the refund. Token domain from the node when it
- * sent one, else chains.ts.
- */
-export function refundSignData(args: {
-  chainId: number;
-  token: Address;
-  router: Address;
-  refundId: string;
-  from: Address;
-  to: Address;
-  amount: bigint;
-  /** The node's own terms for this refund, when it sent them; they win over the locally derived ones. */
-  terms?: { paymentRef: string; payout: string; feeRecipient: string; fee: string } | null;
-  /** The token's EIP-712 name and version from GET /v1/info; needed for a deployment's own test token. */
-  eip712?: { name: string; version: string };
-  nowSec?: number;
-}) {
-  // chains.ts knows only each network's own token; any other token (a deployment's test token) needs the node's answer.
-  const net = networks[args.chainId];
-  const known = net && isAddressEqual(net.token.address, getAddress(args.token)) ? net.token.eip712 : undefined;
-  const eip712 = args.eip712 ?? known;
-  if (!eip712) throw new Error("The server has not sent this token's signing details yet. Reload the page and try again.");
-  const now = args.nowSec ?? Math.floor(Date.now() / 1000);
-  const terms = args.terms
-    ? { paymentRef: args.terms.paymentRef as Hex, payout: getAddress(args.terms.payout), feeRecipient: getAddress(args.terms.feeRecipient), fee: BigInt(args.terms.fee) }
-    : { paymentRef: refundRef(args.chainId, args.refundId), payout: getAddress(args.to), feeRecipient: zeroAddress, fee: 0n };
-  const message = routerAuthorization({ router: getAddress(args.router), terms, from: getAddress(args.from), value: args.amount, validBefore: now + 3600 });
-  const domain = { name: eip712.name, version: eip712.version, chainId: args.chainId, verifyingContract: getAddress(args.token) };
-  return { typedData: receiveAuthorizationTypedData(domain, message), terms };
-}
+import { proofRpcUrl } from "./near-reader";
+import type { Payment, PaymentStatus, PaymentTab } from "./schemas";
 
 // ---------------------------------------------------------------------------
 // Amount input
@@ -89,7 +23,7 @@ export function parseAmountInput(text: string, decimals = 6, bounds: { min?: big
   if (!/^\d*\.?\d*$/.test(raw) || raw === ".") return { ok: false, error: "Use digits and one decimal point." };
   const frac = raw.split(".")[1] ?? "";
   if (frac.length > decimals) return { ok: false, error: `At most ${decimals} decimal places.` };
-  const atomic = parseUnits(raw.startsWith(".") ? `0${raw}` : raw, decimals);
+  const atomic = toAtomic(`${raw.startsWith(".") ? "0" : ""}${raw.endsWith(".") ? raw.slice(0, -1) : raw}`, decimals);
   if (atomic <= 0n) return { ok: false, error: "The amount must be more than zero." };
   if (bounds.min != null && atomic < bounds.min) return { ok: false, error: `The minimum is ${plainAmount(bounds.min, decimals)}.` };
   if (bounds.max != null && atomic > bounds.max) return { ok: false, error: `The maximum is ${plainAmount(bounds.max, decimals)}.` };
@@ -98,9 +32,7 @@ export function parseAmountInput(text: string, decimals = 6, bounds: { min?: big
 
 /** The exact amount as a payer types or pastes it: no grouping, no trailing zeros beyond two places ("25.00", "0.125"). */
 export function plainAmount(atomic: bigint | string, decimals = 6): string {
-  const s = formatUnits(BigInt(atomic), decimals);
-  const [whole, frac = ""] = s.split(".");
-  return `${whole}.${frac.replace(/0+$/, "").padEnd(2, "0")}`;
+  return formatAmount(BigInt(atomic), decimals);
 }
 
 // ---------------------------------------------------------------------------
@@ -209,32 +141,23 @@ export function hostOf(url: string): string {
   }
 }
 
-export function checksum(address: string): Address | null {
-  return isAddress(address.trim()) ? getAddress(address.trim()) : null;
+/** The trimmed NEAR account id, or null when it is not one. */
+export function parseAccount(account: string): AccountId | null {
+  const v = account.trim();
+  return isAccountId(v) ? v : null;
 }
 
-/** "abcd ef01 ..." groups of four so a payer can compare a full address against their wallet. */
-export function groupAddress(address: string): string[] {
-  const body = address.startsWith("0x") ? address.slice(2) : address;
-  const groups = body.match(/.{1,4}/g) ?? [];
-  return address.startsWith("0x") ? ["0x", ...groups] : groups;
-}
+export type GatewayNetwork = { id: Network; name: string; explorer: string | null; rpcUrl: string | null };
 
-export type GatewayNetwork = { chainId: number; name: string; explorer: string | null; rpcUrl: string | null };
-
-/**
- * The chain a checkout runs on, named from the node's /v1/info when it has answered and from the protocol package
- * until then (the checkout view carries only `chain_id`), so the name never flickers.
- */
-export function gatewayNetwork(chainId: number, info?: { network: { chainId: number; name: string; rpcUrl?: unknown; rpc_url?: unknown }; explorer?: string | null } | null): GatewayNetwork {
-  const known = networks[chainId];
-  const fromInfo = info && info.network.chainId === chainId ? info : null;
-  const rpc = fromInfo?.network.rpc_url ?? fromInfo?.network.rpcUrl;
+/** The network a checkout runs on, from the node's /v1/info when it has answered and the protocol package until then. */
+export function gatewayNetwork(info?: { network: { id: string; name: string; explorer?: string | null; rpc_url?: string | null } } | null): GatewayNetwork {
+  const id = (info?.network.id ?? "near:testnet") as Network;
+  const known = networks[id];
   return {
-    chainId,
-    name: fromInfo?.network.name || known?.chain.name || `Chain ${chainId}`,
-    explorer: (fromInfo ? fromInfo.explorer : null)?.replace(/\/+$/, "") || known?.explorer || null,
-    rpcUrl: typeof rpc === "string" && rpc ? rpc : (RPC_URL_OVERRIDE ?? known?.chain.rpcUrls.default.http[0] ?? null),
+    id,
+    name: info?.network.name || known?.name || id,
+    explorer: (info?.network.explorer ?? known?.explorer ?? "").replace(/\/+$/, "") || null,
+    rpcUrl: proofRpcUrl(id, info?.network.rpc_url),
   };
 }
 

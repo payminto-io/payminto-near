@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { computeFees } from "@payminto/protocol";
-import { Bot, FileSignature, Send, ShieldCheck, Wallet } from "lucide-react";
+import { FileSignature, Wallet } from "lucide-react";
 import { useToken } from "@/lib/queries";
 import { formatBps, parseAmountInput, parsePercentToBps, plainAmount } from "@/lib/gateway";
 import { formatToken } from "@/lib/format";
@@ -14,17 +14,13 @@ import { Segmented, Unit } from "@/components/gateway/kit";
 export type MethodRow = Omit<MerchantMethod, "merchant_id">;
 
 export const METHOD_INFO: Record<PaymentMethod, { label: string; hint: string; icon: typeof Wallet }> = {
-  wallet: { label: "Pay with wallet", hint: "Customer connects a wallet and approves with one signature, no network fee needed.", icon: Wallet },
-  deposit: { label: "Send to address", hint: "Customer sends the amount to a one-time address from any wallet or exchange.", icon: Send },
-  x402: { label: "AI agent", hint: "An AI agent pays automatically using the standard web payment protocol.", icon: Bot },
-  voucher: { label: "AI agent with budget", hint: "An agent pays from a budget its owner set up in Payminto.", icon: FileSignature },
-  hsp: { label: "Pay with HSP", hint: "Customer or agent signs once and HashKey's HSP sends the payment to you.", icon: ShieldCheck },
+  wallet: { label: "Pay with a NEAR wallet", hint: "The customer approves one transfer to the hub from any NEAR wallet.", icon: Wallet },
+  voucher: { label: "AI agent with a Budget", hint: "An agent pays per Call from a Budget its owner opened on the hub.", icon: FileSignature },
 };
 
-export const DEFAULT_METHODS: MethodRow[] = (["wallet", "deposit", "x402", "voucher", "hsp"] as const).map((method) => ({
+export const DEFAULT_METHODS: MethodRow[] = (["wallet", "voucher"] as const).map((method) => ({
   method,
-  // HSP depends on HashKey's allowlist, so a business turns it on itself.
-  enabled: method !== "hsp",
+  enabled: true,
   fee_bps: 0,
   fee_fixed: "0",
   bearer: "merchant",
@@ -54,7 +50,7 @@ export function MethodsEditor({
   onChange: (rows: MethodRow[]) => void;
   editableFees: boolean;
   readOnly?: boolean;
-  /** A status line under a method, such as whether HSP can take payments now. */
+  /** A status line under a method. */
   notes?: Partial<Record<MethodRow["method"], ReactNode>>;
 }) {
   const t = useToken();

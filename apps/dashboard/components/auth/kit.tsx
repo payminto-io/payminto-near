@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { BrandMark } from "@/components/app/shell";
 
-const LINES = ["Get paid in stablecoins by people and AI agents.", "Money goes straight to your wallet. Nobody holds it, not even us.", "Self-hosted on HashKey Chain. Set up in minutes."];
+const LINES = ["Get paid in stablecoins by people and AI agents.", "Funds are escrowed in an unaudited contract on NEAR.", "Self-hosted on NEAR. Set up in minutes."];
 
 /** The network for the corner badge, from the public GET /v1/info; nothing until the server answers, so it is never wrong. */
 function useNetworkBadge(): { name: string; testnet: boolean } | null {
@@ -32,10 +32,9 @@ function useNetworkBadge(): { name: string; testnet: boolean } | null {
     staleTime: 60_000,
     retry: false,
   });
-  if (MOCK_MODE) return { name: "HashKey Chain Testnet", testnet: true };
+  if (MOCK_MODE) return { name: "NEAR testnet", testnet: true };
   if (!info.data) return null;
-  const chainId = info.data.chainId ?? info.data.network.chainId;
-  return { name: info.data.network.name, testnet: chainId !== 177 };
+  return { name: info.data.network.name, testnet: info.data.network.testnet };
 }
 
 export function AuthLayout({ children, wide = false }: { children: ReactNode; wide?: boolean }) {

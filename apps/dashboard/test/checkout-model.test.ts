@@ -21,7 +21,7 @@ import type { CheckoutView } from "@/lib/schemas";
 
 const NOW = Date.parse("2026-11-01T12:00:00Z");
 const iso = (ms: number) => new Date(ms).toISOString();
-const ADDR = "0x00000000000000000000000000000000000000a1";
+const TOKEN = "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
 
 function view(over: Partial<CheckoutView> = {}): CheckoutView {
   return {
@@ -37,14 +37,19 @@ function view(over: Partial<CheckoutView> = {}): CheckoutView {
     amount_due: "25000000",
     amount_paid: "0",
     amount_remaining: "25000000",
-    chain_id: 133,
-    token: { address: ADDR, symbol: "USDC", decimals: 6 } as CheckoutView["token"],
-    deposit_address: ADDR,
+    network: "near:testnet",
+    token: { address: TOKEN, symbol: "USDC", decimals: 6 },
+    hub: "hub.payminto.testnet",
     method: "wallet",
-    methods: ["wallet", "deposit"],
-    authorization: null,
+    methods: ["wallet"],
+    wallet: {
+      terms: { payment_id: "ab".repeat(32), merchant: "acme-store.testnet", amount: "25000000", expiry_ms: String(NOW + 20 * 60_000) },
+      signature: "cd".repeat(64),
+      checkout_key: "ed25519:x",
+      transaction: { receiverId: TOKEN, actions: [{ type: "FunctionCall", params: { methodName: "ft_transfer_call", args: {}, gas: "1", deposit: "1" } }] },
+    },
     success_url: null,
-    order_hash: `0x${"ab".repeat(32)}`,
+    order_hash: "ab".repeat(32),
     expires_at: iso(NOW + 20 * 60_000),
     created_at: iso(NOW - 10 * 60_000),
     ...over,
@@ -53,24 +58,23 @@ function view(over: Partial<CheckoutView> = {}): CheckoutView {
 
 describe("quoteFor: the amount due for each way of paying", () => {
   it("uses the node's numbers for the method it quoted", () => {
-    const q = quoteFor(view({ method: "deposit", surcharge: "100000", amount_due: "25100000", amount_remaining: "25100000" }), "deposit");
+    const q = quoteFor(view({ method: "wallet", surcharge: "100000", amount_due: "25100000", amount_remaining: "25100000" }), "wallet");
     expect(q).toEqual({ surcharge: 100000n, due: 25100000n, remaining: 25100000n, known: true, ready: true });
   });
-  it("marks the other method as not known until it is re-quoted, starting from the business's price", () => {
-    const q = quoteFor(view({ method: "deposit", surcharge: "100000", amount_due: "25100000" }), "wallet");
+  it("is not known until the node quotes the wallet, starting from the business's price", () => {
+    const q = quoteFor(view({ method: null, surcharge: "100000", amount_due: "25100000" }), "wallet");
     expect(q).toEqual({ surcharge: 0n, due: 25000000n, remaining: 25000000n, known: false, ready: false });
   });
   it("shows a quote seen earlier at once, but is not ready to pay until the node re-quotes", () => {
-    let cache = rememberQuote({}, view({ method: "deposit", surcharge: "100000", amount_due: "25100000" }));
-    cache = rememberQuote(cache, view({ method: "wallet" }));
-    const q = quoteFor(view({ method: "wallet" }), "deposit", cache);
+    const cache = rememberQuote({}, view({ method: "wallet", surcharge: "100000", amount_due: "25100000" }));
+    const q = quoteFor(view({ method: null }), "wallet", cache);
     expect(q.due).toBe(25100000n);
     expect(q.surcharge).toBe(100000n);
     expect(q.known).toBe(true);
     expect(q.ready).toBe(false);
   });
-  it("binds the remainder once money arrived, whatever method is picked", () => {
-    const v = view({ status: "partially_paid", method: "deposit", amount_paid: "20000000", amount_remaining: "5000000" });
+  it("binds the remainder once money arrived", () => {
+    const v = view({ status: "partially_paid", method: "wallet", amount_paid: "20000000", amount_remaining: "5000000" });
     expect(quoteFor(v, "wallet").remaining).toBe(5000000n);
     expect(quoteFor(v, "wallet").ready).toBe(true);
     expect(rememberQuote({}, v)).toEqual({});
@@ -78,16 +82,16 @@ describe("quoteFor: the amount due for each way of paying", () => {
 });
 
 describe("methods", () => {
-  it("offers the wallet only while it can still be quoted for it", () => {
-    expect(availableMethods(view())).toEqual(["wallet", "deposit"]);
-    expect(availableMethods(view({ status: "partially_paid", amount_paid: "1" }))).toEqual(["deposit"]);
-    expect(availableMethods(view({ methods: ["deposit"] }))).toEqual(["deposit"]);
+  it("offers the NEAR wallet while the node has signed terms, or can still quote them", () => {
+    expect(availableMethods(view())).toEqual(["wallet"]);
+    expect(availableMethods(view({ wallet: null }))).toEqual(["wallet"]);
+    expect(availableMethods(view({ status: "partially_paid", amount_paid: "1", wallet: null }))).toEqual([]);
+    expect(availableMethods(view({ methods: [] }))).toEqual([]);
   });
-  it("opens on Send to address when there is no browser wallet", () => {
-    expect(initialMethod(view(), false)).toBe("deposit");
-    expect(initialMethod(view(), true)).toBe("wallet");
-    expect(initialMethod(view({ method: "deposit" }), true)).toBe("deposit");
-    expect(initialMethod(view({ methods: [] }), true)).toBeNull();
+  it("never offers the voucher method to a person at checkout", () => {
+    expect(availableMethods(view({ methods: ["wallet", "voucher"] }))).toEqual(["wallet"]);
+    expect(initialMethod(view())).toBe("wallet");
+    expect(initialMethod(view({ methods: [] }))).toBeNull();
   });
 });
 
@@ -165,12 +169,12 @@ describe("countdown and redirect", () => {
 });
 
 describe("wallet steps", () => {
-  it("guides through connect, switch network and approve in plain words", () => {
-    expect(walletStepCopy("switching", "HashKey Chain Testnet").title).toBe("Switching to HashKey Chain Testnet");
+  it("guides through connect and approve in plain words, with no network switch on NEAR", () => {
+    expect(walletStepCopy("approving", "NEAR testnet").hint).toContain("NEAR testnet hub");
     expect(walletStepIndex("idle")).toBe(-1);
     expect(walletStepIndex("connecting")).toBe(0);
-    expect(walletStepIndex("approving")).toBe(2);
-    expect(walletStepIndex("submitting")).toBe(3);
+    expect(walletStepIndex("approving")).toBe(1);
+    expect(walletStepIndex("submitting")).toBe(2);
   });
 });
 

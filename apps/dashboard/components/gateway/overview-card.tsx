@@ -39,7 +39,7 @@ export function GatewayOverviewCard() {
           <dl className="grid grid-cols-3 gap-3">
             <div>
               <dt className="text-xs text-muted-foreground">Volume</dt>
-              <dd className="mt-0.5 font-semibold"><Money atomic={q.data.volume} maxFraction={2} /></dd>
+              <dd className="mt-0.5 font-semibold"><Money atomic={q.data.volume} /></dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Payments</dt>
@@ -72,7 +72,7 @@ export function GatewayHome() {
     <>
       <PageHeader
         title={membership ? membership.name : "Home"}
-        description={readOnly ? "Your payments over the last 30 days. You can view everything here; an Admin makes changes." : "Your payments over the last 30 days. Money lands in your payout wallet the moment it is paid."}
+        description={readOnly ? "Your payments over the last 30 days. You can view everything here; an Admin makes changes." : "Your payments over the last 30 days. The hub credits each payment to your payout account as it lands."}
         actions={
           access.can("links.write") && (
             <Button asChild>
@@ -90,7 +90,7 @@ export function GatewayHome() {
       ) : (
         <StatStrip
           stats={[
-            { label: "Received, 30 days", value: <Money atomic={q.data.volume} maxFraction={2} /> },
+            { label: "Received, 30 days", value: <Money atomic={q.data.volume} /> },
             { label: "Payments", value: <span className="num">{formatInt(q.data.payments)}</span>, note: `${Math.round(q.data.conversion * 100)}% of finished checkouts paid` },
             { label: "Active payment links", value: <span className="num">{formatInt(activeLinks)}</span>, note: links.data ? `${links.data.length} in total` : undefined },
             { label: "Blocked, last 24h", value: <span className="num">{formatInt(blocked)}</span>, note: blocked > 0 ? "refused, no money moved" : "nothing refused", tone: blocked > 0 ? "negative" : undefined },

@@ -107,7 +107,7 @@ function MerchantDetailPagePage() {
       {m.status === "suspended" && <p className="mb-5 rounded-lg bg-warning-soft px-4 py-3 text-sm text-warning">Suspended: checkouts and links for this business refuse new payments. Money already sent still reaches its payout wallet.</p>}
       <StatStrip
         stats={[
-          { label: "Volume, 30 days", value: m.volume_30d ? <Money atomic={m.volume_30d} maxFraction={2} /> : "-" },
+          { label: "Volume, 30 days", value: m.volume_30d ? <Money atomic={m.volume_30d} /> : "-" },
           { label: "Payments, 30 days", value: <span className="num">{m.payments_30d != null ? formatInt(m.payments_30d) : "-"}</span> },
           { label: "Pricing plan", value: plan?.name ?? "-", note: plan ? describeFeePlan(plan, t) : undefined },
         ]}

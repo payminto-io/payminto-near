@@ -11,6 +11,7 @@ RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/chain/package.json packages/chain/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/models/package.json packages/models/
 COPY apps/node/package.json apps/node/
@@ -21,6 +22,7 @@ COPY apps/agent/package.json apps/agent/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --filter "dashboard..."
 COPY packages/protocol packages/protocol
+COPY packages/chain packages/chain
 COPY apps/dashboard apps/dashboard
 ARG NEXT_PUBLIC_NODE_URL=http://localhost:8787
 ENV NEXT_PUBLIC_NODE_URL=${NEXT_PUBLIC_NODE_URL} NEXT_OUTPUT=standalone

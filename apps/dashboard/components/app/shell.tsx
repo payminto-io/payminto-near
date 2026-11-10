@@ -13,8 +13,7 @@ import { cn } from "@/lib/utils";
 import { MOCK_MODE } from "@/lib/config";
 import { useAccess, useSession } from "@/lib/session";
 import { useLive } from "@/lib/live";
-import { chainIdOf, useHealth, useInfo } from "@/lib/queries";
-import { formatInt } from "@/lib/format";
+import { useHealth, useInfo } from "@/lib/queries";
 import { isActiveHref, sectionOf } from "@/lib/nav";
 import { isAuthPath, isAuthPathForSignedIn, loginHref, safeNext } from "@/lib/routes";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -26,6 +25,7 @@ import { CommandPalette, openPalette } from "./command-palette";
 import { ShortcutsSheet } from "./shortcuts-sheet";
 import { StepUpDialog } from "./step-up-dialog";
 import { useBadgeCounts } from "./nav-badges";
+import { OperatorWarningStrip } from "./operator-warnings";
 
 /** Mark: several obligations converging into one settled transfer. */
 export function BrandMark({ className }: { className?: string }) {
@@ -46,7 +46,7 @@ function LiveIndicator() {
   const { status, wasLive } = useLive();
   const access = useAccess();
   if (!access.can("agents.read")) return null;
-  const label = status === "live" ? "Live" : status === "connecting" ? (wasLive ? "Reconnecting" : "Connecting") : "Offline";
+  const label = status === "live" ? "Live updates" : status === "connecting" ? (wasLive ? "Reconnecting" : "Connecting") : "Updates off";
   const tone = status === "live" ? "text-positive" : status === "connecting" ? "text-warning" : "text-negative";
   return (
     <Tooltip>
@@ -69,18 +69,16 @@ function NetworkPill() {
   const info = useInfo();
   const health = useHealth();
   if (!info.data) return <span className="h-8 w-36 animate-pulse rounded-md bg-muted" />;
-  const chainId = chainIdOf(info.data);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span tabIndex={0} className="inline-flex h-8 items-center gap-2 rounded-md border bg-card px-2.5 text-xs">
           <span className={cn("size-1.5 rounded-full", health.data && !health.data.ok ? "bg-negative" : "bg-positive")} aria-hidden />
           <span className="font-medium">{info.data.network.name}</span>
-          {health.data?.blockNumber != null && <span className="num hidden text-muted-foreground lg:inline">block {formatInt(health.data.blockNumber)}</span>}
           {health.data && !health.data.ok && <span className="text-negative">Network unreachable</span>}
         </span>
       </TooltipTrigger>
-      <TooltipContent>Chain id {chainId}. Payments settle on this network.</TooltipContent>
+      <TooltipContent>{info.data.network.id}. Payments settle on this network.</TooltipContent>
     </Tooltip>
   );
 }
@@ -88,7 +86,6 @@ function NetworkPill() {
 /** "Testnet: no real money" or "Demo data" under the header, so nobody mistakes test money for real money. */
 function EnvironmentStrip() {
   const info = useInfo();
-  const chainId = chainIdOf(info.data);
   if (MOCK_MODE) {
     return (
       <div role="note" className="border-b border-warning/20 bg-warning-soft px-4 py-1.5 text-center text-xs font-medium text-warning sm:px-6">
@@ -96,11 +93,10 @@ function EnvironmentStrip() {
       </div>
     );
   }
-  if (chainId !== 133 && chainId !== 11155111 && chainId !== 31337 && chainId !== 0) return null;
-  if (!info.data) return null;
+  if (!info.data?.network.testnet) return null;
   return (
     <div role="note" className="border-b border-warning/20 bg-warning-soft px-4 py-1.5 text-center text-xs font-medium text-warning sm:px-6">
-      {chainId === 31337 ? "Local test network: no real money." : "Testnet: no real money."}
+      {info.data.network.id === "near:sandbox" ? "Local test network: no real money." : "Testnet: no real money."}
     </div>
   );
 }
@@ -149,9 +145,9 @@ function AccountBanners() {
 const DETAIL_CRUMBS: Record<string, { item: string; create?: string }> = {
   "/payments": { item: "Payment" },
   "/links": { item: "Payment link", create: "New payment link" },
-  "/mandates": { item: "Budget", create: "New budget" },
+  "/budgets": { item: "Budget", create: "New budget" },
   "/batches": { item: "Settlement" },
-  "/receipts": { item: "Charge" },
+  "/receipts": { item: "Call" },
   "/developers/webhooks": { item: "Webhook" },
   "/platform/businesses": { item: "Business", create: "Add business" },
   "/agents": { item: "AI agent", create: "New AI agent" },
@@ -298,7 +294,8 @@ function Shell({ children }: { children: ReactNode }) {
           <EnvironmentStrip />
         </header>
         <AccountBanners />
-        <main id="main" key={pathname} className="page-in mx-auto w-full max-w-[1320px] px-4 pt-6 pb-28 sm:px-6 sm:pt-8 lg:px-8 lg:pb-16">
+        <OperatorWarningStrip />
+        <main id="main" key={pathname} className="page-in mx-auto w-full max-w-[1320px] px-4 pt-6 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-8 lg:px-8 lg:pb-16">
           {children}
         </main>
         <TabBar onMore={() => setSheetOpen(true)} />

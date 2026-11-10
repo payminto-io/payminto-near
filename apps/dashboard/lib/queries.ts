@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { explorerAddress, explorerTx } from "@payminto/protocol";
+import { explorerAddress, explorerTx, isId32, type Network } from "@payminto/protocol";
 import { useApi, useSession } from "./session";
 import type { CallsQuery } from "./api";
 import type { Call, Info } from "./schemas";
@@ -11,8 +11,8 @@ export const qk = {
   info: ["info"] as const,
   health: ["health"] as const,
   overview: ["overview"] as const,
-  mandates: ["mandates"] as const,
-  mandate: (id: string) => ["mandates", id] as const,
+  budgets: ["budgets"] as const,
+  budget: (id: string) => ["budgets", id] as const,
   providers: ["providers"] as const,
   calls: (q: CallsQuery) => ["calls", q] as const,
   denials: ["denials"] as const,
@@ -46,15 +46,15 @@ function useAgentsReadable(): boolean {
   return s.session.actorType === "recovery_key" || s.session.grants.platform.includes("agents.read");
 }
 
-export function useMandates() {
+export function useBudgets() {
   const api = useApi();
   const enabled = useAgentsReadable();
-  return useQuery({ queryKey: qk.mandates, queryFn: () => api.mandates(), enabled });
+  return useQuery({ queryKey: qk.budgets, queryFn: () => api.budgets(), enabled });
 }
 
-export function useMandate(id: string) {
+export function useBudget(id: string) {
   const api = useApi();
-  return useQuery({ queryKey: qk.mandate(id), queryFn: () => api.mandate(id), enabled: Boolean(id) });
+  return useQuery({ queryKey: qk.budget(id), queryFn: () => api.budget(id), enabled: Boolean(id) });
 }
 
 /** The public provider catalog in one request: enough to name payee wallets without waiting for per-provider detail. */
@@ -74,10 +74,11 @@ export function useCalls(q: CallsQuery = {}) {
 }
 
 /** Cursor-paged calls for "Load more" lists; pages follow the node's nextCursor. */
-export function useCallPages(q: Omit<CallsQuery, "cursor">) {
+export function useCallPages(q: Omit<CallsQuery, "cursor">, enabled = true) {
   const api = useApi();
   return useInfiniteQuery({
     queryKey: ["calls", "pages", q],
+    enabled,
     queryFn: ({ pageParam }) => api.calls({ ...q, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
@@ -103,9 +104,11 @@ export function useDenials() {
   return useQuery({ queryKey: qk.denials, queryFn: () => api.denials(100) });
 }
 
+/** Settlement batches need `agents.read`; a role without it (a business member proving a Call) skips the read. */
 export function useBatches() {
   const api = useApi();
-  return useQuery({ queryKey: qk.batches, queryFn: () => api.batches() });
+  const enabled = useAgentsReadable();
+  return useQuery({ queryKey: qk.batches, queryFn: () => api.batches(), enabled });
 }
 
 export function useBatch(id: string) {
@@ -130,7 +133,7 @@ export function useTrialBalance() {
 
 export function useProof(callId: string) {
   const api = useApi();
-  return useQuery({ queryKey: qk.proof(callId), queryFn: () => api.receiptProof(callId), enabled: /^0x[0-9a-fA-F]{64}$/.test(callId), retry: false });
+  return useQuery({ queryKey: qk.proof(callId), queryFn: () => api.receiptProof(callId), enabled: isId32(callId), retry: false });
 }
 
 export type TokenMeta = { symbol: string; decimals: number };
@@ -141,9 +144,8 @@ export function useToken(): TokenMeta {
   return { symbol: data?.token.symbol ?? "USDC", decimals: data?.token.decimals ?? 6 };
 }
 
-export function chainIdOf(info: Info | undefined): number {
-  if (!info) return 0;
-  return info.chainId ?? info.network.chainId;
+export function networkIdOf(info: Info | undefined): Network {
+  return (info?.network.id ?? "near:testnet") as Network;
 }
 
 /** Explorer links, preferring the explorer base the node advertises. */
@@ -151,19 +153,19 @@ export function useExplorer() {
   const { data } = useInfo();
   return useMemo(() => {
     const base = data?.explorer?.replace(/\/+$/, "") || null;
-    const chainId = chainIdOf(data);
+    const network = networkIdOf(data);
     return {
-      tx: (hash: string) => (base ? `${base}/tx/${hash}` : explorerTx(chainId, hash)),
-      address: (a: string) => (base ? `${base}/address/${a}` : explorerAddress(chainId, a)),
+      tx: (hash: string) => (base ? `${base}/txns/${hash}` : explorerTx(network, hash)),
+      address: (a: string) => (base ? `${base}/address/${a}` : explorerAddress(network, a)),
     };
   }, [data]);
 }
 
 export type Party = { name: string; kind: "agent" | "provider" | "owner" | "operator" | "hub" | "unknown"; address: string };
 
-/** Names wallets the way an operator thinks about them: by provider name or mandate agent label. */
+/** Names wallets the way an operator thinks about them: by provider name or budget agent label. */
 export function useDirectory() {
-  const mandates = useMandates();
+  const budgets = useBudgets();
   const providers = useProviderCatalog();
   const info = useInfo();
   return useMemo(() => {
@@ -173,16 +175,15 @@ export function useDirectory() {
       if (!map.has(k)) map.set(k, { ...p, address });
     };
     for (const p of providers.data ?? []) put(p.payee, { name: p.name, kind: "provider" });
-    for (const m of mandates.data ?? []) {
-      put(m.mandate.agent, { name: m.label.split(" - ")[0] ?? m.label, kind: "agent" });
+    for (const m of budgets.data ?? []) {
+      put(m.agent, { name: m.label.split(" - ")[0] ?? m.label, kind: "agent" });
     }
-    for (const m of mandates.data ?? []) put(m.mandate.owner, { name: "Budget owner", kind: "owner" });
     if (info.data) {
       put(info.data.operator, { name: "Server wallet", kind: "operator" });
       put(info.data.hub, { name: "Settlement contract", kind: "hub" });
     }
     const lookup = (address: string | null | undefined): Party | null => (address ? map.get(address.toLowerCase()) ?? null : null);
-    const isAlsoAgent = (address: string) => (mandates.data ?? []).some((m) => m.mandate.agent.toLowerCase() === address.toLowerCase());
-    return { lookup, isAlsoAgent, ready: Boolean(mandates.data && providers.data) };
-  }, [mandates.data, providers.data, info.data]);
+    const isAlsoAgent = (address: string) => (budgets.data ?? []).some((m) => m.agent.toLowerCase() === address.toLowerCase());
+    return { lookup, isAlsoAgent, ready: Boolean(budgets.data && providers.data) };
+  }, [budgets.data, providers.data, info.data]);
 }

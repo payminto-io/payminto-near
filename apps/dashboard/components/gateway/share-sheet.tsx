@@ -6,19 +6,63 @@ import { Download, ExternalLink } from "lucide-react";
 import type { PaymentLink } from "@/lib/schemas";
 import { embedButtonHtml } from "@/lib/gateway";
 import { useMerchant } from "@/lib/gateway-queries";
+import { useInfo } from "@/lib/queries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { CopyAction } from "@/components/checkout/parts";
 import { CodeBlock, Segmented } from "./kit";
 
-/** The agent side of one link: a plain request answers 402 with PAYMENT-REQUIRED (GATEWAY.md section 5). */
-export function agentSnippets(url: string, openAmount: boolean) {
-  const target = openAmount ? `${url}?amount=5000000` : url;
+/** What the samples name: the server the agent trusts and the hub it clears on, from `/v1/info`, and the link's price. */
+export type AgentSnippetContext = { network?: string | null; hub?: string | null; nodeUrl?: string | null; amount?: string | null };
+
+const OPEN_AMOUNT_EXAMPLE = "5000000";
+
+/** An atomic amount as a TypeScript bigint literal: 5000000 becomes 5_000_000n. */
+const bigintLiteral = (atomic: string) => `${atomic.replace(/\B(?=(\d{3})+$)/g, "_")}n`;
+
+/**
+ * The agent side of one link (GATEWAY.md section 5): a plain request answers 402 with a PAYMENT-REQUIRED header, x402
+ * version 2, whose one offer is a `payminto-voucher` on NEAR. An agent pays it with `AgentClient` from `@payminto/sdk`
+ * (packages/sdk/README.md, "Gateway client"): a voucher signed by its Budget key, never a token transfer of its own.
+ */
+export function agentSnippets(url: string, openAmount: boolean, ctx: AgentSnippetContext = {}) {
+  const target = openAmount ? `${url}?amount=${OPEN_AMOUNT_EXAMPLE}` : url;
+  const maxPrice = bigintLiteral(openAmount ? OPEN_AMOUNT_EXAMPLE : (ctx.amount ?? OPEN_AMOUNT_EXAMPLE));
+  const network = ctx.network ?? "near:testnet";
+  const hub = ctx.hub ?? "<hub account>";
+  const nodeUrl = ctx.nodeUrl ?? "<your Payminto server>";
   return {
-    curl: `# Ask like an agent: no text/html in Accept, so the server answers 402\ncurl -i -H "Accept: application/json" "${target}"\n\n# HTTP/1.1 402 Payment Required\n# PAYMENT-REQUIRED: <base64 JSON: exact (EIP-3009) and payminto-voucher offers>\n\n# Retry with the signed payment; the server relays it and answers 200\ncurl -i -H "PAYMENT-SIGNATURE: <base64 payload>" "${target}"\n# PAYMENT-RESPONSE: <paymentId, status, txHash>`,
-    sdk: `import { payExact } from "@payminto/sdk";\n\n// Any x402 wallet: signs the exact (EIP-3009) offer and retries.\nconst receipt = await payExact("${target}", { account });\nconsole.log(receipt.paymentId, receipt.status);`,
-    mcp: `// An agent with a Payminto budget pays a charge, checked against its limits:\npay_link({ url: "${target}" })`,
+    curl: [
+      "# Ask like an agent: no text/html in Accept, so the server answers 402",
+      `curl -i -H "Accept: application/json" "${target}"`,
+      "",
+      "# HTTP/1.1 402 Payment Required",
+      `# PAYMENT-REQUIRED: <base64 JSON, x402 version 2: one payminto-voucher offer on ${network}>`,
+      "",
+      "# Retry with a voucher signed by the agent's Budget key; the server clears it and answers 200",
+      `curl -i -H "Accept: application/json" -H "PAYMENT-SIGNATURE: <base64 payload>" "${target}"`,
+      "# PAYMENT-RESPONSE: <base64 JSON: success, network, payer, receipts, positions>",
+      "# Body: payment_id, status, amount_due, amount_paid",
+    ].join("\n"),
+    sdk: [
+      'import { AgentClient, defaultAgentKeyPath, readAgentKeyFile } from "@payminto/sdk";',
+      "",
+      "// The agent holds a bare ed25519 key: no NEAR account and no gas. It signs vouchers within its Budget.",
+      "const agent = new AgentClient({",
+      `  network: "${network}",`,
+      `  hub: "${hub}",`,
+      `  nodeUrl: "${nodeUrl}",`,
+      '  budgetId: "<Budget id>",',
+      "  keypair: readAgentKeyFile(defaultAgentKeyPath()),",
+      "});",
+      "",
+      "// Answers the 402 with a signed voucher and retries. A price above maxPrice is refused without signing.",
+      `const { response, payment } = await agent.pay("${target}", { headers: { accept: "application/json" } }, { maxPrice: ${maxPrice} });`,
+      'console.log(payment.status, payment.paid); // "paid" once the agent\'s own server booked the voucher',
+      "console.log((await response.json()).payment_id);",
+    ].join("\n"),
+    mcp: `// An agent with a Payminto Budget pays the link with signed vouchers, checked against its limits:\npay_link({ url: "${url}"${openAmount ? `, amountAtomic: "${OPEN_AMOUNT_EXAMPLE}"` : ""} })`,
   };
 }
 
@@ -27,7 +71,8 @@ export function ShareSheet({ link, open, onOpenChange }: { link: PaymentLink; op
   const [tab, setTab] = useState<"link" | "agents" | "embed">("link");
   const svgRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const snippets = agentSnippets(url, link.amount === null);
+  const info = useInfo();
+  const snippets = agentSnippets(url, link.amount === null, { network: info.data?.network.id, hub: info.data?.hub, nodeUrl: info.data?.publicUrl, amount: link.amount });
   const file = `payminto-${link.slug}`;
   const merchant = useMerchant(link.merchant_id);
   const button = embedButtonHtml(url, merchant.data?.brand_color);
@@ -114,8 +159,8 @@ export function ShareSheet({ link, open, onOpenChange }: { link: PaymentLink; op
               {(
                 [
                   ["HTTP (curl)", snippets.curl],
-                  ["AI agent (x402)", snippets.sdk],
-                  ["AI agent with budget (MCP)", snippets.mcp],
+                  ["AI agent with a Budget (SDK)", snippets.sdk],
+                  ["AI agent with a Budget (MCP)", snippets.mcp],
                 ] as const
               ).map(([label, code]) => (
                 <div key={label} className="flex flex-col gap-1.5">

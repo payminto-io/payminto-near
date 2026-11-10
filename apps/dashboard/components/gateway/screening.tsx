@@ -15,8 +15,8 @@ export const SCREENING_RULE_TITLE: Record<ScreeningRule, string> = {
   PAYER_TOO_NEW: "Wallet has too little history",
 };
 
-const METHOD_WORD: Record<string, string> = { wallet: "Pay with wallet", deposit: "Send to address", x402: "AI agent", voucher: "AI agent with budget", hsp: "Pay with HSP" };
-const STAGE_WORD: Record<string, string> = { x402: "AI agent", authorize: "Pay with wallet", deposit: "Send to address", relay: "AI agent", hsp: "Pay with HSP" };
+const METHOD_WORD: Record<string, string> = { wallet: "a NEAR wallet", voucher: "an AI agent's Budget" };
+const STAGE_WORD: Record<string, string> = { x402: "an AI agent", authorize: "a NEAR wallet", deposit: "a direct transfer", relay: "an AI agent" };
 
 /** Refused gateway requests (GATEWAY.md section 13.1): no signature, requirements or relay was given for these. */
 export function ScreeningDecisions({ title = "Blocked payments", className }: { title?: string; className?: string }) {

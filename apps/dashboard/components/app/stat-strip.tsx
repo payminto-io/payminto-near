@@ -23,7 +23,7 @@ export function StatStrip({ stats, className }: { stats: Stat[]; className?: str
           {s.note && (
             <dd
               className={cn(
-                "mt-1 line-clamp-2 text-xs sm:line-clamp-1",
+                "mt-1 text-xs text-pretty",
                 s.tone === "positive" ? "text-positive" : s.tone === "negative" ? "text-negative" : "text-muted-foreground",
               )}
             >

@@ -4,7 +4,7 @@
  */
 import { formatToken } from "./format";
 import { contrastRatio, normalizeBrandColor, readableOn } from "./gateway";
-import type { CheckoutHsp, CheckoutView, HspPaymentStatus, PaymentMethod } from "./schemas";
+import type { CheckoutView, PaymentMethod } from "./schemas";
 
 export type CheckoutPhase =
   | "open"
@@ -67,7 +67,7 @@ export function checkoutCopy(phase: CheckoutPhase, c: CopyContext): PhaseCopy {
     case "open":
       return {
         headline: "Waiting for your payment",
-        body: `Pay ${c.amount} with your wallet, or send it from any wallet or exchange.`,
+        body: `Pay ${c.amount} from your NEAR wallet.`,
         next: "We detect your payment automatically. Keep this page open.",
         tone: "neutral",
       };
@@ -75,7 +75,7 @@ export function checkoutCopy(phase: CheckoutPhase, c: CopyContext): PhaseCopy {
       return {
         headline: "Approve in your wallet",
         body: `Approve paying ${c.amount} in your wallet. Keep this page open.`,
-        next: "Nothing moves until you approve. There is no network fee to pay.",
+        next: "Nothing moves until you approve. Your wallet adds a small NEAR network fee.",
         tone: "info",
       };
     case "processing":
@@ -88,7 +88,7 @@ export function checkoutCopy(phase: CheckoutPhase, c: CopyContext): PhaseCopy {
     case "partially_paid":
       return {
         headline: "Partly paid",
-        body: `Received ${c.paid} of ${c.amount}. Send the remaining ${c.remaining} to the same address.`,
+        body: `Received ${c.paid} of ${c.amount}. Pay the remaining ${c.remaining} from your NEAR wallet.`,
         next: "The payment completes as soon as the rest arrives, before the timer runs out.",
         tone: "warning",
       };
@@ -96,7 +96,7 @@ export function checkoutCopy(phase: CheckoutPhase, c: CopyContext): PhaseCopy {
       return {
         headline: "Payment complete",
         body: `${c.amount} paid to ${c.merchant}.`,
-        next: c.late ? "It arrived after the request expired and was still credited." : "You can close this page. This receipt stays at the same address.",
+        next: c.late ? "It arrived after the request expired and was still credited." : "You can close this page. This receipt stays at the same link.",
         tone: "positive",
       };
     case "overpaid":
@@ -117,14 +117,14 @@ export function checkoutCopy(phase: CheckoutPhase, c: CopyContext): PhaseCopy {
       return {
         headline: "This payment request has expired",
         body: "No funds were taken.",
-        next: c.canRestart ? "Start a new payment to get a fresh address and timer." : `Do not send money to this address. Ask ${c.merchant} for a new payment link.`,
+        next: c.canRestart ? "Start a new payment to get fresh terms and a new timer." : `This payment no longer accepts money. Ask ${c.merchant} for a new payment link.`,
         tone: "neutral",
       };
     case "canceled":
       return {
         headline: "This payment was canceled",
         body: `${c.merchant} canceled this request. No funds were taken.`,
-        next: `Do not send money to this address. Contact ${c.merchant} if this seems wrong.`,
+        next: `This payment no longer accepts money. Contact ${c.merchant} if this seems wrong.`,
         tone: "neutral",
       };
   }
@@ -219,25 +219,24 @@ export function rememberedReceiptEmail(paymentId: string): string | null {
 // Methods and the amount due for each
 // ---------------------------------------------------------------------------
 
-/** The ways a person pays on the checkout page; agents use the API. */
-export type PayMethod = "wallet" | "deposit" | "hsp";
+/**
+ * The ways a person pays on the checkout page; agents use the API. On NEAR there is one: the payer's wallet sends
+ * `ft_transfer_call` to the hub with the node-signed checkout terms. A manual transfer cannot carry those terms, so the
+ * checkout never shows an address to send to.
+ */
+export type PayMethod = "wallet";
 
 export const METHOD_COPY: Record<PayMethod, { label: string; hint: string }> = {
-  wallet: { label: "Pay with wallet", hint: "One click from a browser wallet. No network fee." },
-  deposit: { label: "Send to address", hint: "From any wallet or exchange." },
-  hsp: { label: "Pay with HSP", hint: "Sign once and HashKey's HSP sends it for you." },
+  wallet: { label: "Pay with a NEAR wallet", hint: "Approve one transfer in your wallet." },
 };
 
 /** The fee line is named after the way of paying it is for (GATEWAY.md section 14.3). */
 export const METHOD_FEE_LABEL: Record<PaymentMethod, string> = {
   wallet: "Wallet payment fee",
-  deposit: "Send to address fee",
-  x402: "AI agent fee",
-  voucher: "AI agent with budget fee",
-  hsp: "HSP payment fee",
+  voucher: "AI agent with Budget fee",
 };
 
-/** Quotes already seen this visit, so switching back to a method shows its amount without waiting. */
+/** Quotes already seen this visit, so the amount shows without waiting when the node re-quotes. */
 export type QuoteCache = Partial<Record<PayMethod, { surcharge: string; amount_due: string }>>;
 
 export type MethodQuote = {
@@ -272,56 +271,44 @@ export function quoteFor(view: QuoteView, method: PayMethod, cache: QuoteCache =
 
 /** Records the view's current quote under its method. */
 export function rememberQuote(cache: QuoteCache, view: Pick<CheckoutView, "method" | "surcharge" | "amount_due" | "amount_paid">): QuoteCache {
-  if ((view.method !== "wallet" && view.method !== "deposit" && view.method !== "hsp") || BigInt(view.amount_paid) > 0n) return cache;
+  if (view.method !== "wallet" || BigInt(view.amount_paid) > 0n) return cache;
   const prev = cache[view.method];
   if (prev && prev.surcharge === view.surcharge && prev.amount_due === view.amount_due) return cache;
   return { ...cache, [view.method]: { surcharge: view.surcharge, amount_due: view.amount_due } };
 }
 
 /**
- * Methods the payer can pick. The wallet signature only exists while the payment is quoted for `wallet`, so a payment
- * that already took money by another method keeps that method.
+ * Methods the payer can pick. Paying needs node-signed terms for the remaining amount; an open, untouched payment gets
+ * them once it is quoted for `wallet`.
  */
-export function availableMethods(view: Pick<CheckoutView, "methods" | "authorization" | "status" | "amount_paid">): PayMethod[] {
-  const out: PayMethod[] = [];
-  if (view.methods.includes("wallet") && (Boolean(view.authorization) || (view.status === "open" && view.amount_paid === "0"))) out.push("wallet");
-  if (view.methods.includes("deposit")) out.push("deposit");
-  if (view.methods.includes("hsp")) out.push("hsp");
-  return out;
+export function availableMethods(view: Pick<CheckoutView, "methods" | "wallet" | "status" | "amount_paid">): PayMethod[] {
+  return view.methods.includes("wallet") && (Boolean(view.wallet) || (view.status === "open" && view.amount_paid === "0")) ? ["wallet"] : [];
 }
 
-/** The method a fresh checkout opens on: the one already quoted, unless there is no browser wallet to use it. */
-export function initialMethod(view: Parameters<typeof availableMethods>[0] & Pick<CheckoutView, "method">, hasWallet: boolean): PayMethod | null {
-  const methods = availableMethods(view);
-  if (methods.length === 0) return null;
-  if (!hasWallet && methods.includes("deposit")) return "deposit";
-  if (view.method === "wallet" || view.method === "deposit" || view.method === "hsp") {
-    if (methods.includes(view.method)) return view.method;
-  }
-  return methods[0]!;
+/** The method a fresh checkout opens on. */
+export function initialMethod(view: Parameters<typeof availableMethods>[0]): PayMethod | null {
+  return availableMethods(view)[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
-// Browser wallet steps
+// Wallet steps
 // ---------------------------------------------------------------------------
 
-export type WalletStep = "idle" | "connecting" | "switching" | "approving" | "submitting";
+export type WalletStep = "idle" | "connecting" | "approving" | "submitting";
 
-/** The guided steps shown while paying with a wallet, in order. */
-export const WALLET_STEPS: readonly Exclude<WalletStep, "idle" | "submitting">[] = ["connecting", "switching", "approving"];
+/** The guided steps shown while paying with a wallet, in order. NEAR wallets need no network switch. */
+export const WALLET_STEPS: readonly Exclude<WalletStep, "idle" | "submitting">[] = ["connecting", "approving"];
 
 export function walletStepCopy(step: WalletStep, network: string): { title: string; hint: string; short: string } {
   switch (step) {
     case "idle":
-      return { title: "Pay with your wallet", hint: "Sign once. The network fee is covered.", short: "Ready" };
+      return { title: "Pay with your wallet", hint: "Approve one transfer. Nothing moves until you do.", short: "Ready" };
     case "connecting":
-      return { title: "Open your wallet", hint: "Choose the account to pay from and connect it.", short: "Connect" };
-    case "switching":
-      return { title: `Switching to ${network}`, hint: `Approve the switch to ${network} in your wallet.`, short: `Use ${network}` };
+      return { title: "Open your wallet", hint: "Choose the NEAR account to pay from.", short: "Connect" };
     case "approving":
-      return { title: "Approve the payment", hint: "Sign once. Nothing moves until you approve.", short: "Approve" };
+      return { title: "Approve the payment", hint: `Your wallet shows the transfer to the ${network} hub. Nothing moves until you approve.`, short: "Approve" };
     case "submitting":
-      return { title: "Sending your payment", hint: `Your wallet signed. Sending it on ${network} now.`, short: "Send" };
+      return { title: "Confirming your payment", hint: `Your wallet sent it. Waiting for ${network} and this business's server.`, short: "Confirm" };
   }
 }
 
@@ -330,43 +317,6 @@ export function walletStepIndex(step: WalletStep): number {
   if (step === "idle") return -1;
   if (step === "submitting") return WALLET_STEPS.length;
   return WALLET_STEPS.indexOf(step);
-}
-
-// ---------------------------------------------------------------------------
-// HSP (GATEWAY.md section 17)
-// ---------------------------------------------------------------------------
-
-/** Labels of the HSP progress steps, in order. */
-export const HSP_STEPS = ["Submitted", "On chain", "Final"] as const;
-
-/**
- * Where an HSP payment is, in plain words: step 1 submitted (HSP is checking and sending it), 2 on chain (included or
- * safe, not final yet), 3 final. A failed payment says why; a timeout is HSP still trying, so it reads as submitted.
- */
-export function hspProgress(status: HspPaymentStatus | null): { step: 0 | 1 | 2 | 3; title: string; hint: string; failed: boolean } {
-  switch (status) {
-    case null:
-    case "order-created":
-      return { step: 0, title: "Pay with HSP", hint: "Sign once. HashKey's HSP sends the payment, so you pay no network fee.", failed: false };
-    case "payment-submitted":
-    case "payment-verified":
-    case "payment-processing":
-    case "payment-timeout":
-      return { step: 1, title: "Submitted to HSP", hint: "HSP is checking your payment and sending it on the network.", failed: false };
-    case "payment-included":
-    case "payment-safe":
-      return { step: 2, title: "On chain", hint: "Your payment is on the network and is becoming final.", failed: false };
-    case "payment-finalized":
-      return { step: 3, title: "Final", hint: "HSP reports the payment as final.", failed: false };
-    case "payment-failed":
-      return { step: 0, title: "HSP could not complete the payment", hint: "No money moved. You can try again or pay another way.", failed: true };
-  }
-}
-
-/** True while an HSP payment was submitted and is not final or failed: the checkout shows its progress. */
-export function hspInFlight(hsp: Pick<CheckoutHsp, "status"> | null | undefined): boolean {
-  const s = hsp?.status;
-  return Boolean(s && s !== "order-created" && s !== "payment-finalized" && s !== "payment-failed");
 }
 
 // ---------------------------------------------------------------------------

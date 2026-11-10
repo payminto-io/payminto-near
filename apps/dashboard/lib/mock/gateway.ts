@@ -5,12 +5,14 @@
  * derived from a label, and nothing here touches a chain.
  * Fixed demo payments exist in every checkout state; their ids start with "pay_demo" followed by the state.
  */
-import { encodeAbiParameters, encodeEventTopics, getAddress, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
-import { ATTESTATION_FIELDS, proofEventsAbi, type ChainLog, type ChainReader, type ServedOrder } from "../payment-proof";
-import { checkoutTransferTemplate, computeFees, walletPaymentNonce, erc20TransferUri, feeBreakdownToJson, networkFor, paymentRef } from "@payminto/protocol";
+import { orderFingerprint, type ServedOrder } from "../payment-proof";
+import type { ReaderSource } from "../near-reader";
+import { mockReader } from "./rpc";
+import { canonicalJson, checkoutPayTx, type PayoutProof, computeFees, feeBreakdownToJson, NEAR_TESTNET_USDC, networkFor, sha256Text, type AccountId, type Id32, type WalletTx } from "@payminto/protocol";
 import { ApiError } from "../http";
 import { getMerchantScope } from "../merchant-scope";
 import type { CreateMerchantBody, FeePlanBody, MerchantPatch as OperatorMerchantPatch, OperatorApi, PayoutHistoryEntry } from "../operator-api";
+import type { MockTxOutcome } from "./server";
 import { plainAmount } from "../gateway";
 import type {
   CreateLinkBody,
@@ -24,8 +26,9 @@ import type {
   SubmitRefundBody,
   UpdateLinkBody,
   UpdateWebhookBody,
+  WebhookScope,
 } from "../gateway-api";
-import { canonicalOrder, metadataHash, orderHash, REPORT_CSV_COLUMNS, reportCsvCell, type ReportCsvColumn } from "@payminto/protocol";
+import { REPORT_CSV_COLUMNS, reportCsvCell, type BudgetRefusal, type ReportCsvColumn } from "@payminto/protocol";
 import type {
   PlatformFees,
   FeePlan,
@@ -38,7 +41,6 @@ import type {
   LineItem,
   OrderCommitment,
   ApiKey,
-  AuthorizeResult,
   CheckoutView,
   CreatedApiKey,
   Credit,
@@ -57,13 +59,17 @@ import type {
   WebhookEndpoint,
 } from "../schemas";
 
-const CHAIN_ID = 133;
+type Address = AccountId;
+const NETWORK = "near:testnet";
 const EMPTY = process.env.NEXT_PUBLIC_MOCK === "empty";
-const NET = networkFor(CHAIN_ID);
+const NET = networkFor("near:testnet");
 const EXPLORER = NET.explorer;
-const TOKEN = getAddress("0x8FE3cB719Ee4410E236Cd6b72ab1fCDC06eF53c6");
+const TOKEN: AccountId = NEAR_TESTNET_USDC;
+/** The hub checkout payments go to, the same account the clearing mock uses. */
+const HUB: AccountId = "hub.payminto.testnet";
 const USDC = 1_000_000n;
-const CONFIRMATIONS = 3;
+/** NEAR has single-block finality for a transfer: the node waits for one final block, not a confirmation count. */
+const CONFIRMATIONS = 1;
 
 // ---------------------------------------------------------------------------
 // Deterministic randomness and ids
@@ -83,7 +89,8 @@ const rand = mulberry32(20261101);
 const B32 = "abcdefghijklmnopqrstuvwxyz234567";
 
 function base32Of(label: string, n = 24): string {
-  const bytes = toBytes(keccak256(toBytes(label)));
+  const hex = sha256Text(label);
+  const bytes = Array.from({ length: 32 }, (_, i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16));
   let out = "";
   for (let i = 0; out.length < n; i++) out += B32[bytes[i % bytes.length]! % 32];
   return out;
@@ -97,9 +104,23 @@ const randomId = (prefix: string) => {
   for (const b of crypto.getRandomValues(new Uint8Array(24))) s += B32[b % 32];
   return `${prefix}_${s}`;
 };
-const addr = (label: string): Address => getAddress(`0x${keccak256(toBytes(label)).slice(-40)}`);
+/** A readable NEAR testnet account for a demo party: "acme-store-payout" becomes "acme-store-payout.testnet". */
+const addr = (label: string): Address => `${label}.testnet`;
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+/** 32 bytes as base58, the text form of a NEAR transaction hash. */
+function base58(hex: string): string {
+  let n = BigInt(`0x${hex}`);
+  let out = "";
+  while (n > 0n) {
+    out = B58[Number(n % 58n)]! + out;
+    n /= 58n;
+  }
+  return out;
+}
 let hashSeq = 0;
-const txHash = (label: string): Hex => keccak256(toBytes(`gw-tx:${label}:${hashSeq++}`));
+const txHash = (label: string): string => base58(sha256Text(`gw-tx:${label}:${hashSeq++}`));
+/** The Id32 the hub records a checkout payment under (CheckoutTerms.paymentId). */
+const hubPaymentId = (paymentId: string): Id32 => sha256Text(`payminto.checkout:${paymentId}`);
 
 function pick<T>(weights: [T, number][]): T {
   const r = rand();
@@ -111,9 +132,6 @@ function pick<T>(weights: [T, number][]): T {
   return weights[weights.length - 1]![0];
 }
 
-/** One block every 2 s, anchored at page load, so credit blocks and the safe head share one clock. */
-const BOOT = Date.now();
-const blockAt = (ms: number) => 18_300_000 + Math.floor((ms - BOOT) / 2000);
 const delay = (ms = 160 + Math.round(Math.random() * 220)) => new Promise((r) => setTimeout(r, ms));
 const iso = (ms: number) => new Date(ms).toISOString();
 const origin = () => (typeof window === "undefined" ? "http://localhost:3000" : window.location.origin);
@@ -126,10 +144,8 @@ const PAYOUT = addr("acme-store-payout");
 const _merchantFields = ["name", "support_email", "brand_color", "logo_url"] as const;
 void _merchantFields;
 const TOKEN_META = { address: TOKEN, symbol: "USDC", decimals: 6 };
-const FACTORY = addr("deposit-factory");
 
-const ROUTER = addr("payment-router");
-const FEE_RECIPIENT = addr("platform-treasury");
+const FEE_RECIPIENT = addr("acme-payments");
 
 // Fee plans, merchants and methods (GATEWAY.md section 14). Only Acme Store has gateway history in the mock.
 const plans: FeePlan[] = [
@@ -148,12 +164,7 @@ const merchants: Merchant[] = [
 
 const methodRows: MerchantMethod[] = merchants.flatMap((m) => [
   { merchant_id: m.id, method: "wallet" as const, enabled: true, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
-  // Acme passes a 0.10 USDC deposit fee to the customer, so the checkout shows a surcharge line on Send manually.
-  { merchant_id: m.id, method: "deposit" as const, enabled: true, fee_bps: 0, fee_fixed: m.id === ACME_ID ? "100000" : "0", bearer: "customer" as const, min_amount: null, max_amount: null },
-  { merchant_id: m.id, method: "x402" as const, enabled: true, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
   { merchant_id: m.id, method: "voucher" as const, enabled: m.id !== gid("mer", "globex"), fee_bps: 25, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
-  // HSP needs HashKey's allowlist, so demo businesses start with it off (there is no HSP behind mock mode).
-  { merchant_id: m.id, method: "hsp" as const, enabled: false, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
 ]);
 
 function quote(amount: bigint, method: PaymentMethod | null, merchantId = ACME_ID) {
@@ -169,11 +180,10 @@ const merchant: MerchantProfile = {
   brand_color: "#0f766e",
   logo_url: null,
   livemode: false,
-  chain_id: CHAIN_ID,
+  network: NETWORK,
   payout: PAYOUT,
   token: TOKEN,
-  deposit_factory: FACTORY,
-  payment_router: ROUTER,
+  hub: HUB,
   checkout_base_url: "http://localhost:3000",
 };
 
@@ -188,7 +198,8 @@ const depth = new Map<string, number>();
 const links: PaymentLink[] = [];
 const payments: MockPayment[] = [];
 const refunds: Refund[] = [];
-const endpoints: (WebhookEndpoint & { secret: string })[] = [];
+/** `scope` keeps a business's endpoints apart from the platform's, as the node does. */
+const endpoints: (WebhookEndpoint & { secret: string; scope: WebhookScope })[] = [];
 const deliveries: WebhookDelivery[] = [];
 const keys: ApiKey[] = [];
 
@@ -202,7 +213,7 @@ function link(id: string, l: Omit<PaymentLink, "id" | "livemode" | "payments_cou
   return v;
 }
 
-const PAYERS = ["payer-mira", "payer-jon", "payer-ana", "payer-kenji", "payer-lea", "payer-omar", "payer-ivy"].map(addr);
+const PAYERS = ["mira", "jon-park", "ana-silva", "kenji", "lea", "omar", "ivy"].map(addr);
 
 function event(type: string, at: number, data?: Record<string, unknown>): TimelineEvent {
   return { id: gid("evt", `${type}:${at}:${hashSeq++}`), type, created_at: iso(at), data: data ?? null };
@@ -249,15 +260,15 @@ function makePayment(args: {
         payer,
         amount: amt.toString(),
         tx_hash: method === "voucher" ? null : hash,
-        log_index: method === "voucher" ? null : 3,
-        block_number: blockAt(at),
-        batch_id: method === "voucher" ? keccak256(toBytes(`batch:${args.id}`)) : null,
+        batch_id: method === "voucher" ? sha256Text(`batch:${args.id}`) : null,
+        call_id: method === "voucher" ? sha256Text(`call:${args.id}`) : null,
+        recorded_at_ms: method === "wallet" ? String(at + 2_000) : null,
         status: "confirmed",
         late: args.late ?? false,
         created_at: iso(at),
         confirmed_at: iso(at + 6_000),
       });
-      if (method === "wallet") events.push(event("wallet.connected", at - 30_000, { payer }), event("authorization.signed", at - 12_000, { payer }));
+      if (method === "wallet") events.push(event("wallet.connected", at - 30_000, { payer }));
       events.push(event("transaction.broadcast", at, { tx_hash: hash, method }), event("credit.confirmed", at + 6_000, { tx_hash: hash, amount: amt.toString(), confirmations: CONFIRMATIONS }));
     }
   }
@@ -274,8 +285,11 @@ function makePayment(args: {
     amount_paid: paid.toString(),
     amount_refunded: "0",
     refund_status: "none",
-    chain_id: CHAIN_ID,
+    network: NETWORK,
     token: TOKEN,
+    hub: HUB,
+    checkout_id: hubPaymentId(args.id),
+    payout: PAYOUT,
     description: args.description ?? args.link?.title ?? null,
     reference: args.reference ?? null,
     customer_email: args.email ?? null,
@@ -285,7 +299,6 @@ function makePayment(args: {
     order_hash: ZERO_HASH,
     success_url: args.link?.success_url ?? null,
     checkout_url: `${origin()}/pay/${args.id}`,
-    deposit_address: addr(`forwarder:${args.id}`),
     link_id: args.link?.id ?? null,
     method: args.status === "open" ? null : method,
     payer: paid > 0n ? payer : null,
@@ -299,7 +312,7 @@ function makePayment(args: {
     refunds: [],
     events,
   };
-  p.order_hash = orderHash({ ...orderOf(p), token: TOKEN, payout: PAYOUT, metadata_hash: orderOf(p).metadata_hash as Hex });
+  p.order_hash = orderFingerprint(canonicalJson(orderOf(p)));
   payments.push(p);
   if (p.link_id) {
     const l = links.find((x) => x.id === p.link_id);
@@ -311,7 +324,7 @@ function makePayment(args: {
   return p;
 }
 
-const ZERO_HASH = `0x${"0".repeat(64)}` as Hex;
+const ZERO_HASH: Id32 = "0".repeat(64);
 
 /** Line items that sum to the amount: the link title, or a product plus shipping for API orders. */
 function defaultItems(amount: bigint, link: PaymentLink | undefined, description: string | undefined): LineItem[] {
@@ -331,13 +344,14 @@ function defaultItems(amount: bigint, link: PaymentLink | undefined, description
 function orderOf(p: MockPayment): OrderCommitment {
   const metadata: Record<string, string> = {};
   for (const [k, v] of Object.entries(p.metadata ?? {})) metadata[k] = String(v);
-  return { payment_id: p.id, amount: p.amount_due, token: TOKEN, payout: PAYOUT, reference: p.reference ?? null, description: p.description ?? null, line_items: p.line_items, metadata_hash: metadataHash(metadata) };
+  const metadataHash = Object.keys(metadata).length ? sha256Text(canonicalJson(metadata)) : ZERO_HASH;
+  return { payment_id: p.id, amount: p.amount_due, token: TOKEN, payout: PAYOUT, reference: p.reference ?? null, description: p.description ?? null, line_items: p.line_items, metadata_hash: metadataHash };
 }
 
-/** The bytes a node serves at /order: the canonical JSON that order_hash is the keccak256 of. */
+/** The bytes a node serves at /order: the canonical JSON that order_hash is the sha256 of. */
 function servedOrder(p: MockPayment): ServedOrder {
   const order = orderOf(p);
-  return { raw: canonicalOrder({ ...order, token: TOKEN, payout: PAYOUT, metadata_hash: order.metadata_hash as Hex }), order };
+  return { raw: canonicalJson(order), order };
 }
 
 function addRefund(p: MockPayment, amount: bigint, reason: string, status: Refund["status"], atMs: number, failure?: string) {
@@ -349,7 +363,7 @@ function addRefund(p: MockPayment, amount: bigint, reason: string, status: Refun
     to: p.payer ?? PAYERS[0]!,
     reason,
     status,
-    method: status === "succeeded" ? "authorization" : null,
+    method: status === "succeeded" ? "transfer" : null,
     tx_hash: status === "succeeded" ? txHash(`refund:${p.id}`) : null,
     failure_reason: failure ?? null,
     created_at: iso(atMs),
@@ -435,7 +449,7 @@ function seed() {
     const source = pick<PaymentLink | null>([[pro, 0.34], [tip, 0.18], [credits, 0.26], [beta, 0.04], [null, 0.18]]);
     const status = pick<PaymentStatus>([["paid", 0.7], ["expired", 0.13], ["overpaid", 0.04], ["underpaid", 0.05], ["canceled", 0.08]]);
     const amount = source?.amount ? BigInt(source.amount) : source ? BigInt(Math.round(2 + rand() * 60)) * USDC : BigInt(Math.round(5 + rand() * 180)) * USDC + BigInt(Math.round(rand() * 99)) * 10_000n;
-    const method = pick<PaymentMethod>([["wallet", 0.46], ["deposit", 0.34], ["x402", 0.15], ["voucher", 0.05]]);
+    const method = pick<PaymentMethod>([["wallet", 0.8], ["voucher", 0.2]]);
     makePayment({
       id: gid("pay", `hist:${i}`),
       amount,
@@ -455,27 +469,28 @@ function seed() {
   const fresh = now - 90_000;
   makePayment({ id: demoId("open"), amount: 25n * USDC, status: "open", createdMs: fresh, link: pro, email: "mira@mail.example" });
   makePayment({ id: demoId("soon"), amount: 10n * USDC, status: "open", createdMs: now - 28 * 60_000, link: credits });
-  makePayment({ id: demoId("partial"), amount: 25n * USDC, status: "partially_paid", createdMs: fresh, link: pro, paid: 20n * USDC, method: "deposit" });
+  makePayment({ id: demoId("partial"), amount: 25n * USDC, status: "partially_paid", createdMs: fresh, link: pro, paid: 20n * USDC, method: "wallet" });
   const processing = makePayment({ id: demoId("processing"), amount: 25n * USDC, status: "processing", createdMs: fresh, link: pro, method: "wallet" });
-  processing.credits.push({ payment_id: processing.id, method: "wallet", payer: PAYERS[1]!, amount: (25n * USDC).toString(), tx_hash: txHash("processing"), log_index: 2, block_number: null, batch_id: null, status: "pending", late: false, created_at: iso(now - 15_000), confirmed_at: null });
+  processing.credits.push({ payment_id: processing.id, method: "wallet", payer: PAYERS[1]!, amount: (25n * USDC).toString(), tx_hash: txHash("processing"), batch_id: null, call_id: null, recorded_at_ms: null, status: "pending", late: false, created_at: iso(now - 15_000), confirmed_at: null });
   depth.set(processing.credits[0]!.tx_hash!, 1);
   makePayment({ id: demoId("paid"), amount: 25n * USDC, status: "paid", createdMs: now - 6 * 60_000, link: pro, method: "wallet", email: "jon@mail.example" });
-  makePayment({ id: demoId("overpaid"), amount: 25n * USDC, status: "overpaid", createdMs: now - 9 * 60_000, link: pro, paid: 25_500_000n, method: "deposit" });
-  makePayment({ id: demoId("underpaid"), amount: 25n * USDC, status: "underpaid", createdMs: now - 50 * 60_000, link: pro, paid: 20n * USDC, method: "deposit" });
+  makePayment({ id: demoId("overpaid"), amount: 25n * USDC, status: "overpaid", createdMs: now - 9 * 60_000, link: pro, paid: 25_500_000n, method: "wallet" });
+  makePayment({ id: demoId("underpaid"), amount: 25n * USDC, status: "underpaid", createdMs: now - 50 * 60_000, link: pro, paid: 20n * USDC, method: "wallet" });
   makePayment({ id: demoId("expired"), amount: 10n * USDC, status: "expired", createdMs: now - 45 * 60_000, link: credits });
   makePayment({ id: demoId("canceled"), amount: 120n * USDC, status: "canceled", createdMs: now - 20 * 60_000, description: "Invoice INV-2026-0117", reference: "INV-2026-0117" });
-  makePayment({ id: demoId("late"), amount: 10n * USDC, status: "paid", createdMs: now - 3 * 3_600_000, link: credits, method: "deposit", late: true });
+  makePayment({ id: demoId("late"), amount: 10n * USDC, status: "paid", createdMs: now - 3 * 3_600_000, link: credits, method: "wallet", late: true });
 
-  // Refunds: one full, one partial, one waiting on the payout wallet, one failed.
+  // Refunds: one full, one partial, one waiting on the payout account, one failed.
   const paidHist = payments.filter((p) => p.status === "paid" && p.id.startsWith("pay_") && !p.id.startsWith("pay_demo"));
   if (paidHist[0]) addRefund(paidHist[0], BigInt(paidHist[0].amount_paid), "Requested by customer", "succeeded", new Date(paidHist[0].paid_at!).getTime() + DAY);
   if (paidHist[3]) addRefund(paidHist[3], BigInt(paidHist[3].amount_paid) / 2n, "Duplicate", "succeeded", new Date(paidHist[3].paid_at!).getTime() + 2 * DAY);
   const over = payments.find((p) => p.status === "overpaid" && !p.id.startsWith("pay_demo"));
   if (over) addRefund(over, BigInt(over.amount_paid) - BigInt(over.amount_due), "Overpayment", "pending", now - 2 * 3_600_000);
-  if (paidHist[6]) addRefund(paidHist[6], BigInt(paidHist[6].amount_paid), "Requested by customer", "failed", now - 26 * 3_600_000, "The payout wallet did not have enough USDC when the transfer was simulated.");
+  if (paidHist[6]) addRefund(paidHist[6], BigInt(paidHist[6].amount_paid), "Requested by customer", "failed", now - 26 * 3_600_000, "The payout account did not have enough USDC when the transfer was simulated.");
 
   // Webhooks: a healthy production receiver and one the worker disabled after repeated failures.
-  const prod: WebhookEndpoint & { secret: string } = {
+  const prod: WebhookEndpoint & { secret: string; scope: WebhookScope } = {
+    scope: "business",
     id: gid("we", "prod"),
     livemode: false,
     url: "https://acme.example/api/payminto/webhooks",
@@ -488,7 +503,8 @@ function seed() {
     last_delivery_at: null,
     disabled_reason: null,
   };
-  const crm: WebhookEndpoint & { secret: string } = {
+  const crm: WebhookEndpoint & { secret: string; scope: WebhookScope } = {
+    scope: "business",
     id: gid("we", "crm"),
     livemode: false,
     url: "https://hooks.crm.example/acme/payments",
@@ -519,6 +535,54 @@ function seed() {
     { id: gid("key", "server"), name: "Production server", prefix: "sk_test_4f2a", livemode: false, created_at: iso(hourAnchor - 33 * DAY), last_used_at: iso(now - 4 * 60_000), revoked_at: null },
     { id: gid("key", "zapier"), name: "Zapier", prefix: "sk_test_9c1e", livemode: false, created_at: iso(hourAnchor - 40 * DAY), last_used_at: iso(hourAnchor - 20 * DAY), revoked_at: iso(hourAnchor - 19 * DAY) },
   );
+}
+
+/**
+ * The platform's refusal alert endpoint (`/v1/platform/webhooks`), with one `budget.refused` delivery per refusal the
+ * demo node recorded. Called by the clearing mock once its refusals exist.
+ */
+export function seedPlatformRefusals(refusals: BudgetRefusal[]): void {
+  if (endpoints.some((e) => e.scope === "platform")) return;
+  const ops: WebhookEndpoint & { secret: string; scope: WebhookScope } = {
+    scope: "platform",
+    id: gid("we", "ops"),
+    livemode: false,
+    url: "https://ops.acme.example/payminto/refusals",
+    description: "On-call alerts for refused agent payments",
+    events: ["budget.refused"],
+    active: true,
+    secret: `whsec_${base32Of("whsec:ops", 43)}`,
+    created_at: iso(Date.now() - 9 * DAY),
+    success_rate_7d: 1,
+    last_delivery_at: null,
+    disabled_reason: null,
+  };
+  endpoints.push(ops);
+  for (const [i, r] of refusals.entries()) {
+    const at = new Date(r.created_at).getTime() + 400;
+    const evtId = gid("evt", `refused:${r.id}`);
+    deliveries.push(delivery(ops.id, evtId, "budget.refused", at, 1, "succeeded", 200, 64 + ((i * 53) % 170), webhookBody(evtId, "budget.refused", at, r), '{"ok":true}'));
+  }
+  ops.last_delivery_at = deliveries.filter((d) => d.endpoint_id === ops.id).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
+}
+
+/** Refusals recorded after the first seeding, each with its own delivery to the platform's alert endpoint. */
+export function addPlatformRefusals(refusals: BudgetRefusal[]): void {
+  const ops = endpoints.find((e) => e.scope === "platform");
+  if (!ops) return;
+  for (const r of refusals) {
+    const at = new Date(r.created_at).getTime() + 400;
+    const evtId = gid("evt", `refused:${r.id}`);
+    deliveries.push(delivery(ops.id, evtId, "budget.refused", at, 1, "succeeded", 200, 96, webhookBody(evtId, "budget.refused", at, r), '{"ok":true}'));
+  }
+  ops.last_delivery_at = deliveries.filter((d) => d.endpoint_id === ops.id).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
+}
+
+function publicEndpoint(e: WebhookEndpoint & { secret: string; scope: WebhookScope }): WebhookEndpoint {
+  const { secret: _s, scope: _scope, ...rest } = e;
+  void _s;
+  void _scope;
+  return { ...rest };
 }
 
 function webhookBody(id: string, type: string, at: number, object: unknown): string {
@@ -581,9 +645,9 @@ function seedScreening() {
   const at = (h: number) => iso(now - h * 3_600_000);
   decisions.push(
     { id: "scr_6", source: "gateway", rule: "PAYER_DENIED", message: "The payer is on this merchant's deny list.", address: scammer, payment_id: null, link_id: links[0]?.id ?? null, method: "wallet", amount: (25n * USDC).toString(), created_at: at(0.6) },
-    { id: "scr_5", source: "gateway", rule: "PAYER_BLACKLISTED", message: "USDC reports the payer as blacklisted (isBlacklisted returned true).", address: mixer, payment_id: null, link_id: links[2]?.id ?? null, method: "x402", amount: (10n * USDC).toString(), created_at: at(3.2) },
-    { id: "scr_4", source: "gateway", rule: "PAYER_TOO_NEW", message: "The payer wallet has 0 transactions; this node requires at least 3.", address: addr("fresh-wallet"), payment_id: null, link_id: links[1]?.id ?? null, method: "x402", amount: (4n * USDC).toString(), created_at: at(7.5) },
-    { id: "scr_3", source: "gateway", rule: "PAYER_DENIED", message: "The payer is on this merchant's deny list.", address: scammer, payment_id: null, link_id: links[0]?.id ?? null, method: "deposit", amount: (25n * USDC).toString(), created_at: at(26) },
+    { id: "scr_5", source: "gateway", rule: "PAYER_BLACKLISTED", message: "The token contract reports the payer as blocked.", address: mixer, payment_id: null, link_id: links[2]?.id ?? null, method: "voucher", amount: (10n * USDC).toString(), created_at: at(3.2) },
+    { id: "scr_4", source: "gateway", rule: "PAYER_TOO_NEW", message: "The payer account has 0 transactions; this node requires at least 3.", address: addr("fresh-wallet"), payment_id: null, link_id: links[1]?.id ?? null, method: "voucher", amount: (4n * USDC).toString(), created_at: at(7.5) },
+    { id: "scr_3", source: "gateway", rule: "PAYER_DENIED", message: "The payer is on this merchant's deny list.", address: scammer, payment_id: null, link_id: links[0]?.id ?? null, method: "wallet", amount: (25n * USDC).toString(), created_at: at(26) },
   );
 }
 
@@ -657,7 +721,7 @@ function settleState(p: MockPayment) {
 
 function credit(p: MockPayment, amount: bigint, method: PaymentMethod, from: Address) {
   const hash = txHash(`${p.id}:live`);
-  const c: Credit = { payment_id: p.id, method, payer: from, amount: amount.toString(), tx_hash: hash, log_index: 0, block_number: null, batch_id: null, status: "pending", late: false, created_at: iso(Date.now()), confirmed_at: null };
+  const c: Credit = { payment_id: p.id, method, payer: from, amount: amount.toString(), tx_hash: hash, batch_id: null, call_id: null, recorded_at_ms: null, status: "pending", late: false, created_at: iso(Date.now()), confirmed_at: null };
   p.credits.push(c);
   p.method ??= method;
   p.payer ??= from;
@@ -672,7 +736,7 @@ function credit(p: MockPayment, amount: bigint, method: PaymentMethod, from: Add
     if (d >= CONFIRMATIONS) {
       c.status = "confirmed";
       c.confirmed_at = iso(Date.now());
-      c.block_number = blockAt(Date.now()) - CONFIRMATIONS;
+      c.recorded_at_ms = String(Date.now());
       p.events.push(event("credit.confirmed", Date.now(), { tx_hash: hash, amount: c.amount, confirmations: CONFIRMATIONS }));
       settleState(p);
       notify(p);
@@ -685,7 +749,17 @@ function credit(p: MockPayment, amount: bigint, method: PaymentMethod, from: Add
   return hash;
 }
 
-/** Router terms for a payment: the payout gets value minus the quoted fee, the platform the fee. */
+/** A stand-in for the node's ed25519 signature over the checkout terms; the demo hub accepts it, a real one would not. */
+const demoSignature = (paymentId: Id32, amount: bigint): string => sha256Text(`sig:${paymentId}:${amount}`) + sha256Text(`sig2:${paymentId}:${amount}`);
+
+/** What the node hands the payer's wallet: signed terms and the prebuilt transfer, built with the chain package. */
+function walletOf(p: MockPayment, rest: bigint): NonNullable<CheckoutView["wallet"]> {
+  const terms = { payment_id: hubPaymentId(p.id), merchant: PAYOUT, amount: rest.toString(), expiry_ms: String(new Date(p.expires_at).getTime()) };
+  const signature = demoSignature(terms.payment_id, rest);
+  const transaction = checkoutPayTx(TOKEN, HUB, { paymentId: terms.payment_id, merchant: terms.merchant, amount: rest, expiryMs: BigInt(terms.expiry_ms) }, signature);
+  return { terms, signature, checkout_key: "ed25519:DemoCheckoutKeyNotReal111111111111111111111111", transaction };
+}
+
 function viewOf(p: MockPayment): CheckoutView {
   const remaining = BigInt(p.amount_due) - BigInt(p.amount_paid);
   const rest = remaining > 0n ? remaining : 0n;
@@ -706,23 +780,12 @@ function viewOf(p: MockPayment): CheckoutView {
     amount_due: p.amount_due,
     amount_paid: p.amount_paid,
     amount_remaining: rest.toString(),
-    chain_id: CHAIN_ID,
+    network: NETWORK,
     token: TOKEN_META,
-    deposit_address: p.deposit_address,
-    deposit_uri: erc20TransferUri({ token: TOKEN, chainId: CHAIN_ID, to: p.deposit_address as Address, amount: rest }),
+    hub: HUB,
     method: p.method,
-    methods: payable ? ["wallet", "deposit"] : ["deposit"],
-    authorization: payable
-      ? // Like the node: a TransferWithAuthorization to the payment's fee-splitting forwarder for what is left.
-        checkoutTransferTemplate({
-          domain: { name: NET.token.eip712.name, version: NET.token.eip712.version, chainId: CHAIN_ID, verifyingContract: TOKEN },
-          forwarder: p.deposit_address as Address,
-          paymentRef: paymentRef(CHAIN_ID, p.id),
-          paid: BigInt(p.amount_paid),
-          value: rest,
-          expiresAt: Math.floor(new Date(p.expires_at).getTime() / 1000),
-        })
-      : null,
+    methods: payable ? ["wallet"] : [],
+    wallet: payable && p.method === "wallet" && rest > 0n ? walletOf(p, rest) : null,
     success_url: p.success_url,
     tx_hash: (pending ?? lastConfirmed)?.tx_hash ?? null,
     order_hash: p.order_hash,
@@ -749,7 +812,7 @@ function publicLinkOf(l: PaymentLink): PublicLink {
     collect_name: l.collect_name,
     active: l.active && (l.max_payments == null || l.payments_count < l.max_payments),
     merchant: { name: merchant.name, support_email: merchant.support_email, brand_color: merchant.brand_color, logo_url: merchant.logo_url },
-    chain_id: CHAIN_ID,
+    network: NETWORK,
     token: TOKEN_META,
   };
 }
@@ -773,6 +836,15 @@ function page<T>(items: T[], limit = 50, cursor?: string, counts: Record<string,
 // ---------------------------------------------------------------------------
 
 export class MockGatewayApi implements GatewayApi {
+  /** Which endpoints this instance manages: a business's, or the platform's own (`/v1/platform/webhooks`). */
+  constructor(private readonly hookScope: WebhookScope = "business") {}
+
+  private endpoint(id: string) {
+    const e = endpoints.find((x) => x.id === id && x.scope === this.hookScope);
+    if (!e) throw new ApiError(404, "WEBHOOK_NOT_FOUND", `No webhook endpoint ${id}.`);
+    return e;
+  }
+
   async overview(): Promise<GatewayOverview> {
     await delay();
     if (foreign()) return { volume: "0", payments: 0, counts: {}, conversion: 0, days: [] };
@@ -942,9 +1014,10 @@ export class MockGatewayApi implements GatewayApi {
     const r = refunds.find((x) => x.id === id);
     if (!r) throw new ApiError(404, "REFUND_NOT_FOUND", `No refund ${id}.`);
     r.status = "succeeded";
-    r.tx_hash = "txHash" in body ? body.txHash : txHash(`refund:${id}`);
+    r.tx_hash = body.txHash;
     r.updated_at = iso(Date.now());
-    r.method = "authorization" in body ? "authorization" : "transfer";
+    r.method = "transfer";
+    r.verification = "transfer_checked";
     const p = find(r.payment_id);
     p.events.push(event("refund.succeeded", Date.now(), { refund_id: r.id, amount: r.amount, tx_hash: r.tx_hash }));
     recomputeRefunds(p);
@@ -978,33 +1051,25 @@ export class MockGatewayApi implements GatewayApi {
 
   async webhooks(): Promise<WebhookEndpoint[]> {
     await delay();
-    if (foreign()) return [];
-    return endpoints.map(({ secret: _s, ...e }) => {
-      void _s;
-      return { ...e };
-    });
+    if (this.hookScope === "business" && foreign()) return [];
+    return endpoints.filter((e) => e.scope === this.hookScope).map(publicEndpoint);
   }
 
   async webhook(id: string): Promise<WebhookEndpoint> {
     await delay();
-    const e = endpoints.find((x) => x.id === id);
-    if (!e) throw new ApiError(404, "WEBHOOK_NOT_FOUND", `No webhook endpoint ${id}.`);
-    const { secret: _s, ...rest } = e;
-    void _s;
-    return rest;
+    return publicEndpoint(this.endpoint(id));
   }
 
   async revealWebhookSecret(id: string): Promise<string> {
     await delay(300);
-    const e = endpoints.find((x) => x.id === id);
-    if (!e) throw new ApiError(404, "WEBHOOK_NOT_FOUND", `No webhook endpoint ${id}.`);
-    return e.secret;
+    return this.endpoint(id).secret;
   }
 
   async createWebhook(body: CreateWebhookBody): Promise<WebhookEndpoint> {
     await delay(500);
     const e = {
       id: randomId("we"),
+      scope: this.hookScope,
       livemode: false,
       url: body.url,
       description: body.description || null,
@@ -1017,38 +1082,35 @@ export class MockGatewayApi implements GatewayApi {
       disabled_reason: null,
     };
     endpoints.unshift(e);
-    return { ...e };
+    const { scope: _scope, ...out } = e;
+    void _scope;
+    return out;
   }
 
   async updateWebhook(id: string, patch: UpdateWebhookBody): Promise<WebhookEndpoint> {
     await delay(400);
-    const e = endpoints.find((x) => x.id === id);
-    if (!e) throw new ApiError(404, "WEBHOOK_NOT_FOUND", `No webhook endpoint ${id}.`);
+    const e = this.endpoint(id);
     Object.assign(e, patch);
     if (patch.active) e.disabled_reason = null;
-    const { secret: _s, ...rest } = e;
-    void _s;
-    return rest;
+    return publicEndpoint(e);
   }
 
   async deleteWebhook(id: string): Promise<void> {
     await delay(400);
-    const i = endpoints.findIndex((x) => x.id === id);
+    const i = endpoints.findIndex((x) => x.id === id && x.scope === this.hookScope);
     if (i >= 0) endpoints.splice(i, 1);
   }
 
   async rotateWebhookSecret(id: string): Promise<WebhookEndpoint> {
     await delay(500);
-    const e = endpoints.find((x) => x.id === id);
-    if (!e) throw new ApiError(404, "WEBHOOK_NOT_FOUND", `No webhook endpoint ${id}.`);
+    const e = this.endpoint(id);
     e.secret = `whsec_${base32Of(`whsec:${Math.random()}`, 43)}`;
-    return { ...e };
+    return { ...publicEndpoint(e), secret: e.secret };
   }
 
   async testWebhook(id: string): Promise<void> {
     await delay(700);
-    const e = endpoints.find((x) => x.id === id);
-    if (!e) throw new ApiError(404, "WEBHOOK_NOT_FOUND", `No webhook endpoint ${id}.`);
+    const e = this.endpoint(id);
     const evtId = randomId("evt");
     const body = JSON.stringify({ id: evtId, type: "ping", created: Math.floor(Date.now() / 1000), livemode: false, data: { object: { message: "Test event from the Payminto dashboard" } } }, null, 2);
     const ok = e.active;
@@ -1058,6 +1120,7 @@ export class MockGatewayApi implements GatewayApi {
 
   async deliveries(endpointId: string, q: { limit?: number; cursor?: string } = {}): Promise<GatewayPage<WebhookDelivery>> {
     await delay();
+    this.endpoint(endpointId);
     const items = deliveries.filter((d) => d.endpoint_id === endpointId).sort((a, b) => b.created_at.localeCompare(a.created_at));
     return page(items, q.limit ?? 50, q.cursor);
   }
@@ -1121,7 +1184,7 @@ export class MockGatewayApi implements GatewayApi {
   async addDeny(body: { address: Address; note?: string }): Promise<DenyListEntry> {
     await delay(400);
     if (denyList.some((d) => d.address.toLowerCase() === body.address.toLowerCase())) throw new ApiError(409, "ALREADY_DENIED", "This address is already on the deny list.");
-    const e: DenyListEntry = { address: getAddress(body.address), note: body.note || null, created_at: iso(Date.now()) };
+    const e: DenyListEntry = { address: body.address, note: body.note || null, created_at: iso(Date.now()) };
     denyList.unshift(e);
     return e;
   }
@@ -1259,7 +1322,7 @@ export class MockOperatorApi implements OperatorApi {
       return { merchant_id: m.id, name: m.name, volume: volume.toString(), fees: fee.toString(), payments: n };
     });
     const byMerchant = [acme, ...others];
-    const byMethod = (["wallet", "deposit", "x402", "voucher"] as const).map((method) => {
+    const byMethod = (["wallet", "voucher"] as const).map((method) => {
       const xs = paid.filter((p) => p.method === method);
       return { method, volume: sum(xs, (p) => p.amount_paid).toString(), fees: sum(xs, (p) => p.fee_total).toString(), payments: xs.length };
     });
@@ -1303,7 +1366,7 @@ export class MockOperatorApi implements OperatorApi {
       name: body.name,
       slug: body.slug,
       status: "active",
-      payout: getAddress(body.payout),
+      payout: body.payout,
       support_email: body.support_email ?? null,
       brand_color: body.brand_color ?? null,
       logo_url: body.logo_url ?? null,
@@ -1324,12 +1387,12 @@ export class MockOperatorApi implements OperatorApi {
     if (id === ACME_ID) Object.assign(merchant, patch);
     return { ...m };
   }
-  async changePayout(id: string, body: { payout: Address; timestamp: number; signature: Hex }): Promise<Merchant> {
+  async changePayout(id: string, body: PayoutProof): Promise<Merchant> {
     await delay(600);
     const m = merchants.find((x) => x.id === id);
     if (!m) throw new ApiError(404, "MERCHANT_NOT_FOUND", `No merchant ${id}.`);
-    payoutHistory.set(id, [{ old_payout: m.payout as Address, new_payout: getAddress(body.payout), proven: true, changed_at: iso(Date.now()) }, ...(payoutHistory.get(id) ?? [])]);
-    m.payout = getAddress(body.payout);
+    payoutHistory.set(id, [{ old_payout: m.payout as Address, new_payout: body.payout, proven: true, changed_at: iso(Date.now()) }, ...(payoutHistory.get(id) ?? [])]);
+    m.payout = body.payout;
     return { ...m };
   }
   async methods(merchantId: string): Promise<MerchantMethod[]> {
@@ -1374,12 +1437,11 @@ export class MockCheckoutApi implements CheckoutApi {
   async info(): Promise<Info> {
     await delay(80);
     return {
-      network: { chainId: CHAIN_ID, name: NET.chain.name },
-      chainId: CHAIN_ID,
-      hub: addr("clearing-hub"),
+      network: { id: NET.network, name: NET.name, explorer: NET.explorer, testnet: NET.testnet, rpc_url: NET.rpcUrl },
+      hub: HUB,
       token: { address: TOKEN, symbol: "USDC", decimals: 6 },
       explorer: EXPLORER,
-      operator: addr("node-operator"),
+      operator: "node.payminto.testnet",
       version: "0.1.0-mock",
     };
   }
@@ -1389,13 +1451,13 @@ export class MockCheckoutApi implements CheckoutApi {
     return viewOf(find(id));
   }
 
-  async chooseMethod(id: string, method: "wallet" | "deposit"): Promise<CheckoutView> {
+  async chooseMethod(id: string, method: "wallet"): Promise<CheckoutView> {
     await delay(200);
     const p = find(id);
     if (p.status === "open" && p.amount_paid === "0" && p.method !== method) {
       Object.assign(p, quote(BigInt(p.amount), method));
       p.method = method;
-      p.order_hash = orderHash({ ...orderOf(p), token: TOKEN, payout: PAYOUT, metadata_hash: orderOf(p).metadata_hash as Hex });
+      p.order_hash = orderFingerprint(canonicalJson(orderOf(p)));
       notify(p);
     }
     return viewOf(p);
@@ -1411,27 +1473,21 @@ export class MockCheckoutApi implements CheckoutApi {
     const p = find(id);
     if (p.status !== "paid" && p.status !== "overpaid") throw new ApiError(409, "PAYMENT_NOT_PAID", "A proof exists only for a paid payment.");
     const c = p.credits.filter((x) => x.status === "confirmed").at(-1);
-    // The late demo shows a node with EAS switched off, so the page has to say so instead of faking it.
-    const eas = !p.late;
     return {
       payment_id: p.id,
       status: p.status,
-      chain_id: CHAIN_ID,
+      network: NETWORK,
+      hub: HUB,
       token: TOKEN,
       payout: PAYOUT,
-      deposit_address: p.deposit_address,
       amount_due: p.amount_due,
       amount_paid: p.amount_paid,
       credit_amount: c?.amount ?? null,
       method: p.method,
       payer: p.payer,
       tx_hash: c?.tx_hash ?? null,
-      block_number: c?.block_number ?? null,
-      finality_tag: "safe",
+      hub_payment_id: hubPaymentId(p.id),
       order_hash: p.order_hash,
-      authorization_nonce: p.method === "wallet" || p.method === "x402" ? walletPaymentNonce(paymentRef(CHAIN_ID, p.id), 0n) : null,
-      eas_enabled: eas,
-      attestation: eas ? { uid: keccak256(toBytes(`attestation:${p.id}`)), schema: keccak256(toBytes("payminto.gateway.payment.v1")), attester: addr("node-operator"), eas: "0x4200000000000000000000000000000000000021" } : null,
       paid_at: p.paid_at,
     };
   }
@@ -1455,18 +1511,6 @@ export class MockCheckoutApi implements CheckoutApi {
     return { id: p.id };
   }
 
-  async authorize(id: string, body: { payer: Address; signature: Hex }): Promise<AuthorizeResult> {
-    await delay(700);
-    const p = find(id);
-    if (!["open", "partially_paid"].includes(p.status) || new Date(p.expires_at).getTime() <= Date.now()) {
-      throw new ApiError(409, "PAYMENT_NOT_PAYABLE", "This payment no longer accepts a wallet authorization.");
-    }
-    p.events.push(event("wallet.connected", Date.now() - 4_000, { payer: body.payer }), event("authorization.signed", Date.now(), { payer: body.payer }));
-    const remaining = BigInt(p.amount_due) - BigInt(p.amount_paid);
-    const hash = credit(p, remaining, "wallet", body.payer);
-    return { status: "processing", txHash: hash };
-  }
-
   async addEmail(id: string, email: string): Promise<void> {
     await delay(400);
     const p = find(id);
@@ -1485,54 +1529,60 @@ export class MockCheckoutApi implements CheckoutApi {
     return () => set.delete(listener);
   }
 
-  async mockDeposit(id: string, amount: string): Promise<void> {
-    await delay(500);
-    credit(find(id), BigInt(amount), "deposit", PAYERS[2]!);
+  /** The demo wallet already applied the payment to the demo hub; the report is display only, as on a node. */
+  async walletSent(id: string, txHash: string): Promise<void> {
+    void id;
+    void txHash;
   }
 
-  chainReader(): ChainReader {
-    const proofOf = (hash: Hex) => payments.find((p) => p.credits.some((c) => c.tx_hash === hash));
-    return {
-      async receipt(hash) {
-        await delay(260);
-        const p = proofOf(hash);
-        const c = p?.credits.find((x) => x.tx_hash === hash);
-        if (!p || !c) return null;
-        const transfer = (from: Address, to: Address, value: bigint): ChainLog => ({
-          address: TOKEN,
-          topics: encodeEventTopics({ abi: proofEventsAbi, eventName: "Transfer", args: { from, to } }) as Hex[],
-          data: encodeAbiParameters([{ type: "uint256" }], [value]),
-        });
-        const logs: ChainLog[] = [];
-        if (c.method === "wallet" || c.method === "x402") {
-          // The payer's signed transfer lands on the forwarder; the node's flush then splits it to the payout and the fee recipient.
-          logs.push({ address: TOKEN, topics: encodeEventTopics({ abi: proofEventsAbi, eventName: "AuthorizationUsed", args: { authorizer: c.payer as Address, nonce: walletPaymentNonce(paymentRef(CHAIN_ID, p.id), 0n) } }) as Hex[], data: "0x" });
-          const fee = BigInt(p.fee_total);
-          const forwarder = p.deposit_address as Address;
-          logs.push(transfer(c.payer as Address, forwarder, BigInt(c.amount)), transfer(forwarder, PAYOUT, BigInt(c.amount) - fee));
-          if (fee > 0n) logs.push(transfer(forwarder, FEE_RECIPIENT, fee));
-        } else logs.push(transfer((c.payer ?? PAYERS[0]!) as Address, p.deposit_address as Address, BigInt(c.amount)));
-        return { status: "success", blockNumber: BigInt(c.block_number ?? blockAt(Date.now())), logs };
-      },
-      async blockAt() {
-        await delay(180);
-        return BigInt(blockAt(Date.now()));
-      },
-      async attestation(_eas, uid) {
-        await delay(220);
-        const p = payments.find((x) => keccak256(toBytes(`attestation:${x.id}`)) === uid);
-        const c = p?.credits.filter((x) => x.status === "confirmed").at(-1);
-        if (!p || !c) return null;
-        const data = encodeAbiParameters(ATTESTATION_FIELDS, [keccak256(toBytes(p.id)), p.order_hash as Hex, (c.payer ?? PAYERS[0]!) as Address, PAYOUT, TOKEN, BigInt(p.amount_paid), (c.tx_hash ?? ZERO_HASH) as Hex]);
-        return { uid, attester: addr("node-operator"), revocationTime: 0n, data };
-      },
-    };
+  /** The demo hub, read through the same NearReader and JSON-RPC the receipt page uses against NEAR. */
+  reader(): ReaderSource {
+    demoReader ??= mockReader({ hub: HUB, view: hubView, txFinal: (hash) => payments.some((p) => p.credits.some((c) => c.tx_hash === hash && c.status === "confirmed")) });
+    return demoReader;
   }
+}
 
-  async mockSign(id: string): Promise<AuthorizeResult> {
-    const payer = PAYERS[0]!;
-    return this.authorize(id, { payer, signature: toHex(new Uint8Array(65)) });
+let demoReader: ReaderSource | null = null;
+
+/** The demo hub's `payments` view: what the hub would answer for each checkout payment, in its JSON shape. */
+function hubView(method: string, args: Record<string, unknown>): unknown {
+  if (method !== "payments") throw new Error(`MethodResolveError(MethodNotFound) ${method}`);
+  return (args.ids as Id32[]).map((id) => {
+    const p = payments.find((x) => hubPaymentId(x.id) === id);
+    const last = p?.credits.filter((c) => c.status === "confirmed").at(-1);
+    if (!p || !last) return null;
+    return { id, merchant: PAYOUT, amount: last.amount, payer: last.payer ?? PAYERS[0]!, at: String(new Date(last.confirmed_at ?? last.created_at).getTime()) };
+  });
+}
+
+/**
+ * Applies a checkout `ft_transfer_call` from the demo wallet as the hub would: it checks the terms against the payment,
+ * returns the tokens for anything that does not match, and otherwise records the payment and credits the merchant.
+ * Returns null for any transaction that is not a checkout payment, so the clearing mock can take it.
+ */
+export function applyMockCheckoutTx(tx: WalletTx, signer: AccountId): MockTxOutcome | null {
+  const call = tx.actions[0];
+  if (!call || call.params.methodName !== "ft_transfer_call") return null;
+  let msg: { payment?: { payment_id: string; merchant: string; amount: string; expiry_ms: string; signature: string } };
+  try {
+    msg = JSON.parse(String(call.params.args.msg)) as typeof msg;
+  } catch {
+    return null;
   }
+  const t = msg.payment;
+  if (!t) return null;
+  const refused = (error: string): MockTxOutcome => ({ ok: false, error: `Smart contract panicked: ${error}`, refunded: true });
+  if (tx.receiverId !== TOKEN || call.params.args.receiver_id !== HUB) return refused("unknown token or receiver");
+  const p = payments.find((x) => hubPaymentId(x.id) === t.payment_id);
+  if (!p) return refused("unknown payment");
+  const amount = BigInt(String(call.params.args.amount));
+  if (amount !== BigInt(t.amount)) return refused("wrong amount");
+  if (BigInt(t.expiry_ms) <= BigInt(Date.now())) return refused("expired terms");
+  if (t.signature !== demoSignature(t.payment_id, amount)) return refused("bad checkout signature");
+  if (p.credits.some((c) => c.status === "confirmed" && BigInt(p.amount_paid) >= BigInt(p.amount_due))) return refused("payment already recorded");
+  p.events.push(event("wallet.connected", Date.now() - 4_000, { payer: signer }));
+  credit(p, amount, "wallet", signer);
+  return { ok: true, used: amount };
 }
 
 /** Mock-only: the fixed payment for each checkout state, for links in the docs and screenshots. */

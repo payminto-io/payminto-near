@@ -123,7 +123,7 @@ export const ROLE_LABEL: Record<RoleLabelKey, string> = {
 };
 
 export const ROLE_TOOLTIP: Record<RoleLabelKey, string> = {
-  platform_owner: "Runs this Payminto server, adds businesses, sets pricing, and earns the platform fee.",
+  platform_owner: "Runs this Payminto server and adds businesses. Payminto charges no processing fee.",
   platform_admin: "Helps the platform owner manage businesses; cannot change platform pricing, the fee wallet, or remove the owner.",
   recovery_key: "Emergency access for the server owner; not a login.",
   admin: "Full control of one business: payout wallet, team, API keys, refunds.",

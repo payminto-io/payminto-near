@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { BookOpenCheck, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDirectory, useLedger, useTrialBalance } from "@/lib/queries";
-import { formatDateTime, shortAddress } from "@/lib/format";
+import { formatDateTime, shortAddress, splitLedgerAccount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { LedgerEntry } from "@/lib/schemas";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,12 +16,12 @@ import { EmptyState, ErrorState, RowsSkeleton } from "@/components/app/states";
 const LEDGER_PAGE = 200;
 const LEDGER_MAX = 1000;
 
-const KIND_LABEL: Record<string, string> = { payable: "payable", receivable: "receivable", wallet: "wallet" };
+const KIND_LABEL: Record<string, string> = { payable: "payable", receivable: "receivable", wallet: "wallet", escrow: "escrow", credit: "hub credit" };
 
 function useAccountName() {
   const dir = useDirectory();
   return (account: string) => {
-    const [, addr = "", kind = ""] = account.split(":");
+    const { addr, kind } = splitLedgerAccount(account);
     const who = dir.lookup(addr)?.name ?? shortAddress(addr);
     return { who, kind: KIND_LABEL[kind] ?? kind, addr };
   };
@@ -50,7 +50,7 @@ function LedgerPagePage() {
     <>
       <PageHeader
         title="Balances"
-        description="Who owes what, and what has been paid, with every entry. Each accepted charge is booked as owed; each settlement clears it and records the money that moved."
+        description="Who owes what, and what has been paid, with every entry. Each accepted Call is booked as owed; each settlement clears it and records the money that moved."
       />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <Panel title="Trial balance" description="Every journal balances, so the books always sum to zero" bodyClassName="p-0 sm:p-0" className="h-fit">
@@ -73,13 +73,13 @@ function LedgerPagePage() {
                 </div>
               </div>
               <div className="mt-3 overflow-x-auto">
-                <table className="w-full text-sm sm:min-w-[26rem]">
+                <table className="w-full table-fixed text-sm">
                   <thead>
                     <tr className="border-b text-left text-xs text-muted-foreground">
                       <th className="py-2.5 pr-2 pl-5 font-normal">Account</th>
-                      <th className="px-2 py-2.5 text-right font-normal max-sm:hidden">Debit</th>
-                      <th className="px-2 py-2.5 text-right font-normal max-sm:hidden">Credit</th>
-                      <th className="py-2.5 pr-5 pl-2 text-right font-normal">Balance</th>
+                      <th className="w-32 px-2 py-2.5 text-right font-normal max-sm:hidden">Debit</th>
+                      <th className="w-32 px-2 py-2.5 text-right font-normal max-sm:hidden">Credit</th>
+                      <th className="w-36 py-2.5 pr-5 pl-2 text-right font-normal">Balance</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -88,12 +88,12 @@ function LedgerPagePage() {
                       return (
                         <tr key={a.account}>
                           <td className="py-2.5 pr-2 pl-5">
-                            <span className="block font-medium">{n.who}</span>
+                            <span className="block truncate font-medium" title={n.addr}>{n.who}</span>
                             <span className="block text-xs text-muted-foreground">{n.kind}</span>
                           </td>
-                          <td className="px-2 py-2.5 text-right text-muted-foreground max-sm:hidden"><Money atomic={a.debit} maxFraction={4} /></td>
-                          <td className="px-2 py-2.5 text-right text-muted-foreground max-sm:hidden"><Money atomic={a.credit} maxFraction={4} /></td>
-                          <td className="py-2.5 pr-5 pl-2 text-right font-medium"><Money atomic={a.balance} maxFraction={4} /></td>
+                          <td className="px-2 py-2.5 text-right text-muted-foreground max-sm:hidden"><Money atomic={a.debit} /></td>
+                          <td className="px-2 py-2.5 text-right text-muted-foreground max-sm:hidden"><Money atomic={a.credit} /></td>
+                          <td className="py-2.5 pr-5 pl-2 text-right font-medium"><Money atomic={a.balance} /></td>
                         </tr>
                       );
                     })}
@@ -101,8 +101,8 @@ function LedgerPagePage() {
                   <tfoot>
                     <tr className="border-t-2 font-semibold">
                       <td className="py-3 pr-2 pl-5">Total</td>
-                      <td className="px-2 py-3 text-right max-sm:hidden"><Money atomic={tb.data.totalDebit} maxFraction={4} /></td>
-                      <td className="px-2 py-3 text-right max-sm:hidden"><Money atomic={tb.data.totalCredit} maxFraction={4} /></td>
+                      <td className="px-2 py-3 text-right max-sm:hidden"><Money atomic={tb.data.totalDebit} /></td>
+                      <td className="px-2 py-3 text-right max-sm:hidden"><Money atomic={tb.data.totalCredit} /></td>
                       <td className="py-3 pr-5 pl-2 text-right"><Money atomic={tb.data.balance} /></td>
                     </tr>
                   </tfoot>
@@ -161,18 +161,18 @@ function LedgerPagePage() {
                     <p className="min-w-0 truncate text-sm font-medium">{journalTitle(lines)}</p>
                     <time className="num shrink-0 text-xs text-subtle">{lines[0] ? formatDateTime(lines[0].createdAt) : ""}</time>
                   </div>
-                  <table className="mt-1.5 w-full text-[0.8125rem]">
+                  <table className="mt-1.5 w-full table-fixed text-[0.8125rem]">
                     <tbody>
                       {lines.map((l) => {
                         const n = nameOf(l.account);
                         const debit = BigInt(l.debit) > 0n;
                         return (
                           <tr key={l.id}>
-                            <td className={cn("py-0.5 pr-3", !debit && "pl-5")}>
+                            <td className={cn("truncate py-0.5 pr-3", !debit && "pl-5")} title={n.addr}>
                               <span className="text-foreground">{n.who}</span> <span className="text-muted-foreground">{n.kind}</span>
                             </td>
-                            <td className="w-28 py-0.5 text-right">{debit ? <Money atomic={l.debit} maxFraction={4} /> : null}</td>
-                            <td className="w-28 py-0.5 text-right text-muted-foreground">{!debit ? <Money atomic={l.credit} maxFraction={4} /> : null}</td>
+                            <td className="w-28 py-0.5 text-right">{debit ? <Money atomic={l.debit} /> : null}</td>
+                            <td className="w-28 py-0.5 text-right text-muted-foreground">{!debit ? <Money atomic={l.credit} /> : null}</td>
                           </tr>
                         );
                       })}
@@ -196,12 +196,12 @@ function LedgerPagePage() {
 }
 
 const KIND_TITLE: Record<string, string> = {
-  "call.accepted": "Charge accepted",
+  "call.accepted": "Call accepted",
   "batch.settled": "Settlement paid",
   refund: "Refund",
 };
 
-/** "Charge accepted (Market Data)" from a live node's kind and memo, or the memo itself from older shapes. */
+/** "Call accepted (Market Data)" from a live node's kind and memo, or the memo itself from older shapes. */
 function journalTitle(lines: LedgerEntry[]): string {
   const first = lines[0];
   if (!first) return "Journal";

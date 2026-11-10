@@ -5,8 +5,8 @@
  * Everything here respects prefers-reduced-motion: MotionConfig drops transforms for those payers, and the pieces that
  * only decorate (particles, sweeps, shimmer, shake) are not rendered at all.
  */
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion, MotionConfig, useReducedMotion, type Transition, type Variants } from "motion/react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { AnimatePresence, motion, MotionConfig, type Transition, type Variants } from "motion/react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,9 +27,19 @@ export function CheckoutMotion({ children }: { children: ReactNode }) {
   );
 }
 
-/** True when the payer asked for less motion; decorative motion is then skipped entirely. */
+const REDUCE = "(prefers-reduced-motion: reduce)";
+function subscribeReduce(onChange: () => void): () => void {
+  const mq = window.matchMedia(REDUCE);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
+/**
+ * True when the payer asked for less motion; decorative motion is then skipped entirely. The server cannot know, so
+ * hydration renders as the server did and the reduced tree follows on the next render, never a hydration mismatch.
+ */
 export function useCalm(): boolean {
-  return Boolean(useReducedMotion());
+  return useSyncExternalStore(subscribeReduce, () => window.matchMedia(REDUCE).matches, () => false);
 }
 
 // ---------------------------------------------------------------------------
@@ -267,21 +277,6 @@ export function Shimmer({ className }: { className?: string }) {
         />
       )}
     </span>
-  );
-}
-
-/** A slow light sweep across a frame while we watch for the payment. */
-export function Sweep() {
-  const calm = useCalm();
-  if (calm) return null;
-  return (
-    <motion.span
-      aria-hidden
-      className="pointer-events-none absolute inset-0 bg-gradient-to-br from-transparent via-white/60 to-transparent mix-blend-overlay"
-      initial={{ x: "-120%" }}
-      animate={{ x: "120%" }}
-      transition={{ duration: 2.4, ease: "easeInOut", repeat: Infinity, repeatDelay: 0.6 }}
-    />
   );
 }
 

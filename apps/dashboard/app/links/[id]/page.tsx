@@ -118,7 +118,7 @@ function LinkDetail() {
       <StatStrip
         stats={[
           { label: "Payments", value: <span className="num">{formatInt(l.payments_count)}</span>, note: l.max_payments ? `of ${formatInt(l.max_payments)} allowed` : "no limit" },
-          { label: "Volume", value: <Money atomic={l.paid_total} maxFraction={2} />, note: "paid, including extra" },
+          { label: "Volume", value: <Money atomic={l.paid_total} />, note: "paid, including extra" },
           { label: "Conversion", value: <span className="num">{terminal ? `${Math.round((paid / terminal) * 100)}%` : "-"}</span>, note: "paid of finished checkouts" },
         ]}
       />

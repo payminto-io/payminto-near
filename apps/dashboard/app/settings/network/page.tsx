@@ -1,17 +1,53 @@
 "use client";
 
 import { RequirePermission } from "@/components/app/states";
-import { hashkeyContracts, networks, type HashKeyContracts } from "@payminto/protocol";
 import { MOCK_MODE } from "@/lib/config";
 import { SERVER_URL } from "@/lib/api";
 import { useLive } from "@/lib/live";
-import { chainIdOf, useHealth, useInfo } from "@/lib/queries";
-import { formatInt, formatMoney } from "@/lib/format";
+import { useHealth, useInfo } from "@/lib/queries";
+import { formatInt } from "@/lib/format";
+import { useNetworkWords } from "@/lib/use-network-words";
 import { Address, Field, Fields, PageHeader, Panel } from "@/components/app/primitives";
 import { Chip } from "@/components/app/status";
 import { BlockSkeleton, ErrorState } from "@/components/app/states";
+import { OperatorWarnings } from "@/components/app/operator-warnings";
+import { nearText } from "@/lib/hub-readiness";
+import { useHubReadiness } from "@/lib/use-hub-readiness";
+
+/**
+ * The server's standing on the hub, read from the hub by this browser: whether its receipt key is registered, which a
+ * seller needs to settle a voucher itself, and the storage balance it prepaid for settlement batches.
+ */
+function HubStandingFields({ nodeKey }: { nodeKey: string | undefined }) {
+  const r = useHubReadiness();
+  if (r.state === "off") return null;
+  const waiting = r.state === "reading" ? <Chip tone="neutral">Checking</Chip> : <span className="text-muted-foreground">Could not be read. {r.error}</span>;
+  const s = r.standing;
+  return (
+    <>
+      {nodeKey && (
+        <Field label="Key on the hub" hint="A seller can settle a voucher itself only with an acceptance signed by a receipt key this server's account registered on the hub.">
+          {s ? s.receiptKeys.includes(nodeKey) ? <Chip tone="positive">Registered</Chip> : <Chip tone="warning">Not registered</Chip> : waiting}
+        </Field>
+      )}
+      <Field label="Prepaid storage" hint="Settlement batches write storage on the hub, charged to a balance this server's account prepays. The hub refuses a batch the balance cannot pay for.">
+        {s ? (
+          <span className="flex flex-col gap-0.5">
+            <span className="num">{nearText(s.storageYocto)}</span>
+            <span className={s.storageYocto < r.minStorageYocto ? "text-xs text-warning" : "text-xs text-muted-foreground"}>
+              {s.storageYocto < r.minStorageYocto ? `Below the ${nearText(r.minStorageYocto)} one full batch can cost` : `One full batch can cost up to ${nearText(r.minStorageYocto)}`}
+            </span>
+          </span>
+        ) : (
+          waiting
+        )}
+      </Field>
+    </>
+  );
+}
 
 function NetworkSettingsPagePage() {
+  const words = useNetworkWords();
   const info = useInfo();
   const health = useHealth();
   const live = useLive();
@@ -25,13 +61,11 @@ function NetworkSettingsPagePage() {
     );
   }
   const d = info.data;
-  const chainId = chainIdOf(d);
-  const net = networks[chainId];
-  const native = net?.chain.nativeCurrency;
 
   return (
     <>
       <PageHeader title="Network" description="What your Payminto server is connected to. These values come from the server's environment; change them there and restart it." />
+      <OperatorWarnings className="mb-5" />
       {!d ? (
         <div className="grid gap-5 lg:grid-cols-2">
           <BlockSkeleton className="h-64" />
@@ -54,24 +88,13 @@ function NetworkSettingsPagePage() {
               <Field label="Automatic settlement">
                 {d.settleIntervalSec ? `Every ${formatInt(d.settleIntervalSec)} s` : "Manual, from Next settlement"}
               </Field>
-              <Field label="HashKey settlement receipt" hint="HashKey's standard record that each transfer matches its settlement (HSP).">
-                <span className="flex flex-col gap-0.5">
-                  <span className="hash">{d.hspMode ?? health.data?.hspMode ?? "-"}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {(d.hspMode ?? health.data?.hspMode) === "coordinator"
-                      ? "Each bundled transfer is reported to HashKey's coordinator."
-                      : "Your server checks each bundled transfer itself."}
-                  </span>
-                </span>
-              </Field>
             </Fields>
           </Panel>
           <Panel title="Network">
             <Fields>
               <Field label="Chain">
-                {d.network.name} <span className="text-muted-foreground">· chain {chainId}</span>
+                {d.network.name} <span className="text-muted-foreground">· {d.network.id}</span>
               </Field>
-              <Field label="Latest block"><span className="num">{health.data?.blockNumber != null ? formatInt(health.data.blockNumber) : "-"}</span></Field>
               <Field label="Explorer">
                 {d.explorer ? (
                   <a href={d.explorer} target="_blank" rel="noreferrer" className="hash break-all text-primary hover:underline">
@@ -81,7 +104,7 @@ function NetworkSettingsPagePage() {
                   <span className="text-muted-foreground">None for a local chain</span>
                 )}
               </Field>
-              <Field label="Settlement contract" hint="The contract that pays many charges in one transaction (ClearingHub)."><Address address={d.hub} showName={false} /></Field>
+              <Field label="Settlement contract" hint="The contract that escrows funds and pays many Calls in one transaction."><Address address={d.hub} showName={false} /></Field>
               <Field label="Token">
                 <span className="flex flex-wrap items-center gap-2">
                   {d.token.symbol} <span className="text-muted-foreground">{d.token.decimals} decimals</span>
@@ -90,66 +113,16 @@ function NetworkSettingsPagePage() {
               </Field>
             </Fields>
           </Panel>
-          <Panel title="Server wallet" description="Signs charge receipts and sends settlements. It pays the network fee only and never holds anyone's money.">
+          <Panel title="Server wallet" description={`Signs Call receipts and sends settlements. ${words.escrowFull}`}>
             <Fields>
               <Field label="Address"><Address address={d.operator} showName={false} /></Field>
-              <Field label="Network fee balance">
-                {d.operatorGasBalance != null ? (
-                  <span className="num">
-                    {formatMoney(d.operatorGasBalance, native?.decimals ?? 18, { maxFraction: 4 })}{" "}
-                    <span className="text-muted-foreground">{native?.symbol ?? "native"}</span>
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">Not reported by this server</span>
-                )}
-              </Field>
+              {d.nodeKey && <Field label="Receipt key"><span className="hash break-all">{d.nodeKey}</span></Field>}
+              <HubStandingFields nodeKey={d.nodeKey} />
             </Fields>
           </Panel>
-          <HashKeyPanel chainId={chainId} />
         </div>
       )}
     </>
-  );
-}
-
-/** Shared HashKey Chain contracts Payminto works with, so the platform owner can see what is live where. */
-function HashKeyPanel({ chainId }: { chainId: number }) {
-  const onHashKey = chainId === 177 || chainId === 133;
-  const id = (onHashKey ? chainId : 133) as 177 | 133;
-  const c: HashKeyContracts = hashkeyContracts[id];
-  const rows: [string, string, string | undefined][] = [
-    ["Permit2", "Signature approvals for tokens without EIP-2612", c.permit2],
-    ["Multicall3", "Batched reads", c.multicall3],
-    ["Safe factory", "Safe v1.4.1, for company-owned budgets", c.safe.proxyFactory],
-    ["EAS", "Public records of payments", c.eas],
-    ["CCIP router", "Cross-chain messaging", c.ccipRouter],
-    ["APRO USDC/USD", "Price feed, 8 decimals", c.apro.usdcUsd],
-    ["APRO USDT/USD", "Price feed, 8 decimals", c.apro.usdtUsd],
-    ["USDT", "Bridged stablecoin", c.usdt],
-  ];
-  return (
-    <Panel
-      title="HashKey Chain contracts"
-      description={
-        onHashKey
-          ? "Shared contracts on this network, checked live."
-          : `This server runs on a local chain (${chainId}). On HashKey Chain Testnet Payminto works with these contracts.`
-      }
-      className="lg:col-span-2"
-    >
-      <Fields className="lg:grid-cols-2">
-        {rows
-          .filter((r): r is [string, string, string] => Boolean(r[2]))
-          .map(([name, hint, address]) => (
-            <Field key={name} label={name}>
-              <span className="flex flex-col gap-0.5">
-                <Address address={address} showName={false} explorer={onHashKey} />
-                <span className="text-xs text-muted-foreground">{hint}</span>
-              </span>
-            </Field>
-          ))}
-      </Fields>
-    </Panel>
   );
 }
 

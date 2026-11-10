@@ -12,37 +12,29 @@ function group(whole: string): string {
  * Money for display: exact, never through floats.
  * `formatMoney("1234567", 6)` is "1.234567" and `formatMoney("1234560000", 6)` is "1,234.56".
  */
-export function formatMoney(atomic: bigint | string, decimals = 6, opts: { maxFraction?: number } = {}): string {
+export function formatMoney(atomic: bigint | string, decimals = 6): string {
   const raw = formatAmount(BigInt(atomic), decimals);
   const [whole = "0", frac = ""] = raw.split(".");
-  let f = frac;
-  if (opts.maxFraction !== undefined && f.length > opts.maxFraction) {
-    // Round half up on the decimal string so the display never invents precision.
-    const scaled = BigInt(atomic) < 0n ? -BigInt(atomic) : BigInt(atomic);
-    const unit = 10n ** BigInt(decimals - opts.maxFraction);
-    const rounded = (scaled + unit / 2n) / unit;
-    const s = rounded.toString().padStart(opts.maxFraction + 1, "0");
-    const w = s.slice(0, s.length - opts.maxFraction);
-    f = s.slice(s.length - opts.maxFraction).replace(/0+$/, "").padEnd(2, "0");
-    return `${BigInt(atomic) < 0n ? "-" : ""}${group(w)}.${f}`;
-  }
-  return `${group(whole)}.${f}`;
+  return `${group(whole)}.${frac}`;
 }
 
 /** Money with its unit, the only way amounts reach the screen: "12.50 USDC". */
-export function formatToken(atomic: bigint | string, symbol = "USDC", decimals = 6, opts?: { maxFraction?: number }): string {
-  return `${formatMoney(atomic, decimals, opts)} ${symbol}`;
+export function formatToken(atomic: bigint | string, symbol = "USDC", decimals = 6): string {
+  return `${formatMoney(atomic, decimals)} ${symbol}`;
 }
 
-/** 0x12ab...9f3c style truncation that keeps the checksum casing. */
-export function shortAddress(value: string, head = 6, tail = 4): string {
+/**
+ * A NEAR account for tight text: named accounts up to 24 characters stay whole, longer ones (implicit accounts, keys)
+ * keep the head and the last 8 characters, as AccountId does.
+ */
+export function shortAddress(value: string, head = 10, tail = 8): string {
   if (!value) return "";
-  if (value.length <= head + tail + 1) return value;
+  if (value.length <= Math.max(24, head + tail + 1)) return value;
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
 
 export function shortHash(value: string): string {
-  return shortAddress(value, 10, 6);
+  return value.length <= 17 ? value : `${value.slice(0, 10)}…${value.slice(-6)}`;
 }
 
 const intFmt = new Intl.NumberFormat("en-US");
@@ -60,19 +52,6 @@ export function formatRatio(n: number): string {
   return n >= 100 ? intFmt.format(Math.round(n)) : n.toFixed(1).replace(/\.0$/, "");
 }
 
-/** Gas units in thousands or millions, e.g. "11.2M gas". */
-export function formatGas(units: bigint | string): string {
-  const n = Number(BigInt(units));
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M gas`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(0)}k gas`;
-  return `${n} gas`;
-}
-
-/** Native-token wei as a short decimal, e.g. "0.00118 HSK" (L1 data fees appear only on HashKey Chain). */
-export function formatNative(wei: bigint | string, symbol = "HSK"): string {
-  const n = Number(BigInt(wei)) / 1e18;
-  return `${n === 0 ? "0" : n.toPrecision(3).replace(/\.?0+(e|$)/, "$1")} ${symbol}`;
-}
 
 const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" });
 export function timeAgo(iso: string, now = Date.now()): string {
@@ -97,6 +76,12 @@ export function formatDateTime(iso: string): string {
   return dtFmt.format(new Date(iso));
 }
 
+const tFmt = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+/** "14:01:57": exact time of day for rows; the date lives in the title or the row group. */
+export function formatTime(iso: string): string {
+  return tFmt.format(new Date(iso));
+}
+
 const dFmt = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 export function formatDate(iso: string | number): string {
   return dFmt.format(typeof iso === "number" ? new Date(iso * 1000) : new Date(iso));
@@ -108,4 +93,14 @@ export function percentOf(used: bigint | string, total: bigint | string): number
   if (t <= 0n) return 0;
   const p = Number((BigInt(used) * 10000n) / t) / 100;
   return Math.max(0, Math.min(100, p));
+}
+
+/**
+ * `role:account:kind`, where the account itself may contain ":" (an `ed25519:` key), so only the first and last
+ * segments are structure.
+ */
+export function splitLedgerAccount(account: string): { role: string; addr: string; kind: string } {
+  const parts = account.split(":");
+  if (parts.length < 3) return { role: parts[0] ?? "", addr: parts.slice(1).join(":"), kind: "" };
+  return { role: parts[0]!, addr: parts.slice(1, -1).join(":"), kind: parts.at(-1)! };
 }

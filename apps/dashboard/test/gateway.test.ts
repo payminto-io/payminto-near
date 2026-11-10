@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getAddress } from "viem";
 import {
   contrastRatio,
   describeFeePlan,
   formatBps,
-  groupAddress,
   linkPrice,
-  manualPaymentUri,
   normalizeBrandColor,
   parseAmountInput,
   parsePercentToBps,
-  refundSignData,
   paymentInTab,
   plainAmount,
   readableOn,
@@ -46,18 +42,6 @@ describe("plainAmount", () => {
     expect(plainAmount(25_000_000n)).toBe("25.00");
     expect(plainAmount("1234500000")).toBe("1234.50");
     expect(plainAmount(125_000n)).toBe("0.125");
-  });
-});
-
-describe("manualPaymentUri (EIP-681)", () => {
-  it("encodes token, chain, recipient and the remaining amount, checksummed", () => {
-    const uri = manualPaymentUri({
-      token: { address: "0x8fe3cb719ee4410e236cd6b72ab1fcdc06ef53c6", symbol: "USDC", decimals: 6 },
-      chain_id: 133,
-      deposit_address: "0x00000000000000000000000000000000000000a1",
-      amount_remaining: "5000000",
-    });
-    expect(uri).toBe(`ethereum:${getAddress("0x8fe3cb719ee4410e236cd6b72ab1fcdc06ef53c6")}@133/transfer?address=${getAddress("0x00000000000000000000000000000000000000a1")}&uint256=5000000`);
   });
 });
 
@@ -119,33 +103,5 @@ describe("fees and prices", () => {
   it("prices links", () => {
     expect(linkPrice({ amount: "25000000" }, T)).toBe("25.00 USDC");
     expect(linkPrice({ amount: null, min_amount: "1000000", max_amount: "500000000" }, T)).toBe("Customer chooses, 1.00 to 500.00 USDC");
-  });
-  it("groups an address in fours for comparison", () => {
-    expect(groupAddress("0x00000000000000000000000000000000000000a1")).toEqual(["0x", "0000", "0000", "0000", "0000", "0000", "0000", "0000", "0000", "0000", "00a1"]);
-  });
-});
-
-describe("refundSignData token domain", () => {
-  const base = {
-    router: getAddress("0x1e0f2223D61BF9831fa0b009AE741c3F5E898F0e"),
-    refundId: "rf_1",
-    from: getAddress("0x00000000000000000000000000000000000000a1"),
-    to: getAddress("0x00000000000000000000000000000000000000b2"),
-    amount: 1_000n,
-    nowSec: 1_800_000_000,
-  };
-
-  it("uses chains.ts for the chain's own token", () => {
-    const { typedData } = refundSignData({ ...base, chainId: 11155111, token: getAddress("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238") });
-    expect(typedData.domain).toMatchObject({ name: "USDC", version: "2", chainId: 11155111 });
-  });
-
-  it("uses the node's domain for a deployment's own test token", () => {
-    const { typedData } = refundSignData({ ...base, chainId: 133, token: getAddress("0x35D0055cd3a9E674B0b14cCDAc030BF19c8DDb15"), eip712: { name: "Payminto Test USDC", version: "1" } });
-    expect(typedData.domain).toMatchObject({ name: "Payminto Test USDC", version: "1" });
-  });
-
-  it("refuses to guess a test token's domain before the node has sent it", () => {
-    expect(() => refundSignData({ ...base, chainId: 133, token: getAddress("0x35D0055cd3a9E674B0b14cCDAc030BF19c8DDb15") })).toThrow(/signing details/);
   });
 });

@@ -1,34 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { getAddress, keccak256, toBytes, type Hex } from "viem";
-import { receiptLeaf, receiptProof, receiptsTree, type CallReceipt } from "@payminto/protocol";
+import { buildReceiptTree, receiptLeaf, sha256Text, type ReceiptFields } from "@payminto/protocol";
 import { replayProof } from "@/lib/merkle-path";
 
-const receipts: CallReceipt[] = Array.from({ length: 37 }, (_, i) => ({
-  callId: keccak256(toBytes(`call-${i}`)),
-  mandateId: keccak256(toBytes("mandate")),
-  payee: getAddress(`0x${(i % 3 + 1).toString().padStart(40, "0")}`),
+const HUB = "hub.payminto.testnet";
+const NET = "near:testnet" as const;
+const BATCH = sha256Text("batch");
+const receipts: ReceiptFields[] = Array.from({ length: 37 }, (_, i) => ({
+  callId: sha256Text(`call:${i}`),
+  budgetId: sha256Text("budget"),
+  payee: "market-data.testnet",
   amount: 2000n,
-  cumulative: 2000n * BigInt(i + 1),
-  requestHash: keccak256(toBytes(`req-${i}`)),
-  timestamp: 1_790_000_000n + BigInt(i),
+  cumulative: BigInt(2000 * (i + 1)),
+  requestHash: sha256Text(`req:${i}`),
+  timestampMs: 1_800_000_000_000n + BigInt(i),
+  voucherSig: sha256Text(`a:${i}`) + sha256Text(`b:${i}`),
 }));
 
 describe("Merkle path replay", () => {
+  const tree = buildReceiptTree(HUB, NET, BATCH, receipts);
   it("walks from the leaf to the same root the protocol tree computes", () => {
-    const tree = receiptsTree(receipts);
     for (const r of [receipts[0]!, receipts[18]!, receipts[36]!]) {
-      const { steps, root } = replayProof(receiptLeaf(r), receiptProof(tree, r));
-      expect(root).toBe((tree.root as Hex).toLowerCase());
-      expect(steps[0]!.node).toBe(receiptLeaf(r).toLowerCase());
-      for (let i = 1; i < steps.length; i++) expect(steps[i]!.node).toBe(steps[i - 1]!.parent);
+      const proof = tree.proofOf(r.callId);
+      const { steps, root } = replayProof(receiptLeaf(HUB, NET, BATCH, r), proof);
+      expect(root).toBe(tree.root);
+      expect(steps).toHaveLength(proof.length);
     }
   });
-
   it("does not reach the root with a tampered sibling", () => {
-    const tree = receiptsTree(receipts);
     const r = receipts[5]!;
-    const proof = [...receiptProof(tree, r)];
-    proof[0] = keccak256(toBytes("forged"));
-    expect(replayProof(receiptLeaf(r), proof).root).not.toBe((tree.root as Hex).toLowerCase());
+    const proof = [...tree.proofOf(r.callId)];
+    proof[0] = sha256Text("tampered");
+    expect(replayProof(receiptLeaf(HUB, NET, BATCH, r), proof).root).not.toBe(tree.root);
   });
 });

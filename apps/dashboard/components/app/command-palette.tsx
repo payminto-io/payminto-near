@@ -135,7 +135,7 @@ function useStaticEntries() {
     const actions: SearchItem[] = [];
     const act = (action: string, title: string, subtitle: string, keywords: string[] = [], href?: string) => actions.push({ key: `action:${action}`, type: "action", id: action, title, subtitle, action, href, keywords });
     if (can("links.write")) act("newLink", "New payment link", "Create a link anyone can pay", ["create", "link"], "/links/new");
-    if (can("agents.manage")) act("newBudget", "New budget", "Give an AI agent a spending limit", ["mandate", "agent", "create"], "/mandates/new");
+    if (can("agents.manage")) act("newBudget", "New budget", "Give an AI agent a spending limit", ["budget", "agent", "create"], "/budgets/new");
     if (can("refunds.request")) act("refund", "Issue refund", "Pick a paid payment to refund", ["refund", "money back"], "/payments?tab=paid");
     if (can("members.manage") || can("team.manage")) act("invite", "Invite teammate", "Add someone to this team", ["team", "member", "invite"], access.platformView ? "/platform/team?invite=1" : "/settings/team?invite=1");
     if (access.platformRole || options.length > 1) act("switch", "Switch business", "Open another business or the platform", ["account", "business", "platform"]);
@@ -160,7 +160,7 @@ function useStaticEntries() {
 
 function keywordsFor(href: string): string[] {
   const k: Record<string, string[]> = {
-    "/mandates": ["mandate", "agent", "spending"],
+    "/budgets": ["budget", "agent", "spending"],
     "/providers": ["provider", "api", "paid service"],
     "/netting": ["netting", "bundle"],
     "/batches": ["batch", "settlement"],
@@ -168,8 +168,6 @@ function keywordsFor(href: string): string[] {
     "/receipts": ["receipt", "proof", "verify"],
     "/blocked": ["denial", "screening", "deny list", "blocked wallets"],
     "/platform/businesses": ["merchant", "business"],
-    "/platform/pricing": ["fee plan", "pricing"],
-    "/developers/hashkey": ["rpc", "faucet", "explorer", "chain", "network"],
     "/activity": ["audit", "log", "history"],
   };
   return k[href] ?? [];
@@ -199,7 +197,6 @@ const FIELD_LABEL: Record<string, string> = {
   tx_hash: "Transaction",
   payer: "Payer",
   payment_address: "Payment address",
-  deposit_address: "Payment address",
   payout: "Payout wallet",
   agent: "Agent",
   owner: "Budget owner",

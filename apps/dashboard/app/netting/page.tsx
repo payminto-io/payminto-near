@@ -8,7 +8,7 @@ import { ArrowRight, Check, CheckCircle2, CircleDashed, Loader2, Waypoints } fro
 import { toast } from "sonner";
 import { useApi, useCan } from "@/lib/session";
 import { useLive } from "@/lib/live";
-import { qk, useBatches, useDirectory, useNettingPreview, useToken } from "@/lib/queries";
+import { qk, useBatches, useNettingPreview, useToken } from "@/lib/queries";
 import { plural, formatInt, formatRatio } from "@/lib/format";
 import { beforeAfter, netPositions } from "@/lib/netting";
 import { cn } from "@/lib/utils";
@@ -19,14 +19,14 @@ import { FlowGraph } from "@/components/app/flow-graph";
 import { Hash, Money, PageHeader, Panel } from "@/components/app/primitives";
 import { NettingHero } from "@/components/app/netting-hero";
 import { TransferRow } from "@/components/app/transfer-row";
+import { AccountText } from "@/components/ds/account-id";
 import { BlockSkeleton, EmptyState, ErrorState } from "@/components/app/states";
 
 type Phase = "idle" | "settling" | "done" | "failed";
 const STEPS = [
   { key: "build", label: "Prepare the settlement" },
-  { key: "cosign", label: "Collect HashKey co-signatures" },
   { key: "submit", label: "Send the transaction" },
-  { key: "confirm", label: "Final on HashKey Chain" },
+  { key: "confirm", label: "Final on NEAR" },
 ] as const;
 
 function NettingPagePage() {
@@ -34,7 +34,6 @@ function NettingPagePage() {
   const api = useApi();
   const qc = useQueryClient();
   const preview = useNettingPreview();
-  const dir = useDirectory();
   const token = useToken();
   const live = useLive();
 
@@ -106,24 +105,26 @@ function NettingPagePage() {
   }, [live.events, phase, settle.isPending, preview.data, mountedAt]);
 
   const stepIndex = useMemo(() => {
-    if (phase === "done") return 4;
+    if (phase === "done") return 3;
     if (phase !== "settling") return -1;
     const mine = live.events.filter((e) => new Date(e.at).getTime() >= startedAt - 500);
-    if (result.data?.status === "confirmed" || mine.some((e) => e.type === "batch.confirmed")) return 4;
-    // Sent (in a block) still waits for the finality head before it counts as final.
-    if (result.data?.status === "submitted" || result.data?.status === "included" || mine.some((e) => e.type === "batch.submitted" || e.type === "batch.included")) return 3;
-    if (result.data?.status === "cosigning" || mine.some((e) => e.type === "batch.started")) return 1;
+    if (result.data?.status === "confirmed" || mine.some((e) => e.type === "batch.confirmed")) return 3;
+    // Sent still waits for the transaction to be final before it counts.
+    if (result.data?.status === "submitted" || mine.some((e) => e.type === "batch.submitted")) return 2;
+    if (mine.some((e) => e.type === "batch.started")) return 1;
     return 0;
   }, [phase, live.events, result.data, startedAt]);
 
   const shown = phase === "idle" ? preview.data : snapshot ?? preview.data;
-  const nameOf = (a: string) => dir.lookup(a)?.name ?? null;
+  // Netting is per account (a Budget owner on one side, a payee on the other), so parties are named by account. A service
+  // name would mislabel an owner that also sells something, and say nothing about an account that sells nothing.
+  const nameOf = (a: string) => a;
 
   return (
     <>
       <PageHeader
         title="Next settlement"
-        description="What moves in the next bundled transfer. Payminto adds up who owes whom, so one transaction pays every charge and only the difference moves, wallet to wallet."
+        description="What moves in the next bundled transfer. Payminto adds up who owes whom, so one transaction on the hub clears every Call and only each owner's net amount moves."
         actions={can("settlements.run") ? undefined : <span className="text-sm text-muted-foreground">A platform owner or admin runs settlements.</span>}
       />
 
@@ -161,7 +162,7 @@ function NettingPagePage() {
                   )}
                   {phase === "idle" && (
                     <p className="text-xs text-muted-foreground">
-                      One transaction. Your server pays only the network fee; money moves directly between agent and service wallets.
+                      {"One transaction on the hub. It moves each owner's net amount from escrow to each creditor's balance on the hub, and a payout then sends that balance to the account. Your server pays the network fee."}
                     </p>
                   )}
                 </>
@@ -171,7 +172,7 @@ function NettingPagePage() {
           <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
             <Panel
               title="Who owes whom"
-              description={`${formatInt(shown.calls ?? 0)} ${plural(shown.calls ?? 0, "charge")} since the last settlement, grouped by agent and service`}
+              description={`${formatInt(shown.calls ?? 0)} ${plural(shown.calls ?? 0, "Call")} since the last settlement, grouped by account`}
             >
               <FlowGraph
                 obligations={shown.gross}
@@ -180,7 +181,7 @@ function NettingPagePage() {
                 decimals={token.decimals}
                 collapsed={phase === "settling" || phase === "done"}
               />
-              <NetPositions preview={shown} nameOf={nameOf} />
+              <NetPositions preview={shown} />
             </Panel>
 
             <Panel
@@ -188,7 +189,7 @@ function NettingPagePage() {
               description={
                 phase === "done"
                   ? "One transaction, verified and bundled on chain"
-                  : `${shown.net.length} direct wallet-to-wallet ${shown.net.length === 1 ? "transfer" : "transfers"}, nothing held in between`
+                  : `${shown.net.length} net ${shown.net.length === 1 ? "amount" : "amounts"} on the hub, from an owner's escrow to a creditor's balance`
               }
               bodyClassName="flex flex-col gap-5"
             >
@@ -205,7 +206,7 @@ function NettingPagePage() {
                         amount={t.amount}
                         marker={
                           <span className="num flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs text-muted-foreground">
-                            {stepIndex >= 3 ? <Check className="size-3.5 text-positive" /> : i + 1}
+                            {stepIndex >= 2 ? <Check className="size-3.5 text-positive" /> : i + 1}
                           </span>
                         }
                       />
@@ -213,7 +214,7 @@ function NettingPagePage() {
                   </ul>
                   {(shown.skipped?.length ?? 0) > 0 && (
                     <p className="rounded-md bg-warning-soft px-3 py-2 text-sm text-warning">
-                      {shown.skipped!.length} mandate(s) cannot pay right now and will stay pending: {shown.skipped!.map((s) => s.reason).join("; ")}
+                      {shown.skipped!.length} budget(s) cannot pay right now and will stay pending: {shown.skipped!.map((s) => s.reason).join("; ")}
                     </p>
                   )}
 
@@ -227,7 +228,7 @@ function NettingPagePage() {
   );
 }
 
-function NetPositions({ preview, nameOf }: { preview: NettingPreview; nameOf: (a: string) => string | null }) {
+function NetPositions({ preview }: { preview: NettingPreview }) {
   const rows = netPositions(preview.gross);
   const owes = new Map<string, bigint>();
   const owed = new Map<string, bigint>();
@@ -237,13 +238,13 @@ function NetPositions({ preview, nameOf }: { preview: NettingPreview; nameOf: (a
   }
   return (
     <div className="mt-5 border-t pt-4">
-      <h3 className="text-sm font-medium">Net position per wallet</h3>
-      <p className="mt-0.5 text-xs text-muted-foreground">What each wallet owes minus what it is owed. Only these differences move.</p>
+      <h3 className="text-sm font-medium">Net position per account</h3>
+      <p className="mt-0.5 text-xs text-muted-foreground">What each account owes minus what it is owed. Only these differences move.</p>
       <div className="mt-3">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-muted-foreground">
-              <th className="py-2 pr-3 font-normal">Wallet</th>
+              <th className="py-2 pr-3 font-normal">Account</th>
               <th className="py-2 pr-3 text-right font-normal max-sm:hidden">Owes</th>
               <th className="py-2 pr-3 text-right font-normal max-sm:hidden">Is owed</th>
               <th className="py-2 text-right font-normal">Net</th>
@@ -253,7 +254,7 @@ function NetPositions({ preview, nameOf }: { preview: NettingPreview; nameOf: (a
             {rows.map((r) => (
               <tr key={r.party}>
                 <td className="py-2 pr-3">
-                  <span className="font-medium">{nameOf(r.party) ?? "Wallet"}</span>
+                  <AccountText value={r.party} className="font-medium" />
                 </td>
                 <td className="py-2 pr-3 text-right text-muted-foreground max-sm:hidden">
                   <Money atomic={owes.get(r.party) ?? 0n} />
@@ -303,7 +304,7 @@ function Confirmed({ batch, onBack }: { batch: BatchDetail; onBack: () => void }
       <p className="flex items-center gap-2 font-medium text-positive">
         <CheckCircle2 className="size-5" /> Settlement #{batch.seq} confirmed
       </p>
-      <p className="text-sm text-muted-foreground">Settled on HashKey Chain in one transaction. The hub verified every charge signature and cap before moving funds.</p>
+      <p className="text-sm text-muted-foreground">Settled on NEAR in one transaction. The hub verified every Call signature and cap before moving funds.</p>
       <div className="text-sm">
         <p className="text-xs text-muted-foreground">Settlement transaction</p>
         <Hash value={batch.txHash} kind="tx" className="mt-0.5" />
@@ -325,16 +326,16 @@ function SettledResult({ batch }: { batch: BatchDetail }) {
     <div className="flex flex-col gap-4 animate-in fade-in-0 slide-in-from-bottom-1 duration-500">
       <dl className="grid gap-2 text-sm">
         <div className="flex items-center justify-between gap-3">
-          <dt className="text-muted-foreground">Charges cleared</dt>
+          <dt className="text-muted-foreground">Calls cleared</dt>
           <dd className="num font-medium">{formatInt(batch.calls)}</dd>
         </div>
         <div className="flex items-center justify-between gap-3">
           <dt className="text-muted-foreground">Owed before bundling</dt>
-          <dd><Money atomic={batch.gross} maxFraction={4} /></dd>
+          <dd><Money atomic={batch.gross} /></dd>
         </div>
         <div className="flex items-center justify-between gap-3">
           <dt className="text-muted-foreground">Moved on chain</dt>
-          <dd><Money atomic={batch.net} maxFraction={4} className="font-medium" /></dd>
+          <dd><Money atomic={batch.net} className="font-medium" /></dd>
         </div>
       </dl>
       <ul className="divide-y rounded-lg border">
@@ -344,7 +345,6 @@ function SettledResult({ batch }: { batch: BatchDetail }) {
             from={t.from}
             to={t.to}
             amount={t.amount}
-            status={t.hsp?.status ?? null}
             marker={
               <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-positive-soft">
                 <Check className="size-3.5 text-positive" />
@@ -382,12 +382,12 @@ function NothingToNet() {
       >
         {last ? (
           <>
-            Settlement #{last.seq} cleared <span className="num">{formatInt(last.calls)}</span> charges in{" "}
+            Settlement #{last.seq} cleared <span className="num">{formatInt(last.calls)}</span> Calls in{" "}
             <span className="num">{last.transfers}</span> on-chain {last.transfers === 1 ? "transfer" : "transfers"} (
-            <span className="num">{formatRatio(last.transfers ? last.calls / last.transfers : 0)}</span> charges per transfer). New charges appear here as they are accepted.
+            <span className="num">{formatRatio(last.transfers ? last.calls / last.transfers : 0)}</span> Calls per transfer). New Calls appear here as they are accepted.
           </>
         ) : (
-          "Charges accepted since the last settlement appear here. Run your agents against a paid service, then come back to settle."
+          "Calls accepted since the last settlement appear here. Run your agents against a paid service, then come back to settle."
         )}
       </EmptyState>
     </Panel>

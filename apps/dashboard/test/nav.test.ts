@@ -13,17 +13,17 @@ describe("buildNav per role (PRODUCT.md 3.2 to 3.4)", () => {
     const m = buildNav({ ...base, grants: grantsFor({ platformRole: "owner", memberships: [] }), scope: platform });
     expect(labels(m)).toEqual([
       ["Payments", true, ["Payments", "Payment links", "Refunds", "Customers"]],
-      ["Agents", true, ["Budgets", "Paid services", "Next settlement", "Settlements"]],
-      ["Platform", true, ["Businesses", "Pricing plans", "Platform earnings", "Platform team", "Sign-up requests", "Email outbox"]],
+      ["Agents", true, ["Budgets", "Paid services", "Next settlement", "Settlements", "Payouts", "Refusal alerts"]],
+      ["Platform", true, ["Businesses", "Platform team", "Sign-up requests", "Email outbox"]],
       ["Records", false, ["Blocked", "Balances", "Verify", "Activity log"]],
-      ["Developers", false, ["API keys", "Webhooks", "HashKey Chain"]],
+      ["Developers", false, ["API keys", "Webhooks"]],
     ]);
     expect(m.tabs.map((t) => t.label)).toEqual(["Home", "Payments", "Businesses"]);
   });
-  it("hides earnings and the outbox from a platform admin", () => {
+  it("hides the outbox from a platform admin", () => {
     const m = buildNav({ ...base, grants: grantsFor({ platformRole: "admin", memberships: [] }), scope: platform });
     const platformItems = m.sections.find((s) => s.id === "platform")!.items.map((i) => i.label);
-    expect(platformItems).toEqual(["Businesses", "Pricing plans", "Platform team", "Sign-up requests"]);
+    expect(platformItems).toEqual(["Businesses", "Platform team", "Sign-up requests"]);
   });
   it("leaves AI agents out of the platform view, where no business is open", () => {
     const m = buildNav({ ...base, grants: grantsFor({ platformRole: "owner", memberships: [] }), scope: platform });
@@ -43,18 +43,17 @@ describe("buildNav per role (PRODUCT.md 3.2 to 3.4)", () => {
       ["Payments", true, ["Payments", "Payment links", "Refunds", "Customers"]],
       ["Agents", false, ["AI agents"]],
       ["Records", false, ["Blocked", "Verify", "Activity log"]],
-      ["Developers", false, ["API keys", "Webhooks", "HashKey Chain"]],
+      ["Developers", false, ["API keys", "Webhooks"]],
     ]);
     expect(m.tabs.map((t) => t.label)).toEqual(["Home", "Payments", "Payment links"]);
   });
-  it("gives Staff and Viewer only Payments, AI agents, Verify and HashKey Chain", () => {
+  it("gives Staff and Viewer only Payments, AI agents and Verify", () => {
     for (const role of ["staff", "viewer"] as const) {
       const m = buildNav({ ...base, grants: grantsFor({ platformRole: null, memberships: [{ merchantId: A, role }] }), scope: business });
       expect(labels(m)).toEqual([
         ["Payments", true, ["Payments", "Payment links", "Refunds", "Customers"]],
         ["Agents", false, ["AI agents"]],
         ["Records", false, ["Verify"]],
-        ["Developers", false, ["HashKey Chain"]],
       ]);
     }
   });

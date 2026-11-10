@@ -8,7 +8,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, ArrowUp } from "lucide-react";
-import { toHex } from "viem";
+import { toHex } from "@payminto/protocol";
 import { useApi } from "@/lib/session";
 import { ak, useBusinessId, useFollowRun } from "@/lib/agents-queries";
 import { runErrorText } from "@/lib/agents";
@@ -29,7 +29,7 @@ export function AskBox({ agent, provider, connectionLabel, providers, blocked }:
   const [runId, setRunId] = useState<string | null>(null);
   const follow = useFollowRun(runId);
   const start = useMutation({
-    mutationFn: (text: string) => api.agents.startRun(agent.id, text, toHex(crypto.getRandomValues(new Uint8Array(16))).slice(2)),
+    mutationFn: (text: string) => api.agents.startRun(agent.id, text, toHex(crypto.getRandomValues(new Uint8Array(16)))),
     onSuccess: (run) => {
       setRunId(run.id);
       setInput("");

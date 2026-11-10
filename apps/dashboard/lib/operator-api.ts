@@ -3,21 +3,20 @@
  * platform. In mock mode they are served by lib/mock/gateway.ts.
  */
 import { z } from "zod";
-import { getAddress, isAddress, type Address, type Hex } from "viem";
-import { payoutChangeMessage as protocolPayoutChangeMessage, type PayoutProofScope } from "@payminto/protocol";
+import { isAccountId, payoutChangeMessage as protocolPayoutMessage, type AccountId, type Network, type PayoutProof } from "@payminto/protocol";
 import { feePlanSchema, merchantMethodSchema, merchantSchema, platformFeesSchema, platformSchema, type FeePlan, type Merchant, type MerchantMethod, type Platform, type PlatformFees } from "./schemas";
 import { requestJson, type RequestOptions } from "./http";
 
 export type CreateMerchantBody = Pick<Merchant, "name" | "slug" | "payout" | "fee_plan_id"> & Partial<Pick<Merchant, "support_email" | "brand_color" | "logo_url">> & {
-  /** EIP-191 proof that the payout wallet is controlled by whoever registers it. */
-  payout_proof: { timestamp: number; signature: Hex };
+  /** Proof that the payout account is controlled by whoever registers it. */
+  payout_proof: Omit<PayoutProof, "payout">;
   methods?: Omit<MerchantMethod, "merchant_id">[];
 };
 export type MerchantPatch = Partial<Pick<Merchant, "name" | "status" | "support_email" | "brand_color" | "logo_url" | "fee_plan_id">>;
 export type PlatformPatch = Partial<Pick<Platform, "name" | "default_fee_plan_id" | "signup_mode" | "agent_budgets_for_businesses">>;
 export type FeePlanBody = Pick<FeePlan, "name" | "platform_fee_bps" | "platform_fee_fixed" | "min_fee" | "max_fee">;
 /** One payout change, newest first (GATEWAY.md section 15); `proven` is false only for the seeded first payout. */
-export type PayoutHistoryEntry = { old_payout: Address | null; new_payout: Address; proven: boolean; signed_at?: number | null; changed_at: string };
+export type PayoutHistoryEntry = { old_payout: AccountId | null; new_payout: AccountId; proven: boolean; signed_at?: number | null; changed_at: string };
 
 export interface OperatorApi {
   platform(): Promise<Platform>;
@@ -27,7 +26,7 @@ export interface OperatorApi {
   merchant(id: string): Promise<Merchant & { payout_history?: PayoutHistoryEntry[] }>;
   createMerchant(body: CreateMerchantBody): Promise<Merchant>;
   updateMerchant(id: string, patch: MerchantPatch): Promise<Merchant>;
-  changePayout(id: string, body: { payout: Address; timestamp: number; signature: Hex }): Promise<Merchant>;
+  changePayout(id: string, body: PayoutProof): Promise<Merchant>;
   methods(merchantId: string): Promise<MerchantMethod[]>;
   setMethods(merchantId: string, rows: Omit<MerchantMethod, "merchant_id">[]): Promise<MerchantMethod[]>;
   feePlans(): Promise<FeePlan[]>;
@@ -35,13 +34,10 @@ export interface OperatorApi {
   updateFeePlan(id: string, patch: Partial<FeePlanBody>): Promise<FeePlan>;
 }
 
-/**
- * The message a new payout wallet signs (EIP-191 personal_sign): the protocol's payoutChangeMessage, bound to the
- * node's chain and hub (`scope`, from /v1/info). Placeholders stand in while the payout or the node info is unknown.
- */
-export function payoutChangeMessage(merchantId: string, payout: string, timestamp: number, scope: PayoutProofScope | null): string {
-  if (scope && isAddress(payout)) return protocolPayoutChangeMessage(merchantId, payout, timestamp, scope);
-  return `Payminto payout change ${merchantId} ${payout} ${timestamp} chain ${scope?.chainId ?? "{chain}"} hub ${scope ? getAddress(scope.hub) : "{hub}"}`;
+/** The text a new payout account signs with NEP-413. Placeholders stand in while the payout or the node info is unknown. */
+export function payoutChangeMessage(merchantId: string, payout: string, timestamp: number, scope: { network: string; hub: string } | null): string {
+  if (scope && isAccountId(payout)) return protocolPayoutMessage(merchantId, payout, timestamp, { network: scope.network as Network, hub: scope.hub });
+  return `Payminto payout change ${merchantId} ${payout} ${timestamp} network ${scope?.network ?? "{network}"} hub ${scope?.hub ?? "{hub}"}`;
 }
 
 function listOf<T extends z.ZodType>(item: T) {
@@ -52,8 +48,8 @@ const merchantDetailSchema = merchantSchema.extend({
   payout_history: z
     .array(
       z.object({
-        old_payout: z.string().regex(/^0x[0-9a-fA-F]{40}$/).nullable(),
-        new_payout: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+        old_payout: z.string().nullable(),
+        new_payout: z.string(),
         proven: z.boolean(),
         signed_at: z.number().nullable().optional(),
         changed_at: z.string(),
@@ -94,7 +90,7 @@ export class HttpOperatorApi implements OperatorApi {
     return this.req(`/v1/merchants/${encodeURIComponent(id)}`, merchantDetailSchema);
   }
   /**
-   * The node takes the payout as its proof object ({payout, timestamp, signature}) and sets methods through their own
+   * The node takes the payout as its proof object ({payout, timestamp, message, recipient, nonce, public_key, signature}) and sets methods through their own
    * route, so the wizard's one body becomes a create followed by a methods PUT for the new merchant.
    */
   async createMerchant(body: CreateMerchantBody) {
@@ -106,7 +102,7 @@ export class HttpOperatorApi implements OperatorApi {
   updateMerchant(id: string, patch: MerchantPatch) {
     return this.send("PATCH", `/v1/merchants/${encodeURIComponent(id)}`, merchantSchema, patch);
   }
-  changePayout(id: string, body: { payout: Address; timestamp: number; signature: Hex }) {
+  changePayout(id: string, body: PayoutProof) {
     return this.send("POST", `/v1/merchants/${encodeURIComponent(id)}/payout`, merchantSchema, body);
   }
   // Methods always read in checkout order (people first, then agents), whatever order the node stores them in.

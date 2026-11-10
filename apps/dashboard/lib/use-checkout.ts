@@ -85,7 +85,7 @@ export function useCheckout(id: string) {
   }, [api, id, qc]);
 
   const info = useQuery({ queryKey: ["checkout-info"], queryFn: () => api!.info(), enabled: Boolean(api), staleTime: Infinity, retry: 1 });
-  const network = q.data ? gatewayNetwork(q.data.chain_id, info.data) : null;
+  const network = q.data ? gatewayNetwork(info.data) : null;
 
   return { api, query: q, live, key, network };
 }

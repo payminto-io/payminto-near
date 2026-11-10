@@ -3,7 +3,7 @@ import { buildGroups, cycleFilter, detect, flatten, highlight, moveIndex, parseQ
 
 const page = (title: string, href: string, keywords?: string[]): SearchItem => ({ key: `page:${href}`, type: "page", id: href, title, href, keywords });
 const action = (title: string, id: string): SearchItem => ({ key: `action:${id}`, type: "action", id, title, action: id });
-const pages = [page("Payments", "/payments"), page("Payment links", "/links"), page("Budgets", "/mandates", ["mandate"]), page("HashKey Chain", "/developers/hashkey", ["rpc"])];
+const pages = [page("Payments", "/payments"), page("Payment links", "/links"), page("Budgets", "/budgets", ["budget"]), page("Network", "/settings/network", ["rpc"])];
 const actions = [action("New payment link", "newLink"), action("Switch business", "switch")];
 
 describe("parseQuery and detect (PRODUCT.md 5.2)", () => {
@@ -18,6 +18,8 @@ describe("parseQuery and detect (PRODUCT.md 5.2)", () => {
     expect(detect("plink_x")).toEqual({ kind: "id", type: "link" });
     expect(detect(`0x${"a".repeat(64)}`)).toEqual({ kind: "tx_hash" });
     expect(detect(`0x${"b".repeat(40)}`)).toEqual({ kind: "address" });
+    expect(detect("a".repeat(64))).toEqual({ kind: "tx_hash" });
+    expect(detect("alice.testnet")).toEqual({ kind: "address" });
     expect(detect("alice@example.com")).toEqual({ kind: "email" });
     expect(detect("12.5")).toEqual({ kind: "amount" });
     expect(detect("x")).toEqual({ kind: "short" });
@@ -51,7 +53,7 @@ describe("buildGroups", () => {
     expect(g.find((x) => x.type === "payment")!.total).toBe(12);
   });
   it("matches pages by title first, then keywords", () => {
-    const g = buildGroups({ query: "mandate", recent: [], actions, pages, remote: [] });
+    const g = buildGroups({ query: "budget", recent: [], actions, pages, remote: [] });
     expect(flatten(g).map((i) => i.title)).toEqual(["Budgets"]);
   });
   it("keeps only the filtered group", () => {

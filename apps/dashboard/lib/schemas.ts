@@ -5,12 +5,16 @@
  * Amounts are decimal strings of atomic units; they are only ever converted with BigInt.
  */
 import { z } from "zod";
-import { DENIAL_RULES, HSP_PAYMENT_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, type DenialRule } from "@payminto/protocol";
+import { DENIAL_RULES, PAYMENT_METHODS, PAYMENT_STATUSES, type DenialRule } from "@payminto/protocol";
 import type * as P from "@payminto/protocol";
+import type { Verdict } from "@payminto/payee-check";
 
-const hex = z.string().regex(/^0x[0-9a-fA-F]*$/, "expected 0x-prefixed hex");
-export const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/, "expected an address");
-export const bytes32Schema = z.string().regex(/^0x[0-9a-fA-F]{64}$/, "expected bytes32");
+/** A NEAR transaction hash (base58 text), or a hex signature. Opaque here; the chain package validates them. */
+const txHash = z.string().min(1);
+/** A NEAR account id or an `ed25519:` public key. The gateway mock still uses 0x-style ids, which this accepts too. */
+export const addressSchema = z.string().regex(/^[A-Za-z0-9._:-]{2,128}$/, "expected an account");
+/** Id32: 64 hex characters. A 0x prefix is tolerated for gateway fields that are still hashed with keccak. */
+export const bytes32Schema = z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/, "expected a 32-byte id");
 /** Atomic units. Numbers are accepted and normalised so a backend that sends JSON numbers still parses. */
 export const atomicSchema = z
   .union([z.string().regex(/^-?\d+$/, "expected an integer amount"), z.number().int(), z.bigint()])
@@ -28,92 +32,80 @@ export const tokenSchema = z.object({
   address: addressSchema,
   symbol: z.string(),
   decimals: z.number().int(),
-  /** The token's own EIP-712 domain, as the node verified it on chain (newer nodes only). */
-  eip712: z.object({ name: z.string(), version: z.string() }).optional(),
 });
 export type Token = z.infer<typeof tokenSchema>;
 
 export const healthSchema = z.object({
   ok: z.boolean(),
-  chainId: z.number(),
+  network: z.string(),
   hub: addressSchema,
   token: z.union([addressSchema, tokenSchema]),
   operator: addressSchema,
-  /** Null when the node cannot reach its RPC (the node then answers 503). */
-  blockNumber: z.union([z.number(), z.string(), z.null()]).transform((v) => (v === null ? null : Number(v))),
-  hspMode: z.string(),
 });
 export type Health = z.infer<typeof healthSchema>;
 
 export const infoSchema = z.object({
-  network: z.union([
-    z.object({ chainId: z.number(), name: z.string() }).passthrough(),
-    z.string().transform((name) => ({ chainId: 0, name })),
-  ]),
-  chainId: z.number().optional(),
+  network: z.object({ id: z.string(), name: z.string(), explorer: z.string().nullable().optional(), testnet: z.boolean(), rpc_url: z.string().nullable().optional() }),
   hub: addressSchema,
+  hubExplorerUrl: z.string().nullable().optional(),
   token: tokenSchema,
   explorer: z.string().nullable().optional(),
   operator: addressSchema,
+  /** The key the node signs receipts with. */
+  nodeKey: z.string().optional(),
   version: z.string(),
-  hspMode: z.string().optional(),
-  operatorGasBalance: atomicSchema.optional(),
   settleIntervalSec: z.number().optional(),
-  publicUrl: z.string().optional(),
-  /** confirmTag: the head a batch must reach to count as final ("safe" on HashKey Chain, "latest" on a local chain). */
-  settlement: z.object({ confirmTag: z.string().optional() }).passthrough().optional(),
-  /** hspPayments: whether HashKey's HSP can take payments on this server now (GATEWAY.md section 17). */
-  gateway: z
-    .object({
-      hspPayments: z
-        .object({
-          state: z.enum(["off", "checking", "available", "unavailable"]),
-          reason: z.string().nullable().optional(),
-          message: z.string().nullable().optional(),
-          network: z.string().nullable().optional(),
-        })
-        .passthrough()
-        .optional(),
-    })
-    .passthrough()
-    .optional(),
+  publicUrl: z.string().nullable().optional(),
+  settlement: z.object({ intervalSec: z.number().optional() }).passthrough().optional(),
+  gateway: z.object({ enabled: z.boolean().optional(), checkoutBaseUrl: z.string().optional() }).passthrough().optional(),
 });
 export type Info = z.infer<typeof infoSchema>;
 
 export const policySchema = z.object({
   perCallCap: atomicSchema,
   dailyCap: atomicSchema,
+  hourlyCap: atomicSchema.optional(),
   maxCallsPerMinute: z.number(),
+  maxRepeatsPerRequest: z.number().optional(),
   purpose: z.string(),
 });
 
-export const mandateJsonSchema = z.object({
+export const budgetJsonSchema = z.object({
   owner: addressSchema,
-  agent: addressSchema,
-  token: addressSchema,
-  totalCap: atomicSchema,
-  validAfter: atomicSchema,
+  /** ed25519 public key in NEAR text form. */
+  agentPk: addressSchema,
+  settler: addressSchema,
+  cap: atomicSchema,
+  /** Unix milliseconds. */
   validUntil: atomicSchema,
-  payeesRoot: bytes32Schema,
+  payees: z.array(addressSchema),
   policyHash: bytes32Schema,
   salt: bytes32Schema,
 });
 
-export const mandateStatusSchema = z.enum(["pending", "open", "revoked", "expired", "failed"]);
-export type MandateStatus = z.infer<typeof mandateStatusSchema>;
+export const budgetStatusSchema = z.enum(["pending", "open", "revoked", "expired", "failed"]);
+export type BudgetStatus = z.infer<typeof budgetStatusSchema>;
 
 export const spendSchema = z.object({
   settled: atomicSchema,
   pending: atomicSchema,
+  total: atomicSchema.optional(),
   today: atomicSchema,
   remaining: atomicSchema,
 });
 
 export const callStatusSchema = z.enum(["accepted", "settled", "settling"]);
 
+/**
+ * How a settled Call was settled: in one of the server's batches, or by its seller on the hub (`settle_own`). Null until
+ * settled. Absent on an older node; a value this dashboard does not know reads as unknown, so the list still parses.
+ */
+export const settledBySchema = z.enum(["batch", "seller"]).nullable().optional().catch(undefined);
+export type SettledBy = "batch" | "seller" | null;
+
 export const callSchema = z.object({
   id: bytes32Schema,
-  mandateId: bytes32Schema,
+  budgetId: bytes32Schema,
   agent: addressSchema,
   payee: addressSchema,
   providerId: z.string().nullable().optional(),
@@ -121,6 +113,8 @@ export const callSchema = z.object({
   cumulative: atomicSchema,
   requestHash: bytes32Schema,
   status: callStatusSchema,
+  /** "seller": the seller settled this Call itself on the hub, so it is in no batch and has no Merkle proof. */
+  settledBy: settledBySchema,
   batchId: bytes32Schema.nullable().optional(),
   createdAt: timeSchema,
 });
@@ -130,48 +124,185 @@ export const denialSchema = z.object({
   id: z.union([z.string(), z.number()]).transform(String),
   rule: denialRuleSchema,
   message: z.string(),
-  mandateId: bytes32Schema.nullable().optional(),
+  budgetId: bytes32Schema.nullable().optional(),
   agent: addressSchema.nullable().optional(),
   payee: addressSchema.nullable().optional(),
   providerId: z.string().nullable().optional(),
   amount: atomicSchema.nullable().optional(),
+  /** Holds `refusal` (rule, message, attemptedAmount, remainingBudget, retry) when the node recorded one. */
+  details: z.record(z.string(), z.unknown()).nullable().optional(),
   createdAt: timeSchema,
 });
 export type Denial = z.infer<typeof denialSchema>;
 
-export const mandateSchema = z.object({
+// ---------------------------------------------------------------------------
+// The payee check on the node (apps/node/README.md "The payee check"): the verdict it holds per Budget and Payee, the
+// owner's decisions, the Calls that wait for one, and reports. A node without the feature sends none of this.
+// ---------------------------------------------------------------------------
+
+export const payeeVerdictKindSchema = z.enum(["allow", "warn", "block"]);
+export type PayeeVerdictKind = z.infer<typeof payeeVerdictKindSchema>;
+
+/** Keeps the entries of a list that parse and drops the rest, so one odd entry never hides a whole Budget. */
+function lenientArray<T>(item: z.ZodType<T, unknown>): z.ZodType<T[], unknown> {
+  return z.array(z.unknown()).transform((all) =>
+    all.flatMap((v) => {
+      const r = item.safeParse(v);
+      return r.success ? [r.data] : [];
+    }),
+  );
+}
+
+const payeeEvidenceSchema = z.union([z.object({ type: z.literal("tx"), hash: z.string() }), z.object({ type: z.literal("url"), url: z.string() })]);
+
+/** A signal of the payee check. An id this dashboard does not know still parses: it is shown by its reason. */
+export const payeeSignalSchema = z.object({
+  id: z.string(),
+  severity: z.enum(["info", "warn", "block"]),
+  reason: z.string(),
+  facts: z.record(z.string(), z.unknown()).optional().default({}),
+});
+export type PayeeSignal = { id: string; severity: "info" | "warn" | "block"; reason: string };
+
+/**
+ * A verdict of `@payminto/payee-check` as the node sends it, ready for the package's `toView`. Lists a node left out
+ * read as empty, and a report that does not parse is dropped: report text is a third party's claim, kept as data.
+ */
+export const payeeVerdictSchema = z
+  .object({
+    verdict: payeeVerdictKindSchema,
+    payee: z.string(),
+    kind: z.enum(["named", "implicit", "eth_implicit"]).nullable().optional().default(null),
+    payer: z.string().nullable().optional().default(null),
+    signals: z.array(payeeSignalSchema).optional().default([]),
+    checked: z.array(z.string()).optional().default([]),
+    notChecked: z.array(z.string()).optional().default([]),
+    reports: lenientArray(z.object({ account: z.string(), reporter: z.string(), reason: z.string(), evidence: payeeEvidenceSchema, atMs: z.number() })).optional().default([]),
+    checkedAtMs: z.number(),
+  })
+  .transform((v) => v as unknown as Verdict);
+
+/** The verdict the node holds for one Payee of a Budget, and the owner's decision about it, if any. */
+export const payeeCheckSchema = z.object({
+  payee: addressSchema,
+  status: payeeVerdictKindSchema,
+  /** False when a source did not answer, so the verdict may be heavier than a full look would be. */
+  complete: z.boolean().optional().default(true),
+  checkedAt: timeSchema,
+  approval: z.enum(["approve", "deny"]).nullable().optional().default(null),
+  verdict: payeeVerdictSchema,
+});
+export type PayeeCheck = z.infer<typeof payeeCheckSchema>;
+
+const decidedBySchema = z.object({ type: z.string(), id: z.string().nullable().optional().default(null) });
+
+/** An owner's decision about one Payee of one Budget. `signals` are the warnings and blocks the owner saw. */
+export const payeeApprovalSchema = z.object({
+  budgetId: bytes32Schema,
+  payee: addressSchema,
+  decision: z.enum(["approve", "deny"]),
+  overrideBlock: z.boolean().optional().default(false),
+  signals: z.array(z.string()).nullable().optional().default(null),
+  note: z.string().nullable().optional().default(null),
+  decidedBy: decidedBySchema.optional().default({ type: "system", id: null }),
+  decidedAt: timeSchema,
+});
+export type PayeeApproval = z.infer<typeof payeeApprovalSchema>;
+
+/** A Call that waits for the owner: who the agent tried to pay, how much, how often, and why the check hesitates. */
+export const payeeApprovalRequestSchema = z.object({
+  id: z.string(),
+  budgetId: bytes32Schema,
+  payee: addressSchema,
+  /** The price of the latest Call that waited, atomic units. */
+  amount: atomicSchema,
+  source: z.enum(["voucher", "wallet"]).catch("voucher"),
+  attempts: z.number().int().optional().default(1),
+  firstAt: timeSchema,
+  lastAt: timeSchema,
+  /** Null when the node's own check is off and only the agent's wallet asked. */
+  verdict: payeeVerdictKindSchema.nullable().optional().default(null),
+  signals: lenientArray(payeeSignalSchema.transform(({ id, severity, reason }): PayeeSignal => ({ id, severity, reason }))).optional().default([]),
+});
+export type PayeeApprovalRequest = z.infer<typeof payeeApprovalRequestSchema>;
+
+export const payeeApprovalsSchema = z.object({
+  budgetId: bytes32Schema,
+  approveAt: z.string().nullable().optional(),
+  approvals: z.array(payeeApprovalSchema).optional().default([]),
+  waiting: z.array(payeeApprovalRequestSchema).optional().default([]),
+});
+export type PayeeApprovals = z.infer<typeof payeeApprovalsSchema>;
+
+/** A report as the node returns it: plain JSON strings. The reason is a claim by a third party, never markup. */
+export const payeeReportSchema = z.object({
+  account: addressSchema,
+  reporter: addressSchema,
+  reason: z.string(),
+  evidence: payeeEvidenceSchema,
+  at: timeSchema,
+  filedBy: decidedBySchema.nullable().optional().default(null),
+});
+export type PayeeReport = z.infer<typeof payeeReportSchema>;
+
+export const payeeReportsSchema = z.object({
+  account: z.string().nullable().optional().default(null),
+  reporters: z.number().optional().default(0),
+  reports: z.array(payeeReportSchema).optional().default([]),
+});
+export type PayeeReports = z.infer<typeof payeeReportsSchema>;
+
+export const payeeReportFiledSchema = z.object({ report: payeeReportSchema, reporters: z.number().optional().default(1) });
+export type PayeeReportFiled = z.infer<typeof payeeReportFiledSchema>;
+
+export const budgetSchema = z.object({
   id: bytes32Schema,
   label: z.string(),
-  status: mandateStatusSchema,
-  mandate: mandateJsonSchema,
+  status: budgetStatusSchema,
+  budget: budgetJsonSchema,
+  owner: addressSchema,
+  /** The agent's ed25519 public key. */
+  agent: addressSchema,
+  settler: addressSchema,
+  cap: atomicSchema,
+  expiresAt: timeSchema,
   policy: policySchema,
   payees: z.array(addressSchema),
   spend: spendSchema,
-  openTxHash: hex.nullable().optional(),
+  calls: z.number().optional(),
+  openTxHash: txHash.nullable().optional(),
   revokedAt: timeSchema.nullable().optional(),
   createdAt: timeSchema,
-  /** Wallet health the node tracks for the agent (balance and hub allowance, atomic units). */
-  agentBalance: atomicSchema.nullable().optional(),
-  agentAllowance: atomicSchema.nullable().optional(),
+  /** Last observed escrow and the owner's withdrawable credit (atomic units); null until first read. */
+  escrow: atomicSchema.nullable().optional(),
+  ownerCredit: atomicSchema.nullable().optional(),
+  /**
+   * The payee check's verdict for each Payee the node holds one for. Null: the node has the feature and it is off.
+   * Absent: an older node. Anything else it sends here that does not parse reads as absent, so the Budget still loads.
+   */
+  payeeChecks: lenientArray(payeeCheckSchema).nullable().optional().catch(undefined),
 });
-export type MandateRecord = z.infer<typeof mandateSchema>;
+export type BudgetRecord = z.infer<typeof budgetSchema>;
 
-export const mandateDetailSchema = mandateSchema.extend({
+export const budgetDetailSchema = budgetSchema.extend({
   recentCalls: z.array(callSchema).default([]),
   denials: z.array(denialSchema).default([]),
-  /** The hub's view of the mandate, when the node could read it. */
+  /** The hub's view of the budget, when the node could read it. */
   onchain: z
-    .object({ open: z.boolean(), revokedAt: z.number().nullable().optional(), spent: atomicSchema.optional() })
+    .object({ open: z.boolean(), revokedAt: z.union([z.string(), z.number()]).nullable().optional(), spent: atomicSchema.optional(), cap: atomicSchema.optional(), escrow: atomicSchema.optional(), validUntil: atomicSchema.optional() })
     .nullable()
     .optional(),
   /** Daily spend buckets for the chart; optional because the SPEC does not pin it. */
   spendSeries: z.array(z.object({ day: z.string(), amount: atomicSchema })).optional(),
-  /** Per-minute spend for the last 30 minutes, so a fresh mandate shows a real curve. */
+  /** Per-minute spend for the last 30 minutes, so a fresh budget shows a real curve. */
   spendRecent: z.array(z.object({ at: z.string(), amount: atomicSchema, calls: z.number().optional() })).optional(),
-  /** Read from chain: opened from an EIP-2612 permit (no agent gas) and the agent wallet's transaction count. */
-  onboarding: z.object({ gaslessPermit: z.boolean(), agentTransactions: z.number(), agentNativeBalance: atomicSchema.optional() }).nullable().optional(),
-});
-export type MandateDetail = z.infer<typeof mandateDetailSchema>;
+}).transform((b) => ({
+  ...b,
+  // `escrow` is the node's last periodic read; `onchain.escrow` is what the hub held when this answer was made. The
+  // newer one wins, so a deposit shows as soon as the page reads the Budget again, not at the node's next refresh.
+  escrow: b.onchain?.open && b.onchain.escrow !== undefined ? b.onchain.escrow : b.escrow,
+}));
+export type BudgetDetail = Omit<z.infer<typeof budgetDetailSchema>, "escrow"> & { escrow?: string | null };
 
 export const providerSchema = z.object({
   id: z.string(),
@@ -191,39 +322,28 @@ export type Provider = z.infer<typeof providerSchema>;
 
 export const providerCreatedSchema = z.object({ id: z.string(), apiKey: z.string() });
 
-export const hspStatusSchema = z.enum(["PENDING", "COSIGNED", "UNSIGNED", "SUBMITTED", "SETTLED", "ACCEPT", "REJECT", "FAILED"]);
-export type HspStatus = z.infer<typeof hspStatusSchema>;
-
 export const netTransferSchema = z.object({
   from: addressSchema,
   to: addressSchema,
   amount: atomicSchema,
-  logIndex: z.number().nullable().optional(),
-  hsp: z
-    .object({
-      paymentId: hex.nullable().optional(),
-      status: hspStatusSchema,
-      reason: z.string().nullable().optional(),
-      cosigned: z.boolean().optional(),
-      updatedAt: timeSchema.nullable().optional(),
-    })
-    .nullable()
-    .optional(),
+  index: z.number().optional(),
 });
 export type NetTransfer = z.infer<typeof netTransferSchema>;
 
 export const claimSchema = z.object({
-  mandateId: bytes32Schema,
+  budgetId: bytes32Schema,
   agent: addressSchema,
   payee: addressSchema,
   cumulative: atomicSchema,
+  previous: atomicSchema.optional(),
   delta: atomicSchema,
   calls: z.number().optional(),
+  index: z.number().optional(),
 });
 export type Claim = z.infer<typeof claimSchema>;
 
-/** included: one confirmation; confirmed: at or below the node's finality head (CONFIRM_TAG, safe on HashKey Chain). */
-export const batchStatusSchema = z.enum(["building", "cosigning", "submitted", "included", "confirmed", "failed"]);
+/** `unknown`: the node sent the batch but cannot yet tell whether the hub recorded it (it recovers from the hub). */
+export const batchStatusSchema = z.enum(["building", "submitted", "confirmed", "failed", "unknown"]);
 export type BatchStatus = z.infer<typeof batchStatusSchema>;
 
 export const batchSchema = z.object({
@@ -232,45 +352,52 @@ export const batchSchema = z.object({
   status: batchStatusSchema,
   receiptsRoot: bytes32Schema.nullable(),
   token: addressSchema,
-  txHash: hex.nullable().optional(),
+  txHash: txHash.nullable().optional(),
   explorerUrl: z.string().nullable().optional(),
   gross: atomicSchema,
   net: atomicSchema,
+  projectedGross: atomicSchema.optional(),
+  projectedNet: atomicSchema.optional(),
   calls: z.number(),
   claims: z.number(),
   transfers: z.number(),
-  gasUsed: atomicSchema.nullable().optional(),
-  /** OP Stack L1 data fee in wei; null off OP Stack chains. */
-  l1Fee: atomicSchema.nullable().optional(),
+  compression: z.number().nullable().optional(),
+  reconciled: z.boolean().nullable().optional(),
+  trigger: z.string().optional(),
   error: z.string().nullable().optional(),
   createdAt: timeSchema,
   submittedAt: timeSchema.nullable().optional(),
-  blockNumber: z.number().nullable().optional(),
-  includedAt: timeSchema.nullable().optional(),
   confirmedAt: timeSchema.nullable().optional(),
-  attestation: z.object({ uid: bytes32Schema, txHash: hex.nullable(), explorerUrl: z.string().nullable() }).nullable().optional(),
 });
 export type Batch = z.infer<typeof batchSchema>;
 
-export const batchDetailSchema = batchSchema.extend({
-  claimList: z.array(claimSchema),
-  netTransfers: z.array(netTransferSchema),
-});
+const netEntrySchema = z.object({ account: addressSchema, debit: atomicSchema, credit: atomicSchema });
+
+/** The node's detail route replaces the summary's `net` total with per-account entries; both are kept here. */
+export const batchDetailSchema = batchSchema
+  .extend({
+    claimList: z.array(claimSchema),
+    netTransfers: z.array(netTransferSchema),
+    net: z.union([atomicSchema, z.array(netEntrySchema)]),
+  })
+  .transform(({ net, ...b }) => ({
+    ...b,
+    net: typeof net === "string" ? net : net.reduce((a, e) => a + BigInt(e.debit), 0n).toString(),
+    netEntries: typeof net === "string" ? [] : net,
+  }));
 export type BatchDetail = z.infer<typeof batchDetailSchema>;
 
 export const overviewSchema = z.object({
   volume: z.object({ settled: atomicSchema, pending: atomicSchema }),
   calls: z.object({ last24h: z.number(), all: z.number() }),
   denials24h: z.number(),
-  activeMandates: z.number(),
+  activeBudgets: z.number(),
   providers: z.number(),
   batches: z.number(),
-  gasSaved: z.object({
-    /** Gas units avoided versus one ERC-20 transfer per call. */
-    gas: atomicSchema,
-    /** Same, priced in the native token (atomic, 18 dp) at the observed gas price, when known. */
-    native: atomicSchema.nullable().optional(),
-  }),
+  /** Gross cleared and net cash moved by confirmed batches. */
+  settled: z.object({ gross: atomicSchema, net: atomicSchema }).optional(),
+  /** What sellers settled themselves on the hub, outside any batch. Nothing offsets, so gross is what the hub moved. */
+  settledBySeller: z.object({ gross: atomicSchema, calls: z.number().default(0), settlements: z.number().default(0) }).optional(),
   compressionRatio: z.number(),
   lastBatch: batchSchema.nullable(),
 });
@@ -285,7 +412,7 @@ export const nettingPreviewSchema = z.object({
   calls: z.number().optional(),
   compression: z.number(),
   skipped: z
-    .array(z.object({ mandateId: bytes32Schema, reason: z.string() }))
+    .array(z.object({ budgetId: bytes32Schema, reason: z.string() }))
     .optional(),
 });
 export type NettingPreview = z.infer<typeof nettingPreviewSchema>;
@@ -298,25 +425,50 @@ export type SettlementResult = z.infer<typeof settlementResultSchema>;
 
 export const receiptSchema = z.object({
   callId: bytes32Schema,
-  mandateId: bytes32Schema,
+  budgetId: bytes32Schema,
   payee: addressSchema,
   amount: atomicSchema,
   cumulative: atomicSchema,
   requestHash: bytes32Schema,
   timestamp: z.number(),
-  leaf: bytes32Schema,
-  nodeSignature: hex,
+  voucherSig: z.string(),
+  /** What the node signed. Not the Merkle leaf. */
+  digest: bytes32Schema,
+  nodeSignature: z.string(),
+  /** The key the node signs receipts with. */
   node: addressSchema,
 });
 export type Receipt = z.infer<typeof receiptSchema>;
 
+/**
+ * What the server booked when a seller settled a voucher itself, and what the hub said when the proof was asked for.
+ * `covered` is true when the hub's settled position of this Budget and Payee is at or past this Call, false when it is
+ * not, and null when the server could not read the hub.
+ */
+export const sellerSettlementProofSchema = z.object({
+  id: z.string(),
+  /** The settled position before and after, atomic units. */
+  previous: atomicSchema,
+  cumulative: atomicSchema,
+  detectedAt: timeSchema.nullable().optional(),
+  hubSettled: atomicSchema.nullable().optional(),
+  covered: z.boolean().nullable().optional(),
+});
+export type SellerSettlementProof = z.infer<typeof sellerSettlementProofSchema>;
+
 export const proofSchema = z.object({
   receipt: receiptSchema,
+  status: z.string().optional(),
+  /** "seller": settled by its seller on the hub, with no batch, root or Merkle proof to check. */
+  settledBy: settledBySchema,
+  sellerSettlement: sellerSettlementProofSchema.nullable().optional(),
   batchId: bytes32Schema.nullable(),
+  batchStatus: z.string().nullable().optional(),
   receiptsRoot: bytes32Schema.nullable(),
   proof: z.array(bytes32Schema),
-  leaf: bytes32Schema,
-  txHash: hex.nullable().optional(),
+  /** The Merkle leaf, when the node sends it. Without it the path cannot be replayed in the browser. */
+  leaf: bytes32Schema.nullable().optional(),
+  txHash: txHash.nullable().optional(),
   explorerUrl: z.string().nullable().optional(),
   onchainVerified: z.boolean().nullable().optional(),
 });
@@ -357,15 +509,20 @@ export const apiErrorSchema = z.object({
 export type EventType =
   | "call.accepted"
   | "call.denied"
-  | "mandate.opened"
-  | "mandate.revoked"
+  | "budget.opened"
+  | "budget.revoked"
   | "batch.started"
   | "batch.submitted"
   | "batch.included"
   | "batch.confirmed"
   | "batch.failed"
-  | "hsp.updated"
   | "funds.warning"
+  | "payout.confirmed"
+  | "payout.failed"
+  | "seller.settled"
+  | "operator.alert"
+  | "payee.approval_requested"
+  | "payee.approval_decided"
   | AgentRunEventType;
 
 /**
@@ -387,34 +544,80 @@ export type AgentRunEventType = (typeof AGENT_RUN_EVENT_TYPES)[number];
 export const EVENT_TYPES: readonly EventType[] = [
   "call.accepted",
   "call.denied",
-  "mandate.opened",
-  "mandate.revoked",
+  "budget.opened",
+  "budget.revoked",
   "batch.started",
   "batch.submitted",
   "batch.included",
   "batch.confirmed",
   "batch.failed",
-  "hsp.updated",
   "funds.warning",
+  "payout.confirmed",
+  "payout.failed",
+  // A seller settled its own voucher on the hub and the server booked it: `data.sellerSettlement`.
+  "seller.settled",
+  // Something only the operator can resolve: `data.alert` with `kind` and `message` (lib/operator-alerts.ts).
+  "operator.alert",
+  // A Call waits for the owner's decision about its Payee: `data.request` and `data.approveAt`.
+  "payee.approval_requested",
+  // An owner decided, or withdrew a decision: `data.approval`, and `data.withdrawn` when it was withdrawn.
+  "payee.approval_decided",
   ...AGENT_RUN_EVENT_TYPES,
 ];
 
 export type NodeEvent = { type: EventType; id: string; at: string; data: Record<string, unknown> };
 
+// ---------------------------------------------------------------------------
+// Payouts: the node pays hub credit out to each creditor's own account (GET and POST /v1/payouts).
+// ---------------------------------------------------------------------------
+
+/** due: queued for the next payout. waiting_registration: credit stays on the hub until the account registers with the token. */
+export const payoutAccountSchema = z.object({
+  account: addressSchema,
+  status: z.enum(["due", "waiting_registration", "clear"]),
+  credit: atomicSchema,
+  paidTotal: atomicSchema,
+  attempts: z.number(),
+  nextAttemptAt: timeSchema.nullable().optional(),
+  lastError: z.string().nullable().optional(),
+  checkedAt: timeSchema.nullable().optional(),
+});
+export type PayoutAccount = z.infer<typeof payoutAccountSchema>;
+
+export const payoutSchema = z.object({
+  seq: z.number(),
+  status: z.enum(["submitted", "confirmed", "failed", "unknown"]),
+  trigger: z.string(),
+  txHash: txHash.nullable(),
+  explorerUrl: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  createdAt: timeSchema,
+  finishedAt: timeSchema.nullable().optional(),
+  items: z.array(z.object({ account: addressSchema, creditBefore: atomicSchema, creditAfter: atomicSchema.nullable(), paid: atomicSchema, outcome: z.enum(["pending", "paid", "kept"]) })),
+});
+export type Payout = z.infer<typeof payoutSchema>;
+
+export const payoutsSchema = z.object({ accounts: z.array(payoutAccountSchema), payouts: z.array(payoutSchema) });
+export type Payouts = z.infer<typeof payoutsSchema>;
+
+export const payoutRunSchema = z.union([z.object({ payouts: z.array(payoutSchema), waitingRegistration: z.array(addressSchema) }), z.object({ skipped: z.string() })]);
+export type PayoutRun = z.infer<typeof payoutRunSchema>;
+
 export const revokeResultSchema = z.union([
   z.object({
-    mandate: mandateSchema,
+    budget: budgetSchema,
     onchain: z
       .object({
         revoked: z.boolean(),
         submitted: z.boolean().optional(),
-        txHash: hex.nullable().optional(),
-        call: z.object({ to: addressSchema, data: hex, allowedSenders: z.array(addressSchema).optional() }).nullable().optional(),
+        txHash: txHash.nullable().optional(),
+        /** The wallet transaction that revokes on chain, when the node could not record the revoke itself. */
+        call: z.object({ receiverId: addressSchema, actions: z.array(z.object({ type: z.literal("FunctionCall"), params: z.object({ methodName: z.string(), args: z.record(z.string(), z.unknown()), gas: z.string(), deposit: z.string() }) })) }).nullable().optional(),
       })
       .nullable()
       .optional(),
   }),
-  mandateSchema.transform((mandate) => ({ mandate, onchain: null })),
+  budgetSchema.transform((budget) => ({ budget, onchain: null })),
 ]);
 export type RevokeResult = z.infer<typeof revokeResultSchema>;
 
@@ -430,54 +633,6 @@ export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
 export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
 export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
 
-/** HSP status of a payment (GATEWAY.md section 17): order-created, then what HSP's query_payment reports. */
-export const hspPaymentStatusSchema = z.enum(["order-created", ...HSP_PAYMENT_STATUSES]);
-export type HspPaymentStatus = z.infer<typeof hspPaymentStatusSchema>;
-
-/** The HSP part of the public checkout view; null when the business does not offer HSP. */
-export const checkoutHspSchema = z.object({
-  availability: z.enum(["off", "checking", "available", "unavailable"]),
-  message: z.string().nullable(),
-  status: hspPaymentStatusSchema.nullable(),
-  status_reason: z.string().nullable(),
-  tx_hash: z.string().regex(/^0x[0-9a-fA-F]*$/).nullable(),
-  attribution_verified: z.boolean(),
-});
-export type CheckoutHsp = z.infer<typeof checkoutHspSchema>;
-
-/** The HSP fields of a payment on the merchant API and in webhooks. */
-export const paymentHspSchema = z.object({
-  flow_id: z.string(),
-  payment_request_id: z.string().nullable(),
-  status: hspPaymentStatusSchema,
-  status_reason: z.string().nullable(),
-  tx_hash: z.string().regex(/^0x[0-9a-fA-F]*$/).nullable(),
-  attribution_verified: z.boolean(),
-  payer: addressSchema.nullable(),
-  submitted_at: timeSchema.nullable(),
-  updated_at: timeSchema.nullable(),
-});
-export type PaymentHsp = z.infer<typeof paymentHspSchema>;
-
-/** POST /v1/checkout/{id}/hsp/prepare: HSP's EIP-712 data for the payer to sign, exactly as HSP returned it. */
-export const hspPrepareSchema = z.object({
-  payment_id: z.string(),
-  flow_id: z.string(),
-  protocol: z.string(),
-  eip712: z.object({
-    domain: z.record(z.string(), z.unknown()),
-    types: z.record(z.string(), z.array(z.object({ name: z.string(), type: z.string() }))),
-    primaryType: z.string(),
-    message: z.record(z.string(), z.unknown()),
-  }),
-  token_total_raw: z.string(),
-  quote_expires_at: z.string(),
-  recipient: addressSchema,
-  payer: addressSchema,
-});
-export type HspPrepared = z.infer<typeof hspPrepareSchema>;
-
-export const hspSubmitResultSchema = z.object({ status: z.enum(PAYMENT_STATUSES), hsp: paymentHspSchema.nullable() }).passthrough();
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 
 const nullableTime = timeSchema.nullable().optional();
@@ -497,10 +652,12 @@ export const creditSchema = z.object({
   method: paymentMethodSchema,
   payer: addressSchema.nullable(),
   amount: atomicSchema,
-  tx_hash: hex.nullable(),
-  log_index: z.number().nullable().optional(),
-  block_number: z.number().nullable().optional(),
-  batch_id: hex.nullable().optional(),
+  tx_hash: txHash.nullable(),
+  /** The accepted clearing Call of a voucher credit. */
+  call_id: bytes32Schema.nullable().optional(),
+  /** Hub block time of a wallet payment, Unix milliseconds as a decimal string. */
+  recorded_at_ms: z.string().nullable().optional(),
+  batch_id: txHash.nullable().optional(),
   status: z.enum(["pending", "confirmed"]),
   late: z.boolean().default(false),
   created_at: timeSchema,
@@ -508,34 +665,27 @@ export const creditSchema = z.object({
 });
 export type Credit = z.infer<typeof creditSchema>;
 
-export const tokenDomainSchema = z.object({ name: z.string(), version: z.string(), chainId: z.number(), verifyingContract: addressSchema });
+/** CheckoutTerms as JSON: what the node signed for one checkout payment. */
+export const checkoutTermsSchema = z.object({ payment_id: bytes32Schema, merchant: addressSchema, amount: atomicSchema, expiry_ms: atomicSchema });
+export type CheckoutTermsJson = z.infer<typeof checkoutTermsSchema>;
 
-/** PaymentRouter terms (GATEWAY.md section 14.2); the authorization nonce is their hash. */
-export const paymentTermsSchema = z.object({ paymentRef: bytes32Schema, payout: addressSchema, feeRecipient: addressSchema, fee: atomicSchema });
-
-const authorizationMessageSchema = z.object({ to: addressSchema, value: atomicSchema, validAfter: atomicSchema, validBefore: atomicSchema, nonce: bytes32Schema });
+const functionCallSchema = z.object({
+  type: z.literal("FunctionCall"),
+  params: z.object({ methodName: z.string(), args: z.record(z.string(), z.unknown()), gas: z.string(), deposit: z.string() }),
+});
 
 /**
- * What the payer's wallet signs for the `wallet` method, without `from`: either a TransferWithAuthorization to the
- * payment's fee-splitting forwarder (CheckoutTransferTemplate) or a ReceiveWithAuthorization to the PaymentRouter with
- * its terms (CheckoutAuthorizationTemplate). Both are accepted so the checkout follows whichever the node serves.
+ * What the hosted checkout hands the payer's wallet (`CheckoutWallet`): terms the node signed with its checkout key, and
+ * the ready `ft_transfer_call` to the hub. The hub verifies the signature, amount and expiry and returns the tokens for
+ * anything else.
  */
-export const authorizationTemplateSchema = z.discriminatedUnion("primaryType", [
-  z.object({
-    domain: tokenDomainSchema,
-    primaryType: z.literal("TransferWithAuthorization"),
-    types: z.unknown().optional(),
-    message: authorizationMessageSchema,
-  }),
-  z.object({
-    domain: tokenDomainSchema,
-    primaryType: z.literal("ReceiveWithAuthorization"),
-    types: z.unknown().optional(),
-    message: authorizationMessageSchema,
-    router: addressSchema,
-    terms: paymentTermsSchema,
-  }),
-]);
+export const checkoutWalletSchema = z.object({
+  terms: checkoutTermsSchema,
+  signature: z.string().regex(/^[0-9a-f]{128}$/, "expected a 64-byte signature"),
+  checkout_key: z.string(),
+  transaction: z.object({ receiverId: addressSchema, actions: z.array(functionCallSchema).min(1) }),
+});
+export type CheckoutWalletJson = z.infer<typeof checkoutWalletSchema>;
 
 /** Fee breakdown (section 14.1), on every payment. */
 const feeFields = {
@@ -547,7 +697,9 @@ const feeFields = {
   fee_total: atomicSchema.default("0"),
   net_amount: atomicSchema,
 };
-export type AuthorizationTemplate = z.infer<typeof authorizationTemplateSchema>;
+
+/** The NEAR network a gateway object lives on. Optional until the gateway wire types carry it; testnet by default. */
+const networkField = z.string().default("near:testnet");
 
 /** GET /v1/checkout/{id}: the public payment view. Never carries metadata, email or name. */
 export const checkoutViewSchema = z.object({
@@ -563,15 +715,16 @@ export const checkoutViewSchema = z.object({
   amount_due: atomicSchema,
   amount_paid: atomicSchema,
   amount_remaining: atomicSchema,
-  chain_id: z.number(),
+  network: networkField,
   token: tokenSchema,
-  deposit_address: addressSchema,
-  deposit_uri: z.string().optional(),
+  /** The hub that receives `ft_transfer_call`. */
+  hub: addressSchema,
   method: paymentMethodSchema.nullable().default(null),
   methods: z.array(paymentMethodSchema),
-  authorization: authorizationTemplateSchema.nullable(),
+  /** Signed terms and the prebuilt transaction; null once the payment cannot take money, or when `wallet` is not offered. */
+  wallet: checkoutWalletSchema.nullable().default(null),
   success_url: nullableString,
-  tx_hash: hex.nullable().optional(),
+  tx_hash: txHash.nullable().optional(),
   order_hash: bytes32Schema,
   expires_at: timeSchema,
   created_at: timeSchema,
@@ -583,14 +736,9 @@ export const checkoutViewSchema = z.object({
   paid_at: nullableTime,
   payer: addressSchema.nullable().optional(),
   payout: addressSchema.nullable().optional(),
-  hsp: checkoutHspSchema.nullable().optional(),
 });
 export type CheckoutView = z.infer<typeof checkoutViewSchema>;
 
-export const authorizeResultSchema = z
-  .object({ status: paymentStatusSchema, txHash: hex.nullable().optional(), tx_hash: hex.nullable().optional() })
-  .transform((r) => ({ status: r.status, txHash: r.txHash ?? r.tx_hash ?? null }));
-export type AuthorizeResult = z.infer<typeof authorizeResultSchema>;
 
 /** GET /v1/links/public/{slug}. Not pinned in gateway.ts; this is what the link page needs. */
 export const publicLinkSchema = z.object({
@@ -605,7 +753,7 @@ export const publicLinkSchema = z.object({
   collect_name: z.boolean().default(false),
   active: z.boolean(),
   merchant: merchantBrandSchema,
-  chain_id: z.number(),
+  network: networkField,
   token: tokenSchema,
 });
 export type PublicLink = z.infer<typeof publicLinkSchema>;
@@ -624,8 +772,10 @@ export const refundSchema = z.object({
   reason: nullableString,
   to: addressSchema,
   status: refundStatusSchema,
-  method: z.enum(["authorization", "transfer"]).nullable().optional(),
-  tx_hash: hex.nullable(),
+  method: z.enum(["transfer"]).nullable().optional(),
+  /** How the node checked the refund transaction: the whole transfer, or only success at final finality. */
+  verification: z.enum(["transfer_checked", "finality_only"]).nullable().optional(),
+  tx_hash: txHash.nullable(),
   failure_reason: nullableString,
   /** Internal note, never shown to the customer (PRODUCT.md section 10.12). */
   note: nullableString,
@@ -633,8 +783,6 @@ export const refundSchema = z.object({
   approval: z.enum(["not_required", "requested", "approved"]).optional(),
   requested_by: nullableString,
   approved_by: nullableString,
-  /** What the payout wallet signs for a gasless refund (GATEWAY.md section 15). */
-  authorization: z.object({ router: addressSchema, terms: paymentTermsSchema, to: addressSchema, value: atomicSchema, nonce: bytes32Schema }).nullable().optional(),
   created_at: timeSchema,
   updated_at: timeSchema.optional(),
 });
@@ -657,9 +805,14 @@ export const paymentSchema = z.object({
   amount_paid: atomicSchema,
   amount_refunded: atomicSchema,
   refund_status: z.enum(["none", "partial", "full"]),
-  chain_id: z.number(),
+  network: networkField,
   token: addressSchema,
-  deposit_address: addressSchema,
+  /** The hub that records the wallet payment. */
+  hub: addressSchema.optional(),
+  /** The on-chain payment id the checkout terms carry. */
+  checkout_id: bytes32Schema.optional(),
+  /** The account fixed at creation that receives this payment. */
+  payout: addressSchema.nullable().optional(),
   description: nullableString,
   reference: nullableString,
   customer_email: nullableString,
@@ -678,7 +831,6 @@ export const paymentSchema = z.object({
   canceled_at: nullableTime,
   created_at: timeSchema,
   updated_at: timeSchema.optional(),
-  hsp: paymentHspSchema.nullable().optional(),
 });
 export type Payment = z.infer<typeof paymentSchema>;
 
@@ -802,7 +954,8 @@ export const merchantSchema = z.object({
   name: z.string(),
   slug: z.string(),
   status: z.enum(["active", "suspended"]),
-  payout: addressSchema,
+  /** Null for a business that has not proven a payout account yet. */
+  payout: addressSchema.nullable(),
   support_email: nullableString,
   brand_color: nullableString,
   logo_url: nullableString,
@@ -816,10 +969,12 @@ export const merchantSchema = z.object({
 export type Merchant = z.infer<typeof merchantSchema>;
 
 export const merchantProfileSchema = merchantSchema.extend({
-  chain_id: z.number(),
+  network: networkField,
   token: addressSchema,
-  deposit_factory: addressSchema,
-  payment_router: addressSchema.optional(),
+  /** The hub payments are recorded on. */
+  hub: addressSchema.nullable().optional(),
+  /** The key the hub checks checkout terms against. */
+  checkout_key: z.string().nullable().optional(),
   checkout_base_url: z.string(),
 });
 export type MerchantProfile = z.infer<typeof merchantProfileSchema>;
@@ -877,7 +1032,7 @@ const platformFeesViewSchema = z.object({
 });
 export type PlatformFees = z.infer<typeof platformFeesViewSchema>;
 
-const METHOD_ORDER = ["wallet", "deposit", "hsp", "x402", "voucher"];
+const METHOD_ORDER = ["wallet", "deposit", "x402", "voucher"];
 
 /** GET /v1/platform/fees as the node serves it: one row per merchant and method, folded into both views. */
 const nodeFeesSchema = z
@@ -945,46 +1100,45 @@ export const orderCommitmentSchema = z.object({
 });
 export type OrderCommitment = z.infer<typeof orderCommitmentSchema>;
 
-/** What the receipt page checks: the node's claims about a paid payment, re-read from the chain in the browser. */
+/**
+ * What the receipt page checks: the node's claims about a paid payment, re-read from the hub in the browser. On NEAR a
+ * checkout payment is one `ft_transfer_call` that the hub records under the checkout terms' payment id.
+ */
 export const paymentProofSchema = z.object({
   payment_id: z.string(),
   status: paymentStatusSchema,
-  chain_id: z.number(),
+  network: networkField,
+  /** The hub the payment was recorded on. */
+  hub: addressSchema.nullable().optional(),
   token: addressSchema,
   payout: addressSchema,
-  /** The forwarder, for deposit credits; the receipt page fills it from the checkout view when absent. */
-  deposit_address: addressSchema.nullable().optional(),
   amount_due: atomicSchema,
   amount_paid: atomicSchema,
-  /** Amount of the credit in `tx_hash`; the transfer check compares against it. */
+  /** Amount of the payment in `tx_hash`; the hub record must show the same. */
   credit_amount: atomicSchema.nullable().optional(),
   method: paymentMethodSchema.nullable(),
   payer: addressSchema.nullable(),
-  tx_hash: hex.nullable(),
-  block_number: z.number().nullable(),
-  /** The finality tag the node confirms against (latest, safe or finalized). */
-  finality_tag: z.string().default("safe"),
+  tx_hash: txHash.nullable(),
+  /** The Id32 the hub stores the payment under (`CheckoutTerms.paymentId`). */
+  hub_payment_id: bytes32Schema.nullable().optional(),
   order_hash: bytes32Schema,
-  /** EIP-3009 nonce the payer's authorization used, for the AuthorizationUsed check on wallet and x402 payments. */
-  authorization_nonce: bytes32Schema.nullable().optional(),
-  eas_enabled: z.boolean(),
-  attestation: z.object({ uid: bytes32Schema, schema: bytes32Schema.nullable().optional(), attester: addressSchema.nullable().optional(), eas: addressSchema.nullable().optional() }).nullable(),
   paid_at: nullableTime,
 });
 export type PaymentProof = z.infer<typeof paymentProofSchema>;
 
-/** GET /v1/checkout/{id}/proof as the node serves it (credits with decoded logs), mapped to PaymentProof. */
+/** GET /v1/checkout/{id}/proof as the node serves it (with credits), mapped to PaymentProof. */
 export const nodeProofSchema = z
   .object({
     payment_id: z.string(),
     status: paymentStatusSchema,
-    chain_id: z.number(),
-    confirm_tag: z.string().optional(),
+    network: networkField,
+    hub: addressSchema.nullable().optional(),
     token: z.union([addressSchema, tokenSchema.passthrough()]),
     payout: addressSchema,
     amount_due: atomicSchema,
     amount_paid: atomicSchema,
     order_hash: bytes32Schema,
+    hub_payment_id: bytes32Schema.nullable().optional(),
     paid_at: nullableTime,
     credits: z.array(
       z
@@ -992,41 +1146,32 @@ export const nodeProofSchema = z
           method: paymentMethodSchema,
           amount: atomicSchema,
           payer: addressSchema.nullable(),
-          tx_hash: hex.nullable(),
-          block_number: z.number().nullable(),
-          authorization_used: z.array(z.object({ authorizer: addressSchema, nonce: bytes32Schema }).passthrough()).default([]),
+          /** Voucher credits: the settling batch's transaction. Wallet credits carry none; the hub record is the evidence. */
+          tx_hash: txHash.nullable().optional(),
+          /** Wallet credits: the id the hub recorded the payment under. */
+          checkout_id: bytes32Schema.nullable().optional(),
         })
         .passthrough(),
     ),
-    attestation: z
-      .object({ enabled: z.boolean(), uid: bytes32Schema.nullable().optional(), eas: addressSchema.nullable().optional(), schema_uid: bytes32Schema.nullable().optional(), attester: addressSchema.nullable().optional() })
-      .passthrough()
-      .nullable()
-      .optional(),
   })
   .passthrough()
   .transform((n): PaymentProof => {
-    const c = n.credits.filter((x) => x.tx_hash).at(-1) ?? n.credits.at(-1) ?? null;
-    const a = n.attestation;
+    const c = n.credits.filter((x) => x.method === "wallet" && x.checkout_id).at(-1) ?? n.credits.at(-1) ?? null;
     return {
       payment_id: n.payment_id,
       status: n.status,
-      chain_id: n.chain_id,
+      network: n.network,
+      hub: n.hub ?? null,
       token: typeof n.token === "string" ? n.token : n.token.address,
       payout: n.payout,
-      deposit_address: null,
       amount_due: n.amount_due,
       amount_paid: n.amount_paid,
       credit_amount: c?.amount ?? null,
       method: c?.method ?? null,
       payer: c?.payer ?? null,
       tx_hash: c?.tx_hash ?? null,
-      block_number: c?.block_number ?? null,
-      finality_tag: n.confirm_tag ?? "safe",
+      hub_payment_id: c?.checkout_id ?? n.hub_payment_id ?? null,
       order_hash: n.order_hash,
-      authorization_nonce: c?.authorization_used[0]?.nonce ?? null,
-      eas_enabled: Boolean(a?.enabled),
-      attestation: a?.enabled && a.uid ? { uid: a.uid, schema: a.schema_uid ?? null, attester: a.attester ?? null, eas: a.eas ?? null } : null,
       paid_at: n.paid_at,
     };
   });
@@ -1105,7 +1250,7 @@ function wrappedOrBare<T extends z.ZodType>(item: T, key: string) {
   return z.union([z.object({ [key]: item }).transform((o) => (o as Record<string, z.infer<T>>)[key]!), item]) as unknown as z.ZodType<z.infer<T>>;
 }
 
-export const AI_PROVIDER_IDS = ["anthropic", "openai", "google", "openai_compatible", "replicate"] as const;
+export const AI_PROVIDER_IDS = ["anthropic", "openai", "google", "openai_compatible", "replicate", "nearai"] as const;
 export type AiProviderId = (typeof AI_PROVIDER_IDS)[number];
 
 /**

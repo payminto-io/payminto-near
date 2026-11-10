@@ -8,7 +8,7 @@ const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variabl
 
 export const metadata: Metadata = {
   title: { default: "Home - Payminto", template: "%s - Payminto" },
-  description: "Get paid in stablecoins by people and AI agents, straight to your own wallet on HashKey Chain.",
+  description: "Get paid in stablecoins by people and AI agents, settled on NEAR through an unaudited escrow contract.",
 };
 
 export const viewport: Viewport = {

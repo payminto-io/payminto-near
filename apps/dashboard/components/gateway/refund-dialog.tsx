@@ -3,15 +3,14 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { isAddressEqual, toHex, type Address } from "viem";
+import { refundTransferTx, toHex } from "@payminto/protocol";
 import { Info, LoaderCircle, XCircle } from "lucide-react";
 import { useApi, useCan } from "@/lib/session";
 import { gk } from "@/lib/gateway-queries";
-import { useInfo, useToken } from "@/lib/queries";
-import { checksum, parseAmountInput, plainAmount } from "@/lib/gateway";
-import { formatToken, shortAddress } from "@/lib/format";
-import { connectWallet, ensureChain, injected, sendTransfer, signRefund, walletErrorMessage } from "@/lib/wallet";
-import { gatewayNetwork } from "@/lib/gateway";
+import { useToken } from "@/lib/queries";
+import { parseAccount, parseAmountInput, plainAmount } from "@/lib/gateway";
+import { formatToken } from "@/lib/format";
+import { walletErrorMessage, type TxResult } from "@/lib/wallet";
 import { ApiError } from "@/lib/http";
 import type { MerchantProfile, PaymentDetail, Refund } from "@/lib/schemas";
 import { Button } from "@/components/ui/button";
@@ -19,11 +18,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TxFlow, type TxPlan } from "@/components/ds/tx-flow";
+import { AccountId } from "@/components/ds/account-id";
 import { FormRow } from "./kit";
 
 const REASONS = ["Requested by customer", "Duplicate", "Overpayment", "Other"] as const;
 
-/** What can still be refunded: paid, minus refunds sent or waiting on the payout wallet. */
+/** What can still be refunded: paid, minus refunds sent or waiting on the payout account. */
 export function refundable(p: Pick<PaymentDetail, "amount_paid" | "refunds">): bigint {
   const held = p.refunds.filter((r) => r.status === "pending" || r.status === "succeeded").reduce((a, r) => a + BigInt(r.amount), 0n);
   const left = BigInt(p.amount_paid) - held;
@@ -33,14 +34,13 @@ export function refundable(p: Pick<PaymentDetail, "amount_paid" | "refunds">): b
 type Step = "form" | "wallet" | "error";
 
 /**
- * Refunds are sent by the merchant's payout wallet (GATEWAY.md section 6): create the pending refund, have the
- * connected payout wallet sign a gasless router authorization (or send a plain transfer), then submit it.
+ * Refunds are sent by the merchant's own payout account (spec: "Payments for people"): create the pending refund, show
+ * the exact NEAR transfer, have the payout account sign it, then submit the transaction hash for the node to verify.
  */
 export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: { payment: PaymentDetail; merchant: MerchantProfile | undefined; open: boolean; onOpenChange: (o: boolean) => void; retry?: Refund | null }) {
   const api = useApi();
   const qc = useQueryClient();
   const t = useToken();
-  const info = useInfo();
   // Once this dialog has created the refund, a failed wallet step retries that same refund (its amount no longer
   // counts as available, so recomputing it would show 0.00).
   const [created, setCreated] = useState<Refund | null>(null);
@@ -55,11 +55,12 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
   const canIssue = useCan()("refunds.issue");
   const [step, setStep] = useState<Step>("form");
   const [error, setError] = useState<string | null>(null);
-  const [idem] = useState(() => toHex(crypto.getRandomValues(new Uint8Array(16))).slice(2));
+  const [idem] = useState(() => toHex(crypto.getRandomValues(new Uint8Array(16))));
+  const [plan, setPlan] = useState<{ refund: Refund; plan: TxPlan } | null>(null);
 
   const parsed = mode === "partial" ? parseAmountInput(partial, t.decimals, { max }) : null;
   const amount = mode === "full" ? max : parsed?.ok ? parsed.atomic : null;
-  const recipient = checksum(to);
+  const recipient = parseAccount(to);
   const can = amount !== null && amount > 0n && amount <= max && recipient !== null && step !== "wallet";
   const label = amount !== null ? `${canIssue ? "Refund" : "Request refund of"} ${formatToken(amount, t.symbol, t.decimals)}` : canIssue ? "Refund" : "Request refund";
 
@@ -70,7 +71,7 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
     try {
       await api.gateway.createRefund({ paymentId: payment.id, amount: amount!.toString(), reason, to: recipient!, note: note.trim() || undefined }, idem);
       void qc.invalidateQueries({ queryKey: gk.all });
-      toast.success("Refund requested. An Admin approves it and sends the money from the payout wallet.");
+      toast.success("Refund requested. An Admin approves it and sends the money from the payout account.");
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -78,51 +79,38 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
     }
   }
 
-  async function execute(kind: "sign" | "transfer") {
+  /** Creates the pending refund once, then shows the exact NEAR transfer the payout account will sign. */
+  async function execute() {
     if (!can || !merchant) return;
     setError(null);
+    if (!merchant.payout) {
+      setError("This business has no payout account yet, so there is no account to send the refund from.");
+      setStep("error");
+      return;
+    }
     setStep("wallet");
-    let refund: Refund | null = active;
     try {
+      let refund: Refund | null = active;
       if (!refund) {
         refund = await api.gateway.createRefund({ paymentId: payment.id, amount: amount!.toString(), reason, to: recipient!, note: note.trim() || undefined }, idem);
         setCreated(refund);
       }
-      if (!injected() && api.mock) {
-        // Mock mode without a wallet: stand in for the payout wallet's signature.
-        await new Promise((r) => setTimeout(r, 1200));
-        await api.gateway.submitRefund(refund.id, { txHash: toHex(crypto.getRandomValues(new Uint8Array(32))) });
-      } else {
-        const from = await connectWallet();
-        if (!isAddressEqual(from, merchant.payout as Address)) {
-          throw new Error(`Connect the payout wallet ${shortAddress(merchant.payout)}. The connected wallet is ${shortAddress(from)}.`);
-        }
-        const net = gatewayNetwork(merchant.chain_id, info.data);
-        await ensureChain({ chainId: net.chainId, name: net.name, rpcUrl: net.rpcUrl, explorer: net.explorer });
-        if (kind === "sign" && (refund.authorization || merchant.payment_router)) {
-          const node = refund.authorization;
-          const nodeToken = typeof info.data?.token === "object" ? info.data.token : null;
-          const signed = await signRefund({
-            chainId: merchant.chain_id,
-            token: merchant.token as Address,
-            router: (node?.router ?? merchant.payment_router) as Address,
-            refundId: refund.id,
-            from,
-            to: (node?.to ?? recipient!) as Address,
-            amount: node ? BigInt(node.value) : amount!,
-            terms: node?.terms ?? null,
-            eip712: nodeToken && isAddressEqual(nodeToken.address as Address, merchant.token as Address) ? nodeToken.eip712 : undefined,
-          });
-          await api.gateway.submitRefund(refund.id, signed);
-        } else {
-          const hash = await sendTransfer({ token: merchant.token as Address, to: recipient!, amount: amount!, from });
-          await api.gateway.submitRefund(refund.id, { txHash: hash });
-        }
-      }
-      void qc.invalidateQueries({ queryKey: gk.all });
-      toast.success(`Refund of ${formatToken(amount!, t.symbol, t.decimals)} sent to ${shortAddress(recipient!)}`);
-      onOpenChange(false);
-      setStep("form");
+      const value = BigInt(refund.amount);
+      setPlan({
+        refund,
+        plan: {
+          title: "Send the refund",
+          description: "Your payout account sends the refund itself, as a plain token transfer. Your server then checks the transaction. A refund cannot be reversed.",
+          summary: [
+            { label: "Amount", value: <span className="num font-medium">{formatToken(value, t.symbol, t.decimals)}</span> },
+            { label: "To", value: <AccountId value={refund.to} mode="wrap" explorer={false} /> },
+          ],
+          txs: [refundTransferTx(merchant.token, refund.to, value, refund.id)],
+          confirmLabel: `Send ${formatToken(value, t.symbol, t.decimals)}`,
+          signer: merchant.payout ?? undefined,
+          finalNote: "NEAR executed the transfer. Your server is checking it now.",
+        },
+      });
     } catch (e) {
       void qc.invalidateQueries({ queryKey: gk.all });
       setError(e instanceof ApiError ? e.message : walletErrorMessage(e));
@@ -130,9 +118,38 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
     }
   }
 
+  async function submit(refund: Refund, results: TxResult[]) {
+    const hash = results[0]?.hash;
+    if (!hash) return;
+    try {
+      await api.gateway.submitRefund(refund.id, { txHash: hash });
+      toast.success(`Refund of ${formatToken(refund.amount, t.symbol, t.decimals)} sent to ${refund.to}`);
+    } catch (e) {
+      toast.error("The refund was sent, but your server has not confirmed it yet", { description: e instanceof ApiError ? e.message : String(e) });
+    } finally {
+      void qc.invalidateQueries({ queryKey: gk.all });
+    }
+  }
+
+  if (plan) {
+    return (
+      <TxFlow
+        plan={plan.plan}
+        open={open}
+        onOpenChange={(o) => {
+          if (o) return;
+          setPlan(null);
+          setStep("form");
+          onOpenChange(false);
+        }}
+        onFinal={(results) => void submit(plan.refund, results)}
+      />
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={(o) => step !== "wallet" && onOpenChange(o)}>
-      <DialogContent className="sm:max-w-[30rem]">
+      <DialogContent sheetOnMobile className="sm:max-w-[30rem]">
         <DialogHeader>
           <DialogTitle>{active ? (active.status === "failed" ? "Retry refund" : "Send refund") : canIssue ? "Refund payment" : "Request a refund"}</DialogTitle>
           <DialogDescription>
@@ -142,8 +159,8 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
         {step === "wallet" ? (
           <div className="flex flex-col items-center gap-3 py-6 text-center" aria-live="polite">
             <LoaderCircle className="size-8 animate-spin text-primary" aria-hidden />
-            <p className="font-medium">Confirm in your wallet</p>
-            <p className="max-w-[34ch] text-sm text-muted-foreground">Approve the refund with the payout wallet {merchant ? shortAddress(merchant.payout) : ""}. Do not close this window.</p>
+            <p className="font-medium">Preparing the refund</p>
+            <p className="max-w-[34ch] text-sm text-muted-foreground">Your server records the refund, then your payout account signs it.</p>
           </div>
         ) : (
           <form
@@ -151,7 +168,7 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
             className="flex flex-col gap-4"
             onSubmit={(e) => {
               e.preventDefault();
-              if (canIssue) void execute("sign");
+              if (canIssue) void execute();
               else void request();
             }}
           >
@@ -179,8 +196,8 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
                 )}
               </fieldset>
             )}
-            <FormRow id="refund-to" label="Send to" hint={recipient ? "The payer's address on the payment, on the same network." : undefined} error={to && !recipient ? "Enter a valid 0x address." : null}>
-              <Input id="refund-to" value={to} onChange={(e) => setTo(e.target.value)} className="hash text-[0.8125rem]" spellCheck={false} autoComplete="off" readOnly={Boolean(active)} />
+            <FormRow id="refund-to" label="Send to" hint={recipient ? "The NEAR account that paid. It must be registered with the token to receive it." : undefined} error={to && !recipient ? "Enter a valid NEAR account." : null}>
+              <Input id="refund-to" value={to} onChange={(e) => setTo(e.target.value)} className="hash h-11 text-base md:h-9 md:text-[0.8125rem]" autoCapitalize="none" spellCheck={false} autoComplete="off" readOnly={Boolean(active)} />
             </FormRow>
             <FormRow id="refund-reason" label="Reason">
               <Select value={reason} onValueChange={setReason} disabled={Boolean(active)}>
@@ -202,7 +219,7 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
             <p className="flex gap-2 rounded-lg bg-info-soft px-3 py-2.5 text-[0.8125rem] text-primary">
               <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
               <span>
-                {canIssue ? null : "An Admin approves the request first. "}Refunds are sent on-chain from your payout wallet and cannot be reversed. They land in minutes. Fees are not returned on refunds
+                {canIssue ? null : "An Admin approves the request first. "}Refunds are sent on NEAR from your payout account and cannot be reversed. They land in seconds. Fees are not returned on refunds
                 {BigInt(payment.fee_total) > 0n ? ` (${formatToken(payment.fee_total, t.symbol, t.decimals)} on this payment)` : ""}.
               </span>
             </p>
@@ -216,13 +233,7 @@ export function RefundDialog({ payment, merchant, open, onOpenChange, retry }: {
         )}
         {step !== "wallet" && (
           <DialogFooter className="gap-2 sm:justify-between">
-            {canIssue ? (
-              <Button type="button" variant="ghost" disabled={!can || !merchant} onClick={() => void execute("transfer")}>
-                Send a transfer instead
-              </Button>
-            ) : (
-              <span />
-            )}
+            <span />
             <Button type="submit" form="refund-form" disabled={!can || (canIssue && !merchant)}>
               {label}
             </Button>

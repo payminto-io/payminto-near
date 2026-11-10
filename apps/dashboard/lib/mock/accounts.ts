@@ -239,7 +239,7 @@ export class MockAccountApi implements AccountApi {
     const s = db();
     return s.setupDone
       ? { needed: false, signupMode: s.signupMode, platformName: s.platformName, network: null, payoutDefault: null, feeWallet: null }
-      : { needed: true, signupMode: null, platformName: "Payminto", network: { chainId: 133, name: "HashKey Chain Testnet", testnet: true }, payoutDefault: null, feeWallet: "0x5cA1ab1E00000000000000000000000000c0FFee" };
+      : { needed: true, signupMode: null, platformName: "Payminto", network: { chainId: null, name: "NEAR testnet", testnet: true }, payoutDefault: null, feeWallet: "acme-payments.testnet" };
   }
   async setupCheck(code: string) {
     await delay(400);
@@ -573,13 +573,13 @@ export class MockSearchApi implements SearchApi {
     };
     const amount = d.kind === "amount" ? Number(text) : null;
     // Load every source at once so the mock answers about as fast as the real index.
-    const [paymentsPage, linksList, customersPage, refundsPage, merchantsList, mandatesList, catalog, batchesList] = await Promise.all([
+    const [paymentsPage, linksList, customersPage, refundsPage, merchantsList, budgetsList, catalog, batchesList] = await Promise.all([
       want("payment") ? api.gateway.payments({ limit: 500 }) : null,
       want("link") ? api.gateway.links() : null,
       want("customer") ? new MockAccountApi().customers({}) : null,
       want("refund") ? api.gateway.refunds({ limit: 200 }) : null,
       platform && want("business") ? api.operator.merchants() : null,
-      platform && want("budget") ? api.mandates() : null,
+      platform && want("budget") ? api.budgets() : null,
       platform && want("paid_service") ? api.providerCatalog() : null,
       platform && want("settlement") ? api.batches() : null,
     ]);
@@ -592,7 +592,7 @@ export class MockSearchApi implements SearchApi {
           .filter((p) =>
             amount !== null
               ? Number(formatMoney(p.amount, 6).replace(/,/g, "")) === amount
-              : has([p.id, p.reference, p.description, p.customer_email, p.payer, p.deposit_address], lower),
+              : has([p.id, p.reference, p.description, p.customer_email, p.payer], lower),
           )
           .slice(0, amount !== null ? 5 : 50)
           .map((p) => {
@@ -631,10 +631,10 @@ export class MockSearchApi implements SearchApi {
       );
     }
     if (platform && want("budget") && d.kind !== "amount") {
-      const ms = mandatesList!;
+      const ms = budgetsList!;
       push(
         "budget",
-        ms.filter((m) => has([m.id, m.label, m.mandate.agent, m.mandate.owner], lower)).map((m) => ({ key: `budget:${m.id}`, type: "budget" as const, id: m.id, title: m.label, subtitle: `${m.status === "open" ? "Active" : m.status} - limit ${usdc(m.mandate.totalCap)}`, href: `/mandates/${m.id}`, status: m.status, matched: { field: "label", snippet: m.label } })),
+        ms.filter((m) => has([m.id, m.label, m.agent, m.owner], lower)).map((m) => ({ key: `budget:${m.id}`, type: "budget" as const, id: m.id, title: m.label, subtitle: `${m.status === "open" ? "Active" : m.status} - limit ${usdc(m.cap)}`, href: `/budgets/${m.id}`, status: m.status, matched: { field: "label", snippet: m.label } })),
       );
     }
     if (platform && want("paid_service") && d.kind !== "amount") {

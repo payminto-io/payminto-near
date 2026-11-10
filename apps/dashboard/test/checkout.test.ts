@@ -6,8 +6,6 @@ import {
   countdownLabel,
   countdownTone,
   formatCountdown,
-  hspInFlight,
-  hspProgress,
   initialMethod,
   isPublicCheckoutPath,
   isTerminal,
@@ -50,7 +48,7 @@ describe("checkoutCopy", () => {
     }
   });
   it("states the amounts and that no funds were taken where true", () => {
-    expect(checkoutCopy("partially_paid", ctx).body).toBe("Received 20.00 USDC of 25.00 USDC. Send the remaining 5.00 USDC to the same address.");
+    expect(checkoutCopy("partially_paid", ctx).body).toBe("Received 20.00 USDC of 25.00 USDC. Pay the remaining 5.00 USDC from your NEAR wallet.");
     expect(checkoutCopy("overpaid", ctx).next).toContain("0.50 USDC more");
     expect(checkoutCopy("expired", ctx).body).toBe("No funds were taken.");
     expect(checkoutCopy("canceled", ctx).body).toContain("No funds were taken.");
@@ -108,25 +106,10 @@ describe("isPublicCheckoutPath", () => {
   });
 });
 
-describe("HSP on the checkout", () => {
-  const base = { methods: ["wallet", "deposit", "hsp"] as PaymentMethod[], authorization: null, status: "open" as const, amount_paid: "0" };
-
-  it("offers Pay with HSP when the node lists it, after the wallet and the address", () => {
-    expect(availableMethods(base)).toEqual(["wallet", "deposit", "hsp"]);
-    expect(availableMethods({ ...base, methods: ["deposit"] })).toEqual(["deposit"]);
-    expect(initialMethod({ ...base, method: "hsp" }, true)).toBe("hsp");
-    expect(initialMethod({ ...base, method: null }, true)).toBe("wallet");
-  });
-
-  it("says where an HSP payment is in plain words, and holds the checkout while it is on its way", () => {
-    expect(hspProgress("payment-submitted")).toMatchObject({ step: 1, title: "Submitted to HSP", failed: false });
-    expect(hspProgress("payment-timeout").step).toBe(1);
-    expect(hspProgress("payment-safe")).toMatchObject({ step: 2, title: "On chain" });
-    expect(hspProgress("payment-finalized")).toMatchObject({ step: 3, title: "Final" });
-    expect(hspProgress("payment-failed")).toMatchObject({ failed: true });
-    expect(hspInFlight({ status: "payment-included" })).toBe(true);
-    expect(hspInFlight({ status: "order-created" })).toBe(false);
-    expect(hspInFlight({ status: "payment-failed" })).toBe(false);
-    expect(hspInFlight(null)).toBe(false);
+describe("ways to pay", () => {
+  const base = { methods: ["wallet", "voucher"] as PaymentMethod[], wallet: null, status: "open" as const, amount_paid: "0" };
+  it("offers only the NEAR wallet, which carries the node-signed terms", () => {
+    expect(availableMethods(base)).toEqual(["wallet"]);
+    expect(initialMethod(base)).toBe("wallet");
   });
 });

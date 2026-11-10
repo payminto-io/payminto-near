@@ -70,7 +70,7 @@ function MerchantsPagePage() {
                     <Address address={m.payout} showName={false} explorer={false} />
                   </span>
                   <span className="truncate text-muted-foreground max-md:hidden">{plans.data?.find((p) => p.id === m.fee_plan_id)?.name ?? "-"}</span>
-                  <span className="text-right max-md:col-start-1 max-md:text-left max-md:text-muted-foreground">{m.volume_30d ? <Money atomic={m.volume_30d} maxFraction={2} /> : "-"}</span>
+                  <span className="text-right max-md:col-start-1 max-md:text-left max-md:text-muted-foreground">{m.volume_30d ? <Money atomic={m.volume_30d} /> : "-"}</span>
                   <span className="num text-right text-muted-foreground max-md:hidden">{m.payments_30d != null ? formatInt(m.payments_30d) : "-"}</span>
                 </li>
               ))}

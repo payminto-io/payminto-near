@@ -1,7 +1,8 @@
 /**
  * In-browser stand-in for the merchant AI agent routes (docs/AGENTS.md section 6) in NEXT_PUBLIC_MOCK mode.
- * Acme Store has two AI connections (one with a rejected key), a back-office agent, a paid skill and a paused agent,
- * and runs in every status with their steps and usage. A small worker plays new runs step by step, honours cancel,
+ * Acme Store has three AI connections (one with a rejected key, one on NEAR AI Cloud), two back-office agents, a paid
+ * skill and a paused agent, and runs in every status with their steps and usage. The runs on NEAR AI Cloud carry the
+ * enclave attestation of each model turn, one run for each thing it can show. A small worker plays new runs step by step, honours cancel,
  * fails runs on a rejected key, and publishes `agent_run.*` events on the mock event stream, so the live run page and
  * the polling fallback both have something real to follow. Other businesses start empty. Nothing calls a model.
  */
@@ -23,6 +24,11 @@ const delay = (ms = 140 + Math.round(Math.random() * 180)) => new Promise((r) =>
 let idSeq = 1;
 const rid = (p: string) => `${p}_${Date.now().toString(36)}${(idSeq++).toString(36)}`;
 
+/** Models NEAR AI Cloud runs in its own enclaves; the first is the default. */
+const NEAR_MODELS = ["z-ai/glm-5.3-flash", "Qwen/Qwen3.8-27B", "deepseek-ai/DeepSeek-V4.1-Flash-1017"];
+/** A model of another company behind NEAR's gateway: it runs outside any NEAR enclave, so only the gateway signs. */
+const NEAR_OUTSIDE_MODEL = "openai/gpt-5-nano";
+
 export const MOCK_PROVIDERS: AiProvider[] = [
   { id: "anthropic", name: "Anthropic", needs_base_url: false, default_base_url: "https://api.anthropic.com", suggested_models: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5"], note: null },
   { id: "openai", name: "OpenAI", needs_base_url: false, default_base_url: "https://api.openai.com/v1", suggested_models: ["gpt-5.1", "gpt-5.1-mini"], note: null },
@@ -43,6 +49,14 @@ export const MOCK_PROVIDERS: AiProvider[] = [
     suggested_models: ["deepseek-ai/deepseek-v3.1", "deepseek-ai/deepseek-v3"],
     note: "Models on Replicate have no native tool calling. Payminto emulates tools with a JSON reply format in the prompt, which works well with DeepSeek V3.1 but is less reliable than native tools.",
   },
+  {
+    id: "nearai",
+    name: "NEAR AI Cloud",
+    needs_base_url: false,
+    default_base_url: "https://cloud-api.near.ai/v1",
+    suggested_models: [...NEAR_MODELS],
+    note: "Private inference in enclaves (Intel TDX and NVIDIA GPUs). The key starts with sk- and comes from API Keys at cloud.near.ai. Payminto checks the enclave attestation and the signature of each answer and shows what was and was not verified. Models hosted by other companies (OpenAI, Anthropic, Gemini and others) pass through NEAR's gateway but do not run in a NEAR enclave.",
+  },
 ];
 
 /** The fuller list a provider would return from its models route, for the model picker. */
@@ -52,6 +66,7 @@ const PROVIDER_MODELS: Record<string, string[]> = {
   google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
   openai_compatible: ["meta-llama/llama-4-maverick", "meta-llama/llama-4-scout", "deepseek/deepseek-chat", "mistralai/mistral-large", "qwen/qwen3-coder"],
   replicate: ["deepseek-ai/deepseek-v3.1", "deepseek-ai/deepseek-v3"],
+  nearai: [...NEAR_MODELS, NEAR_OUTSIDE_MODEL],
 };
 
 type MockRun = AgentRun & { events: AgentRunEvent[] };
@@ -104,10 +119,98 @@ const ANSWERS = {
   ].join(" "),
   blocked: "Three payers are blocked right now: two wallets you added yourself and one frozen by the USDC issuer. None tried to pay in the last 24 hours.",
   generic: "Here is what I found: 18 payments today for 412.50 USDC, no failed payments, and no blocked attempts in the last hour.",
+  refunds: "Two refund requests are waiting for an Admin: 25.00 USDC on the Pro plan payment from yesterday and 12.50 USDC on a Starter kit payment from 3 hours ago.",
+  today: "Today you earned 412.50 USDC from 18 payments. Nothing failed and nothing was refunded.",
+  largest: "The largest payment this week was 240.00 USDC for the Team plan, paid on Tuesday.",
 };
 
-function turn(run: MockRun, at: number, n: number, input: number, output: number, stop: string, model: string, text?: string) {
-  step(run, "model_turn", { turn: n, input_tokens: input, output_tokens: output, stop, model, ...(text ? { text } : {}) }, at);
+// ---------------------------------------------------------------------------
+// Enclave attestation of a model turn (NEAR AI Cloud)
+// ---------------------------------------------------------------------------
+
+/** Made-up hex that stays the same for one seed, for hashes and enclave keys. Nothing here is a real key or address. */
+function mockHex(seed: string, chars: number): string {
+  let h = 0x811c9dc5;
+  let out = "";
+  for (let i = 0; out.length < chars; i++) {
+    for (const c of `${seed}:${i}`) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0;
+    out += h.toString(16).padStart(8, "0");
+  }
+  return out.slice(0, chars);
+}
+
+/**
+ * What the node stores with a model turn on NEAR AI Cloud (`summarizeAttestation` in packages/models), in the four
+ * shapes a run can show:
+ *   model        the model enclave signed; the normal result, partially verified
+ *   gateway      only the gateway enclave signed (a model outside NEAR's enclaves); partially verified
+ *   failed       a signature came back, from a key no checked enclave owns
+ *   unavailable  no signature could be fetched, so nothing was checked
+ */
+type MockAttestation = "model" | "gateway" | "failed" | "unavailable";
+
+const SIGNATURE_CHECKS = ["signature_available", "signature_kind", "signed_text", "signature_valid"];
+
+function mockAttestation(kind: MockAttestation, seed: string, model: string): Record<string, unknown> {
+  const hashes = { request_hash: mockHex(`${seed}:request`, 64), response_hash: mockHex(`${seed}:response`, 64) };
+  const enclaveKey = `0x${mockHex(`enclave:${model}`, 40)}`;
+  const gatewayKey = `0x${mockHex("enclave:gateway", 40)}`;
+  switch (kind) {
+    case "model":
+      return {
+        status: "partially_verified",
+        summary: `This answer was signed by the model enclave key ${enclaveKey} for ${model}, a key bound to an Intel TDX quote that was checked before the request. Not verified here: the model enclave report is only partly verified; not checked in this process: Intel's TCB status of the platform, NVIDIA's verdict on the GPU evidence, whether the measured software is on an accepted list.`,
+        passed: [...SIGNATURE_CHECKS, "signer_attested", "preflight_fresh", "model_binding"],
+        failed: [],
+        not_verified: ["enclave_attestation"],
+        ...hashes,
+        signature_kind: "provider_tee",
+        signer: enclaveKey,
+        bound_to: "model_enclave",
+      };
+    case "gateway":
+      return {
+        status: "partially_verified",
+        summary: `This answer was signed by the NEAR AI Cloud gateway enclave key ${gatewayKey}, a key bound to an Intel TDX quote that was checked before the request; it is not tied to a model enclave. Not verified here: the gateway report is only partly verified; not checked in this process: Intel's TCB status of the platform, whether the measured software is on an accepted list; the gateway enclave signed these bytes; that does not tie the answer to a model enclave.`,
+        passed: [...SIGNATURE_CHECKS, "signer_attested", "preflight_fresh"],
+        failed: [],
+        not_verified: ["enclave_attestation", "model_binding"],
+        ...hashes,
+        signature_kind: "gateway",
+        signer: gatewayKey,
+        bound_to: "gateway_enclave",
+      };
+    case "failed": {
+      const stranger = `0x${mockHex(`stranger:${seed}`, 40)}`;
+      return {
+        status: "failed",
+        summary: `Not verified: the signer ${stranger} matches no model enclave report of the preflight attestation: the signature comes from another key.`,
+        passed: [...SIGNATURE_CHECKS, "preflight_fresh"],
+        failed: ["signer_attested", "model_binding"],
+        not_verified: [],
+        ...hashes,
+        signature_kind: "provider_tee",
+        signer: stranger,
+        bound_to: null,
+      };
+    }
+    case "unavailable":
+      return {
+        status: "failed",
+        summary: "Not verified: no signature available, so the answer is unverified (no signature was recorded for this completion (404)).",
+        passed: [],
+        failed: ["signature_available"],
+        not_verified: [],
+        ...hashes,
+        signature_kind: null,
+        signer: null,
+        bound_to: null,
+      };
+  }
+}
+
+function turn(run: MockRun, at: number, n: number, input: number, output: number, stop: string, model: string, text?: string, attestation?: MockAttestation) {
+  step(run, "model_turn", { turn: n, input_tokens: input, output_tokens: output, stop, model, ...(text ? { text } : {}), ...(attestation ? { attestation: mockAttestation(attestation, `${run.id}:${n}`, model) } : {}) }, at);
 }
 function tool(run: MockRun, at: number, id: string, name: string, input: Record<string, unknown>, summary: string | null, isError = false) {
   step(run, "tool_call", { id, name, input }, at);
@@ -243,6 +346,41 @@ function seedAcme(merchantId: string, now: number): Store {
     updated_at: iso(now - 1 * DAY),
   };
 
+  const nearCloud: AiConnection = {
+    id: "aic_near_ai_cloud",
+    merchant_id: merchantId,
+    provider: "nearai",
+    label: "Team NEAR AI",
+    base_url: null,
+    default_model: NEAR_MODELS[0]!,
+    key_hint: "7d0b",
+    status: "active",
+    verified_at: iso(now - 3 * HOUR),
+    last_error: null,
+    monthly_token_limit: 1_000_000,
+    created_at: iso(now - 8 * DAY),
+    created_by: "Ana Lopez",
+    rotated_at: null,
+  };
+  const privateAssistant: Agent = {
+    id: "agt_private_assistant",
+    merchant_id: merchantId,
+    kind: "ops",
+    name: "Private assistant",
+    description: "Answers questions about payments and refunds with a model that runs in an enclave on NEAR AI Cloud.",
+    connection_id: nearCloud.id,
+    model: NEAR_MODELS[0]!,
+    instructions: "Answer in short sentences. Amounts always in USDC with two decimals.",
+    tools: ["get_overview", "list_payments", "get_payment", "get_reconciliation", "list_blocked"],
+    limits: { ...AGENT_LIMIT_DEFAULTS },
+    status: "active",
+    slug: null,
+    price: null,
+    input_hint: null,
+    created_at: iso(now - 8 * DAY),
+    updated_at: iso(now - 5 * DAY),
+  };
+
   const runs: MockRun[] = [];
   const sonnet = "claude-sonnet-5-5";
 
@@ -345,13 +483,69 @@ function seedAcme(merchantId: string, now: number): Store {
     runs.push(r);
   }
 
+  // NEAR AI Cloud: every model turn carries what the enclave attestation showed. One run for each thing it can show.
+  const glm = NEAR_MODELS[0]!;
+  // The normal result: the model enclave signed both turns, and three checks were not run.
+  {
+    const t = now - 50 * MIN;
+    const r = baseRun({ id: "run_near_week", agent: privateAssistant, input: "How much did we earn this week, and are any refunds waiting?", createdAt: t, status: "succeeded" });
+    r.started_at = iso(t + 700);
+    step(r, "started", { attempt: 1 }, t + 700);
+    turn(r, t + 3_400, 1, 1_912, 148, "tool_use", glm, undefined, "model");
+    tool(r, t + 3_500, "tc_1", "get_overview", { range: "7d" }, "This week 2,948.75 USDC from 131 payments; today 412.50 USDC from 18 payments.");
+    tool(r, t + 4_700, "tc_2", "list_payments", { refund_requested: true, limit: 20 }, "2 refund requests waiting: 25.00 USDC (pay_8f2c), 12.50 USDC (pay_1c9a).");
+    turn(r, t + 9_800, 2, 2_486, 264, "end", glm, ANSWERS.week, "model");
+    finish(r, t + 9_900, "succeeded", { result: { answer: ANSWERS.week } });
+    r.usage = usageOf(r, "nearai");
+    runs.push(r);
+  }
+  // No signature came back for the second turn, so that answer could not be checked.
+  {
+    const t = now - 4 * HOUR;
+    const r = baseRun({ id: "run_near_no_signature", agent: privateAssistant, input: "Are any refund requests waiting?", createdAt: t, status: "succeeded" });
+    r.started_at = iso(t + 600);
+    step(r, "started", { attempt: 1 }, t + 600);
+    turn(r, t + 3_100, 1, 1_874, 121, "tool_use", glm, undefined, "model");
+    tool(r, t + 3_200, "tc_1", "list_payments", { refund_requested: true, limit: 20 }, "2 refund requests waiting: 25.00 USDC (pay_8f2c), 12.50 USDC (pay_1c9a).");
+    turn(r, t + 8_600, 2, 2_190, 96, "end", glm, ANSWERS.refunds, "unavailable");
+    finish(r, t + 8_700, "succeeded", { result: { answer: ANSWERS.refunds } });
+    r.usage = usageOf(r, "nearai");
+    runs.push(r);
+  }
+  // A signature came back from a key no checked enclave owns: the verification failed.
+  {
+    const t = now - 7 * HOUR;
+    const r = baseRun({ id: "run_near_failed_check", agent: privateAssistant, input: "How much did we earn today?", createdAt: t, status: "succeeded" });
+    r.started_at = iso(t + 600);
+    step(r, "started", { attempt: 1 }, t + 600);
+    turn(r, t + 3_000, 1, 1_866, 118, "tool_use", glm, undefined, "model");
+    tool(r, t + 3_100, "tc_1", "get_overview", { range: "1d" }, "Today 412.50 USDC from 18 payments; nothing failed.");
+    turn(r, t + 7_900, 2, 2_104, 84, "end", glm, ANSWERS.today, "failed");
+    finish(r, t + 8_000, "succeeded", { result: { answer: ANSWERS.today } });
+    r.usage = usageOf(r, "nearai");
+    runs.push(r);
+  }
+  // From before the agent moved to an enclave model: a model outside NEAR's enclaves, signed by the gateway only.
+  {
+    const t = now - 6 * DAY;
+    const r = baseRun({ id: "run_near_gateway_only", agent: privateAssistant, input: "What was the largest payment this week?", createdAt: t, status: "succeeded" });
+    r.started_at = iso(t + 500);
+    step(r, "started", { attempt: 1 }, t + 500);
+    turn(r, t + 2_300, 1, 1_790, 52, "tool_use", NEAR_OUTSIDE_MODEL, undefined, "gateway");
+    tool(r, t + 2_400, "tc_1", "list_payments", { sort: "amount_desc", limit: 1 }, "Largest this week: 240.00 USDC for the Team plan (pay_44d1), paid on Tuesday.");
+    turn(r, t + 5_200, 2, 1_968, 41, "end", NEAR_OUTSIDE_MODEL, ANSWERS.largest, "gateway");
+    finish(r, t + 5_300, "succeeded", { result: { answer: ANSWERS.largest } });
+    r.usage = usageOf(r, "nearai");
+    runs.push(r);
+  }
+
   runs.sort((a, b) => b.created_at.localeCompare(a.created_at));
   return {
-    connections: [anthropic, openrouter],
-    agents: [assistant, copy, triage],
+    connections: [anthropic, nearCloud, openrouter],
+    agents: [assistant, privateAssistant, copy, triage],
     runs,
     // Tokens from earlier this month that the seeded runs do not account for.
-    baseUsage: { [anthropic.id]: 1_243_480, [openrouter.id]: 18_204, [assistant.id]: 1_126_910, [copy.id]: 116_570, [triage.id]: 18_204 },
+    baseUsage: { [anthropic.id]: 1_243_480, [openrouter.id]: 18_204, [assistant.id]: 1_126_910, [copy.id]: 116_570, [triage.id]: 18_204, [nearCloud.id]: 64_310, [privateAssistant.id]: 64_310 },
   };
 }
 
@@ -432,6 +626,8 @@ async function play(s: Store, run: MockRun, from: { turn: number; toolIndex: num
     return;
   }
   const script = scriptFor(agent, run.input ?? "");
+  // On NEAR AI Cloud every turn carries its attestation: the model enclave signs for NEAR's own models, the gateway for the rest.
+  const attested = (turnNo: number) => (provider === "nearai" ? { attestation: mockAttestation(NEAR_MODELS.includes(agent.model) ? "model" : "gateway", `${run.id}:${turnNo}`, agent.model) } : {});
   let n = from.turn;
   for (let i = from.toolIndex; i < script.tools.length; i++) {
     const t = script.tools[i]!;
@@ -439,7 +635,8 @@ async function play(s: Store, run: MockRun, from: { turn: number; toolIndex: num
     if (!open) {
       await wait(1_300);
       if (halted(run)) return;
-      publish(run, "agent_run.step", step(run, "model_turn", { turn: n++, input_tokens: 1_700 + i * 520, output_tokens: 60 + i * 14, stop: "tool_use", model: agent.model }));
+      publish(run, "agent_run.step", step(run, "model_turn", { turn: n, input_tokens: 1_700 + i * 520, output_tokens: 60 + i * 14, stop: "tool_use", model: agent.model, ...attested(n) }));
+      n++;
       await wait(500);
       if (halted(run)) return;
       publish(run, "agent_run.step", step(run, "tool_call", { id: `tc_${i + 1}`, name: t.name, input: t.input }));
@@ -451,7 +648,7 @@ async function play(s: Store, run: MockRun, from: { turn: number; toolIndex: num
   }
   await wait(1_800);
   if (halted(run)) return;
-  publish(run, "agent_run.step", step(run, "model_turn", { turn: n, input_tokens: 2_300, output_tokens: Math.round(script.answer.length / 4), stop: "end", model: agent.model, text: script.answer }));
+  publish(run, "agent_run.step", step(run, "model_turn", { turn: n, input_tokens: 2_300, output_tokens: Math.round(script.answer.length / 4), stop: "end", model: agent.model, text: script.answer, ...attested(n) }));
   finish(run, Date.now(), "succeeded", { result: { answer: script.answer }, error_code: null, error_message: null });
   run.usage = usageOf(run, provider);
   publish(run, "agent_run.succeeded", run.events.at(-1));

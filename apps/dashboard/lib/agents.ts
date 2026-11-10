@@ -27,6 +27,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   google: "Google Gemini",
   openai_compatible: "OpenAI-compatible",
   replicate: "Replicate",
+  nearai: "NEAR AI Cloud",
 };
 
 /** The provider's name for people: the server's own name when it sends one, else ours, else the id. */
@@ -246,9 +247,215 @@ export function runIdOfEvent(e: { type: string; data: Record<string, unknown> })
 // The run timeline
 // ---------------------------------------------------------------------------
 
+/**
+ * What the enclave attestation of one model turn showed (NEAR AI Cloud). The node stores it with the step; the claim
+ * is limited to that turn. `partially_verified` means no check failed and some were not run by the node.
+ */
+export type StepAttestation = {
+  status: "verified" | "partially_verified" | "failed";
+  summary: string | null;
+  requestHash: string | null;
+  responseHash: string | null;
+  /** `provider_tee`: a model enclave signed the answer. `gateway`: only the gateway enclave did. */
+  signatureKind: string | null;
+  signer: string | null;
+  /** The node's check ids that ran and failed, and those that did not run. */
+  failed: string[];
+  notVerified: string[];
+};
+
+/**
+ * What a model turn's attestation comes to for a person. `partial` is the normal result: no check failed and some did
+ * not run. `unavailable` is a failed result whose cause is missing evidence (no signature, no report), told apart from
+ * `failed`, where evidence came back and a check did not pass. `none` is a turn that carries no attestation at all.
+ */
+export type AttestationState = "verified" | "partial" | "failed" | "unavailable" | "none";
+
+/**
+ * The word for each state. `positive` is kept for a result where every check passed; a partial result is neutral, so
+ * it never reads as a green "verified". `warning` colours only the shield of a result whose evidence never arrived.
+ * `short` is the one-line form for tight places.
+ */
+export const ATTESTATION_STATE: Record<AttestationState, { tone: Tone; label: string; short: string }> = {
+  verified: { tone: "positive", label: "Verified", short: "Attestation verified" },
+  partial: { tone: "neutral", label: "Partially verified", short: "Attestation partially verified" },
+  failed: { tone: "negative", label: "Verification failed", short: "Attestation failed" },
+  unavailable: { tone: "warning", label: "Could not be checked", short: "Attestation could not be checked" },
+  none: { tone: "neutral", label: "No attestation", short: "No attestation" },
+};
+
+/** True under every result: an attestation is about who signed the bytes, never about what the answer says. */
+export const ATTESTATION_LIMIT = "An attestation shows which enclave signed the request and the answer. It does not show that the answer is correct.";
+
+/** Evidence that never arrived: no signature for the answer, or no enclave report to check it against. */
+const MISSING_EVIDENCE = ["signature_available", "report_fetched"];
+
+export function attestationState(a: StepAttestation | null | undefined): AttestationState {
+  if (!a) return "none";
+  if (a.status === "verified") return "verified";
+  if (a.status === "partially_verified") return "partial";
+  return a.failed.some((id) => MISSING_EVIDENCE.includes(id)) ? "unavailable" : "failed";
+}
+
+/** A check that did not run, in plain words. The technical names stay with the node. */
+const UNCHECKED: Record<string, string> = {
+  model_binding: "Which model wrote the answer, because only the gateway signed it",
+  tcb_status: "Whether Intel counts the enclave's hardware and firmware as up to date",
+  gpu_verdict: "Whether NVIDIA accepts the evidence from the GPU",
+  measurement_policy: "Whether the software in the enclave is a build you accept",
+  enclave_attestation: "Parts of the enclave's own report, named in the node's note",
+};
+
+/** How the node's summary names the checks of an enclave report that it left open (packages/models, attestation). */
+const NODE_PHRASE: Record<string, string> = {
+  "Intel's TCB status of the platform": "tcb_status",
+  "NVIDIA's verdict on the GPU evidence": "gpu_verdict",
+  "whether the measured software is on an accepted list": "measurement_policy",
+};
+
+/** What each open check of an enclave report would take. Payminto uses none of them yet, so these checks never run. */
+const CHECK_NEEDS: Record<string, string> = {
+  tcb_status: "Intel's own service",
+  gpu_verdict: "NVIDIA's own service",
+  measurement_policy: "a list of builds you accept",
+};
+
+/** "a", "a and b", "a, b and c". */
+const listed = (items: string[]) => (items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
+
+/** Why the open checks of an enclave report did not run, naming only what the checks on this list would take. */
+function whyUnchecked(open: string[]): string | null {
+  const needs = open.flatMap((id) => (CHECK_NEEDS[id] ? [CHECK_NEEDS[id]] : []));
+  if (needs.length === 0) return null;
+  return `${needs.length === 1 ? "The check on the enclave itself needs" : "The checks on the enclave itself need"} ${listed(needs)}. Payminto does not use ${needs.length === 1 ? "it" : "them"} yet.`;
+}
+
+/**
+ * A sentence split around the keys and hashes in it (0x plus 40 hex characters, or 64 hex characters), so each can be
+ * set on one line of its own type instead of breaking wherever the sentence wraps.
+ */
+export function splitIds(text: string): Array<{ text: string; id: boolean }> {
+  return text
+    .split(/(0x[0-9a-fA-F]{40}(?![0-9a-fA-F])|(?<![0-9a-fA-Fx])[0-9a-fA-F]{64}(?![0-9a-fA-F]))/)
+    .map((t, i) => ({ text: t, id: i % 2 === 1 }))
+    .filter((p) => p.text.length > 0);
+}
+
+/** A check that ran and did not pass, in one plain sentence. */
+const FAILED_CHECK: Record<string, string> = {
+  signature_kind: "The signature does not say whether the model enclave or the gateway signed.",
+  signed_text: "The signature covers a different request or answer than the one your node sent and received.",
+  signature_valid: "The signature is not valid for the key it names.",
+  signer_attested: "The signing key is not the key of an enclave your node checked before the request.",
+  preflight_fresh: "The enclave was not checked shortly before the request.",
+  model_binding: "No model enclave signature ties the answer to the model.",
+};
+
+const words = (id: string) => id.replace(/[_-]+/g, " ").trim();
+
+/**
+ * The checks that did not run, as ids, the one that matters most first. The node stores one id for "the enclave's own
+ * report is only partly checked" and names the open checks of that report in its summary, so they are read from there.
+ */
+function openChecks(a: StepAttestation): string[] {
+  const ids: string[] = [];
+  for (const id of a.notVerified) {
+    if (id !== "enclave_attestation") {
+      ids.push(id);
+      continue;
+    }
+    const named = (/not checked in this process: ([^.;]*)/.exec(a.summary ?? "")?.[1] ?? "").split(", ").map((p) => p.trim()).filter(Boolean);
+    ids.push(...(named.length ? named.map((p) => NODE_PHRASE[p] ?? p) : [id]));
+  }
+  return [...new Set(ids)].sort((x, y) => Number(y === "model_binding") - Number(x === "model_binding"));
+}
+
+export type AttestationView = {
+  state: AttestationState;
+  tone: Tone;
+  label: string;
+  short: string;
+  /** What the result means, in plain sentences: what was checked, who signed, what was left unchecked. */
+  meaning: string;
+  /** The key in the signature. `who` is set only when the checks tie that key to an enclave. */
+  signer: { title: string; who: string | null; key: string } | null;
+  /** What the node checked and found in order, for a result where no check failed. The technical words live here. */
+  checked: string[];
+  /** Checks that did not run, in plain words. */
+  unchecked: string[];
+  /** Why those checks did not run, when that is known. */
+  uncheckedWhy: string | null;
+  /** Checks that ran and did not pass, in plain sentences. */
+  problems: string[];
+  /** What to do next, when there is something to do. */
+  next: string | null;
+  /** The node's own sentence, kept for the cases where its detail adds to the plain words. */
+  nodeNote: string | null;
+};
+
+/**
+ * One model turn's attestation in plain words. It claims no more than the node's checks do: a partial result names
+ * what was not checked, a failed one says the answer is unverified, and none of them speaks about the answer itself.
+ */
+export function attestationView(a: StepAttestation | null | undefined): AttestationView {
+  const state = attestationState(a);
+  const base = { state, ...ATTESTATION_STATE[state], signer: null, checked: [], unchecked: [], uncheckedWhy: null, problems: [], next: null, nodeNote: null };
+  if (!a || state === "none") return { ...base, meaning: "Nothing was checked about where this turn ran. Only agents on a NEAR AI Cloud connection get an attestation." };
+
+  if (state === "unavailable") {
+    const what = a.failed.includes("signature_available") ? "NEAR AI Cloud returned no signature for this answer" : "The enclave report could not be fetched from NEAR AI Cloud";
+    return {
+      ...base,
+      meaning: `${what}, so nothing could be checked. The answer was still delivered and is unverified.`,
+      next: "Run the agent again to get a signed answer. If this keeps happening, NEAR AI Cloud may not be recording signatures.",
+      nodeNote: a.summary,
+    };
+  }
+
+  if (state === "failed") {
+    // A model enclave signature that fails any check also fails to tie the answer to the model; say that only when it is the whole story.
+    const failed = a.failed.filter((id) => id !== "model_binding" || a.failed.length === 1);
+    return {
+      ...base,
+      meaning: "A check did not pass, so nothing ties this answer to a checked enclave. Treat the answer as unverified.",
+      signer: a.signer ? { title: "Key in the signature", who: null, key: a.signer } : null,
+      problems: failed.map((id) => FAILED_CHECK[id] ?? `The check "${words(id)}" did not pass.`),
+      next: "Run the agent again for a fresh check. If it fails again, treat answers from this connection as unverified.",
+      nodeNote: a.summary,
+    };
+  }
+
+  const gateway = a.signatureKind === "gateway";
+  const who = a.signatureKind === "provider_tee" ? "The model enclave" : gateway ? "The NEAR AI Cloud gateway enclave" : "An enclave";
+  const signer = a.signer ? { title: "Signed by", who, key: a.signer } : null;
+  // A result that did not fail means each of these passed: the node fails the result when any one of them does not.
+  const checked = [
+    "The signature is valid and covers the exact request sent and the answer received",
+    `The signing key is the one ${gateway ? "the gateway enclave" : a.signatureKind === "provider_tee" ? "the model enclave" : "the enclave"} presented when your node checked it before the request`,
+    "That enclave's Intel TDX quote chains to Intel's root certificate, answers your node's own challenge and shows debug mode off",
+  ];
+  if (state === "verified") return { ...base, signer, checked, meaning: `${who} signed this exact request and answer, and every check your Payminto node ran passed.` };
+
+  const open = openChecks(a);
+  const left = open.length === 0 ? "left some checks unrun" : `did not run ${open.length} other ${open.length === 1 ? "check" : "checks"}`;
+  return {
+    ...base,
+    signer,
+    checked,
+    meaning: gateway
+      ? `Only the NEAR AI Cloud gateway enclave signed this exact request and answer, so nothing ties the answer to a model. Your Payminto node checked the signature and the gateway's hardware report from Intel, and ${left}.`
+      : `${who} signed this exact request and answer. Your Payminto node checked the signature and the enclave's hardware report from Intel, and ${left}. This is the normal result.`,
+    unchecked: open.map((id) => UNCHECKED[id] ?? `${words(id).charAt(0).toUpperCase()}${words(id).slice(1)}`),
+    uncheckedWhy: whyUnchecked(open),
+    next: gateway ? "To tie answers to a model enclave, choose a model that NEAR AI Cloud runs in its own enclaves." : null,
+    // Without a plain list, the node's sentence is the only place that names what was left open.
+    nodeNote: open.length === 0 || open.includes("enclave_attestation") ? a.summary : null,
+  };
+}
+
 export type TimelineStep =
   | { kind: "started"; key: string; at: string; attempt: number | null }
-  | { kind: "model"; key: string; at: string; turn: number | null; inputTokens: number; outputTokens: number; text: string | null; stop: string | null; model: string | null }
+  | { kind: "model"; key: string; at: string; turn: number | null; inputTokens: number; outputTokens: number; text: string | null; stop: string | null; model: string | null; attestation?: StepAttestation }
   | { kind: "tool"; key: string; at: string; name: string; label: string; input: Record<string, unknown> | null; result: string | null; isError: boolean; done: boolean }
   | { kind: "retry"; key: string; at: string; attempt: number | null; nextAt: string | null; code: string | null; message: string | null }
   | { kind: "finished"; key: string; at: string; status: string | null; code: string | null }
@@ -257,6 +464,22 @@ export type TimelineStep =
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null);
 const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+
+function stepAttestation(v: unknown): StepAttestation | null {
+  const a = obj(v);
+  if (!a || (a.status !== "verified" && a.status !== "partially_verified" && a.status !== "failed")) return null;
+  const ids = (list: unknown): string[] => (Array.isArray(list) ? list.filter((x): x is string => typeof x === "string" && x.length > 0) : []);
+  return {
+    status: a.status,
+    summary: str(a.summary),
+    requestHash: str(a.request_hash),
+    responseHash: str(a.response_hash),
+    signatureKind: str(a.signature_kind),
+    signer: str(a.signer),
+    failed: ids(a.failed),
+    notVerified: ids(a.not_verified),
+  };
+}
 
 /** A tool result as one short line; long or structured results are summarised by the server, this only trims. */
 function resultSummary(d: Record<string, unknown>): string | null {
@@ -282,6 +505,7 @@ export function timelineSteps(events: readonly AgentRunEvent[]): TimelineStep[] 
         break;
       case "model_turn": {
         const usage = obj(d.usage);
+        const attestation = stepAttestation(d.attestation);
         out.push({
           kind: "model",
           key,
@@ -292,6 +516,7 @@ export function timelineSteps(events: readonly AgentRunEvent[]): TimelineStep[] 
           text: str(d.text),
           stop: str(d.stop),
           model: str(d.model),
+          ...(attestation ? { attestation } : {}),
         });
         break;
       }
@@ -403,24 +628,28 @@ export function curlExample(url: string, inputHint: string | null | undefined): 
   return [`curl -i -X POST ${url} \\`, `  -H 'Content-Type: application/json' \\`, `  -d ${shellQuote(body)}`].join("\n");
 }
 
-/** A buyer agent that pays the price with one signature and reads the answer (or the poll URL on 202). */
+/** A buyer agent that pays the price with a Budget voucher and reads the answer (or the poll URL on 202). */
 export function agentExample(url: string, priceAtomic: string | null | undefined, inputHint: string | null | undefined): string {
   const max = priceAtomic && /^\d+$/.test(priceAtomic) ? `${priceAtomic}n` : "1_000_000n";
   return [
-    `import { payExact } from "@payminto/sdk";`,
-    `import { privateKeyToAccount } from "viem/accounts";`,
+    `import { AgentClient } from "@payminto/sdk";`,
+    `import { keypairFromSeed } from "@payminto/chain";`,
     ``,
-    `const account = privateKeyToAccount(process.env.AGENT_KEY);`,
-    `const paid = await payExact(${JSON.stringify(url)}, {`,
-    `  account,`,
-    `  maxAmount: ${max}, // never pays more than the price`,
-    `  init: {`,
-    `    method: "POST",`,
-    `    headers: { "Content-Type": "application/json" },`,
-    `    body: JSON.stringify({ input: ${JSON.stringify(inputHint?.trim() || "Your request")} }),`,
-    `  },`,
+    `// The agent key from \`payminto-agent keygen\`; it signs vouchers within its Budget and holds no funds.`,
+    `const agent = new AgentClient({`,
+    `  network: "near:testnet",`,
+    `  hub: process.env.PAYMINTO_HUB,`,
+    `  nodeUrl: process.env.PAYMINTO_NODE_URL,`,
+    `  budgetId: process.env.PAYMINTO_BUDGET_ID,`,
+    `  keypair: keypairFromSeed(Buffer.from(process.env.AGENT_SEED, "hex")),`,
+    `  maxPrice: ${max}, // never pays more than the price`,
+    `});`,
+    `const res = await agent.fetch(${JSON.stringify(url)}, {`,
+    `  method: "POST",`,
+    `  headers: { "Content-Type": "application/json" },`,
+    `  body: JSON.stringify({ input: ${JSON.stringify(inputHint?.trim() || "Your request")} }),`,
     `});`,
     `// 200 carries the answer; 202 carries a poll URL for the run you paid for.`,
-    `console.log(await paid.response.json());`,
+    `console.log(await res.json());`,
   ].join("\n");
 }

@@ -3,8 +3,8 @@
  * in what order, and which sections start open. Pure, so the per-role trees are unit tested.
  */
 import {
+  BellRing,
   BookOpenCheck,
-  Blocks,
   Bot,
   BrainCircuit,
   Building2,
@@ -12,16 +12,15 @@ import {
   House,
   Inbox,
   KeyRound,
+  HandCoins,
   Layers,
   LifeBuoy,
   Link2,
-  Percent,
   ScrollText,
   Settings,
   ShieldBan,
   ShieldCheck,
   Store,
-  TrendingUp,
   Undo2,
   UserCog,
   UserPlus,
@@ -79,23 +78,22 @@ export const PAGES = {
   customers: { href: "/customers", label: "Customers", icon: Users, shortcut: "C", hint: "People and agents who paid you, by email and wallet." },
   agentPayments: { href: "/payments?method=agent", label: "Agent payments", short: "Agents", icon: Bot, hint: "Payments made by AI agents." },
   aiAgents: { href: "/agents", label: "AI agents", icon: BrainCircuit, hint: "Agents that work for your business on your own AI account." },
-  budgets: { href: "/mandates", label: "Budgets", icon: WalletCards, shortcut: "B", hint: "Spending limits an owner signs once for one AI agent." },
-  services: { href: "/providers", label: "Paid services", short: "Services", icon: Store, hint: "An API, tool or agent that charges per call." },
+  budgets: { href: "/budgets", label: "Budgets", icon: WalletCards, shortcut: "B", hint: "Spending limits an owner signs once for one AI agent." },
+  services: { href: "/providers", label: "Paid services", short: "Services", icon: Store, hint: "An API, tool or agent that AI agents pay per Call." },
   nextSettlement: { href: "/netting", label: "Next settlement", icon: Waypoints, shortcut: "N", hint: "What will move in the next bundled transfer." },
-  settlements: { href: "/batches", label: "Settlements", icon: Layers, hint: "One on-chain transaction that pays many charges at once." },
+  settlements: { href: "/batches", label: "Settlements", icon: Layers, hint: "One on-chain transaction that pays many Calls at once." },
+  payouts: { href: "/payouts", label: "Payouts", icon: HandCoins, hint: "Hub credit sent to each creditor's own account, and the settlement export." },
+  refusalAlerts: { href: "/platform/webhooks", label: "Refusal alerts", icon: BellRing, hint: "Webhooks that tell your on-call tools about every refused agent payment." },
   businesses: { href: "/platform/businesses", label: "Businesses", icon: Building2, hint: "Shops and companies that get paid through this server." },
-  pricing: { href: "/platform/pricing", label: "Pricing plans", short: "Pricing", icon: Percent, hint: "What the platform charges a business per payment." },
-  earnings: { href: "/platform/earnings", label: "Platform earnings", short: "Earnings", icon: TrendingUp, hint: "Fees the platform earned, by business and method." },
   platformTeam: { href: "/platform/team", label: "Platform team", icon: UserCog, hint: "People who help run this server." },
   requests: { href: "/platform/requests", label: "Sign-up requests", icon: UserPlus, badge: "requests", hint: "New businesses waiting for approval." },
   outbox: { href: "/platform/outbox", label: "Email outbox", icon: Inbox, hint: "Emails this server would have sent; no email server is set up." },
-  blocked: { href: "/blocked", label: "Blocked", icon: ShieldBan, badge: "blocked", hint: "Payments and agent charges Payminto refused, with the reason." },
+  blocked: { href: "/blocked", label: "Blocked", icon: ShieldBan, badge: "blocked", hint: "Payments and agent Calls Payminto refused, with the reason." },
   balances: { href: "/ledger", label: "Balances", icon: BookOpenCheck, hint: "Who owes what, and what has been paid, with every entry." },
-  verify: { href: "/receipts", label: "Verify", icon: ShieldCheck, hint: "Check one agent charge against the chain." },
+  verify: { href: "/receipts", label: "Verify", icon: ShieldCheck, hint: "Check one agent Call against the chain." },
   activity: { href: "/activity", label: "Activity log", icon: ScrollText, hint: "Who changed what, and when." },
   apiKeys: { href: "/developers/keys", label: "API keys", icon: KeyRound, hint: "Lets your own software create payments." },
   webhooks: { href: "/developers/webhooks", label: "Webhooks", icon: Webhook, hint: "A message Payminto sends to your server when something happens." },
-  hashkey: { href: "/developers/hashkey", label: "HashKey Chain", icon: Blocks, hint: "Network facts, RPCs, explorers, faucet and contract addresses." },
   settings: { href: "/settings", label: "Settings", icon: Settings, shortcut: "S" },
   account: { href: "/account", label: "Your account", icon: UserCog, hint: "Profile, password and sessions." },
   help: { href: HELP_URL, label: "Help", icon: LifeBuoy, external: true, hint: "Payminto docs." },
@@ -123,12 +121,10 @@ export function buildNav(ctx: NavContext): NavModel {
 
   if (platformView) {
     const agents = has("agents.read");
-    sections.push(section("agents", "Agents", true, [agents && P.budgets, agents && P.services, agents && P.nextSettlement, agents && P.settlements]));
+    sections.push(section("agents", "Agents", true, [agents && P.budgets, agents && P.services, agents && P.nextSettlement, agents && P.settlements, agents && P.payouts, agents && P.refusalAlerts]));
     sections.push(
       section("platform", "Platform", true, [
         has("businesses.read") && P.businesses,
-        has("pricing.read") && P.pricing,
-        has("earnings.read") && P.earnings,
         has("team.read") && P.platformTeam,
         has("signups.review") && P.requests,
         has("outbox.read") && !ctx.smtpConfigured && P.outbox,
@@ -144,7 +140,7 @@ export function buildNav(ctx: NavContext): NavModel {
     // Staff and Viewer get Verify only (3.4); Blocked follows whoever can manage the blocked list.
     sections.push(section("records", "Records", false, [has("screening.manage") && P.blocked, agents && P.balances, P.verify, has("audit.read") && P.activity]));
   }
-  sections.push(section("developers", "Developers", false, [has("developers.manage") && P.apiKeys, has("developers.manage") && P.webhooks, P.hashkey]));
+  sections.push(section("developers", "Developers", false, [has("developers.manage") && P.apiKeys, has("developers.manage") && P.webhooks]));
 
   const home = P.home;
   const tabs: NavItem[] = platformView && has("businesses.read") ? [home, P.payments, P.businesses] : [home, P.payments, P.links];

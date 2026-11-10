@@ -4,12 +4,15 @@ import { createContext, useContext, useState, type CSSProperties, type ReactNode
 import { AnimatePresence, motion } from "motion/react";
 import { Check, ChevronDown, Clock3, Copy, ExternalLink, LockKeyhole, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatToken, shortAddress } from "@/lib/format";
+import { testMoneyLabel } from "@/lib/disclosures";
+import { useNetworkId, useNetworkWords } from "@/lib/use-network-words";
+import { formatToken } from "@/lib/format";
 import { brandVars, countdownLabel, countdownTone, formatCountdown, secondsLeft } from "@/lib/checkout";
 import type { CheckoutLive } from "@/lib/use-checkout";
 import type { MerchantBrand, Token } from "@/lib/schemas";
 import { useNow } from "@/components/app/time-ago";
 import { Bar, CheckoutMotion, PulseDot, RollingText, T, useCalm, useToast } from "./motion";
+import { AccountText } from "@/components/ds/account-id";
 
 /**
  * Building blocks of the hosted checkout, link page and payment proof. They take plain props (no console session), so
@@ -96,16 +99,17 @@ export function CheckoutLayout({
 }
 
 export function CheckoutFooter({ supportEmail }: { supportEmail: string | null }) {
+  const words = useNetworkWords();
   return (
     <footer className="pb-[env(safe-area-inset-bottom)]">
       <div className="mx-auto flex max-w-[920px] flex-wrap items-center justify-center gap-x-3 gap-y-1.5 px-4 pt-1 pb-6 text-xs text-muted-foreground sm:px-6">
         <span className="inline-flex items-center gap-1.5 font-medium text-foreground/80">
           <LockKeyhole className="size-3.5" aria-hidden /> Secured by Payminto
         </span>
-        <span aria-hidden className="text-subtle">
+        <span aria-hidden className="text-subtle max-sm:hidden">
           ·
         </span>
-        <span>Payminto never holds your money</span>
+        <span className="max-sm:basis-full max-sm:text-center">{words.escrowShort}</span>
         {supportEmail && (
           <>
             <span aria-hidden className="text-subtle max-sm:hidden">
@@ -140,28 +144,25 @@ export function MerchantMark({ merchant, className }: { merchant: MerchantBrand;
   );
 }
 
-export function MerchantRow({ merchant, livemode, chainId, className }: { merchant: MerchantBrand; livemode: boolean; chainId?: number; className?: string }) {
+export function MerchantRow({ merchant, livemode, className }: { merchant: MerchantBrand; livemode: boolean; className?: string }) {
   return (
     <div className={cn("flex min-w-0 items-center gap-3", className)}>
       <MerchantMark merchant={merchant} />
       <span className="min-w-0 truncate text-[0.9375rem] font-semibold">{merchant.name}</span>
-      <TestnetBadge livemode={livemode} chainId={chainId} />
+      <TestnetBadge livemode={livemode} />
     </div>
   );
 }
 
-/** The test-money label: "Testnet" on HashKey Chain Testnet and Sepolia, "Local test network" on a local chain, nothing on mainnet. */
-export function networkBadgeLabel(livemode: boolean, chainId?: number): string | null {
-  if (chainId === 177) return null;
-  if (chainId === 31337) return "Local test network";
-  if (chainId === 133 || chainId === 11155111) return "Testnet";
-  return livemode ? null : "Testnet";
+/** The test-money label for the network the server runs on: "Local sandbox" on a sandbox, "Testnet" otherwise off live mode. */
+export function networkBadgeLabel(livemode: boolean, networkId: string | null = null): string | null {
+  return testMoneyLabel(livemode, networkId);
 }
 
 /** `compact` (the phone order bar) says only "Test", so the business name keeps its room. */
-export function TestnetBadge({ livemode = false, chainId, compact = false }: { livemode?: boolean; chainId?: number; compact?: boolean }) {
-  const full = networkBadgeLabel(livemode, chainId);
-  const label = full && compact ? "Test" : full;
+export function TestnetBadge({ livemode = false, compact = false }: { livemode?: boolean; compact?: boolean }) {
+  const full = networkBadgeLabel(livemode, useNetworkId());
+  const label = full && compact ? (full === "Local sandbox" ? "Local" : "Test") : full;
   if (!label) return null;
   return (
     <span className="inline-flex h-[1.375rem] shrink-0 items-center rounded-full bg-warning-soft px-2 text-xs font-medium whitespace-nowrap text-warning" title={`${full ?? ""}: test money, nothing here has real value.`}>
@@ -191,12 +192,12 @@ export function BigAmount({ atomic, token, network, label, pending = false }: { 
   );
 }
 
-export function splitToken(text: string): [string, string] {
+function splitToken(text: string): [string, string] {
   const i = text.lastIndexOf(" ");
   return [text.slice(0, i), text.slice(i + 1)];
 }
 
-/** "USDC on HashKey Chain", with the token and chain marks. */
+/** "USDC on NEAR testnet", with the token and chain marks. */
 export function NetworkChip({ name, symbol, className }: { name: string; symbol?: string; className?: string }) {
   return (
     <span className={cn("inline-flex h-7 items-center gap-1.5 rounded-full border bg-card px-2 pr-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground", className)}>
@@ -240,7 +241,7 @@ export function TokenAmount({ atomic, token, className }: { atomic: string | big
  * The order column's frame: on phones a compact bar (logo, name, total) that opens to the full breakdown; from 1024px
  * (or in the wide preview) the full breakdown always.
  */
-export function SummaryFrame({ merchant, livemode, chainId, compactTitle, compactAmount, children }: { merchant: MerchantBrand; livemode: boolean; chainId?: number; compactTitle: string; compactAmount: ReactNode; children: ReactNode }) {
+export function SummaryFrame({ merchant, livemode, compactTitle, compactAmount, children }: { merchant: MerchantBrand; livemode: boolean; compactTitle: string; compactAmount: ReactNode; children: ReactNode }) {
   const preview = usePreview();
   const [open, setOpen] = useState(false);
   const calm = useCalm();
@@ -260,7 +261,7 @@ export function SummaryFrame({ merchant, livemode, chainId, compactTitle, compac
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2">
               <span className="truncate text-sm font-semibold">{merchant.name}</span>
-              <TestnetBadge livemode={livemode} chainId={chainId} compact />
+              <TestnetBadge livemode={livemode} compact />
             </span>
             <span className="block truncate text-xs text-muted-foreground">{compactTitle}</span>
           </span>
@@ -288,36 +289,35 @@ export function SummaryFrame({ merchant, livemode, chainId, compactTitle, compac
         </AnimatePresence>
       </div>
       <div className={wideOnly}>
-        <MerchantRow merchant={merchant} livemode={livemode} chainId={chainId} />
+        <MerchantRow merchant={merchant} livemode={livemode} />
         <div className="mt-10">{children}</div>
       </div>
     </>
   );
 }
 
-/** "Paid directly to Acme Store's wallet 0x12ab…9f3c", linking to the explorer when there is one. */
+/** "Paid to Acme Store" and its full NEAR payout account, which the payer can check, linking to the explorer when there is one. */
 export function PaidDirectly({ merchant, payout, explorer, className }: { merchant: string; payout?: string | null; explorer?: string | null; className?: string }) {
+  const words = useNetworkWords();
   const addr = payout ? (
     explorer ? (
-      <a href={`${explorer}/address/${payout}`} target="_blank" rel="noreferrer" className="hash inline-flex items-center gap-0.5 rounded underline-offset-2 hover:text-foreground hover:underline" title={payout}>
-        {shortAddress(payout)}
-        <ExternalLink className="size-3" aria-hidden />
+      <a href={`${explorer}/address/${payout}`} target="_blank" rel="noreferrer" className="hash inline-flex max-w-full min-w-0 items-center gap-0.5 rounded underline-offset-2 hover:text-foreground hover:underline">
+        <AccountText value={payout} />
+        <ExternalLink className="size-3 shrink-0" aria-hidden />
         <span className="sr-only">(opens the explorer)</span>
       </a>
     ) : (
-      <span className="hash" title={payout}>
-        {shortAddress(payout)}
-      </span>
+      <AccountText value={payout} className="hash" />
     )
   ) : null;
   return (
     <div className={cn("space-y-1.5 text-[0.8125rem] text-muted-foreground", className)}>
       <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
         <ShieldCheck className="size-3.5 shrink-0 text-[var(--ink)]" aria-hidden />
-        <span>Paid directly to {merchant}&apos;s wallet</span>
+        <span>Paid to {merchant}</span>
         {addr}
       </p>
-      <p className="pl-5">Payminto never holds your money.</p>
+      <p className="pl-5">{words.escrowShort}.</p>
     </div>
   );
 }
@@ -430,15 +430,19 @@ export function TimeBar({ fraction, text, label, tone }: { fraction: number; tex
   );
 }
 
-/** Live status: "Live" with a pulsing dot, or an amber "Reconnecting" while we fall back to checking. */
+/**
+ * What the page is doing for the shopper, not a connection state: "Watching for payment" while the payment is seen as
+ * it lands, "Checking for payment" while it falls back to asking every few seconds. It never says "Live", which a
+ * shopper would read against the Testnet label.
+ */
 export function LivePill({ live }: { live: CheckoutLive }) {
-  const label = live === "live" ? "Live" : live === "polling" ? "Reconnecting" : "Connecting";
+  const label = live === "live" ? "Watching for payment" : live === "polling" ? "Checking for payment" : "Connecting";
   return (
     <span
-      className={cn("inline-flex items-center gap-1.5 text-xs font-medium", live === "live" ? "text-positive" : "text-warning")}
-      title={live === "live" ? "Updates arrive as they happen" : "Checking for updates every few seconds"}
+      className="inline-flex items-center gap-1.5 text-xs font-medium whitespace-nowrap text-muted-foreground"
+      title={live === "live" ? "Your payment shows here the moment it lands" : "Checking for your payment every few seconds"}
     >
-      <PulseDot />
+      <PulseDot className={live === "live" ? "text-positive" : "text-warning"} />
       {label}
     </span>
   );
@@ -451,7 +455,7 @@ export function Rows({ rows, className }: { rows: [ReactNode, ReactNode][]; clas
       {rows.map(([k, v], i) => (
         <div key={i} className="flex min-h-10 items-center justify-between gap-4 px-3.5 py-2">
           <dt className="shrink-0 text-muted-foreground">{k}</dt>
-          <dd className="min-w-0 text-right break-words">{v}</dd>
+          <dd className="flex min-w-0 justify-end text-right break-words">{v}</dd>
         </div>
       ))}
     </dl>

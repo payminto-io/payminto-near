@@ -104,7 +104,7 @@ export default function LinksPage() {
                   <span className="text-sm max-md:col-start-1 max-md:row-start-2 max-md:text-muted-foreground">{linkPrice(l, t)}</span>
                   <span className="num text-right text-sm max-md:hidden">{formatInt(l.payments_count)}</span>
                   <span className="text-right text-sm max-md:row-start-1">
-                    <Money atomic={l.paid_total} maxFraction={2} />
+                    <Money atomic={l.paid_total} />
                   </span>
                   <span className="text-right text-sm text-muted-foreground max-md:hidden">
                     <TimeAgo iso={l.created_at} />

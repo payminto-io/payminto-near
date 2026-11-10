@@ -3,26 +3,26 @@
 import { TimeAgo, useNow } from "@/components/app/time-ago";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Building2, Check, FileSignature, Layers, Plus, Radio, ShieldBan, ShieldCheck, UserPlus, Wallet, Waypoints } from "lucide-react";
+import { ArrowRight, Building2, Check, ChevronRight, FileSignature, Layers, Plus, Radio, ShieldBan, ShieldCheck, UserPlus, Waypoints } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { useBatches, useCalls, useDenials, useDirectory, useMandates, useNettingPreview, useOverview, useProviders, useToken } from "@/lib/queries";
-import { formatInt, formatMoney, formatRatio, plural } from "@/lib/format";
+import { useBatches, useCalls, useDenials, useDirectory, useBudgets, useNettingPreview, useOverview, useProviders, useToken } from "@/lib/queries";
+import { formatInt, formatMoney, formatRatio, plural, shortAddress } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Batch, Call, Denial } from "@/lib/schemas";
 import { axisTick, chartColor } from "@/lib/chart-theme";
 import { bucketCalls } from "@/lib/calls-chart";
 import { Button } from "@/components/ui/button";
 import { Money, PageHeader, Panel } from "@/components/app/primitives";
-import { BatchStatusChip, RuleChip, RuleKindChip } from "@/components/app/status";
-import { NoMoneyMoved } from "@/components/app/denial";
-import { RULE_INFO, ruleDescription, ruleTitle } from "@/lib/denials";
+import { BatchStatusChip, RuleChip } from "@/components/app/status";
+import { DenialItem } from "@/components/app/denial";
+import { RULE_INFO, refusalOf } from "@/lib/denials";
+import { OperatorWarnings } from "@/components/app/operator-warnings";
 import { StatStrip } from "@/components/app/stat-strip";
 import { BlockSkeleton, EmptyState, ErrorState, RowsSkeleton } from "@/components/app/states";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccess } from "@/lib/session";
-import { useMerchants, usePlatform, usePlatformFees } from "@/lib/operator-queries";
+import { useMerchants, usePlatform } from "@/lib/operator-queries";
 import { useBlocked24h } from "@/components/app/nav-badges";
-import { useSwitchView } from "@/components/app/account-switcher";
 import { Chip } from "@/components/app/status";
 import { GatewayHome } from "@/components/gateway/overview-card";
 
@@ -37,20 +37,25 @@ function PlatformHome() {
   const access = useAccess();
   const merchants = useMerchants();
   const platform = usePlatform();
-  const fees = usePlatformFees();
   const blocked = useBlocked24h();
   const agents = access.can("agents.read");
+  const batches = useBatches();
   const list = merchants.data ?? [];
   const active = list.filter((m) => m.status === "active").length;
-  const volume = fees.data?.volume ?? list.reduce((a, m) => a + BigInt(m.volume_30d ?? "0"), 0n).toString();
-  const payments = fees.data?.payments ?? list.reduce((a, m) => a + (m.payments_30d ?? 0), 0);
-  const firstRun = merchants.data !== undefined && platform.data !== undefined && (list.length === 0 || !platform.data.fee_recipient);
+  const volume = list.reduce((a, m) => a + BigInt(m.volume_30d ?? "0"), 0n).toString();
+  const payments = list.reduce((a, m) => a + (m.payments_30d ?? 0), 0);
+  const confirmed = (batches.data ?? []).filter((b) => b.status === "confirmed");
+  const lastSettled = confirmed.reduce<string | null>((a, b) => {
+    const at = b.confirmedAt ?? b.createdAt;
+    return !a || at > a ? at : a;
+  }, null);
+  const firstRun = merchants.data !== undefined && platform.data !== undefined && list.length === 0;
   const name = access.session.user?.name?.split(" ")[0];
   return (
     <>
       <PageHeader
         title={name ? `Welcome back, ${name}` : "Home"}
-        description="Every business on this server at a glance. Money goes straight to each business's own wallet; this server never holds it."
+        description="Every business on this server at a glance. Funds are escrowed in an unaudited contract on NEAR."
         actions={
           access.can("businesses.manage") && (
             <Button asChild>
@@ -61,15 +66,24 @@ function PlatformHome() {
           )
         }
       />
-      {firstRun && <SetupChecklist hasBusiness={list.length > 0} hasFeeWallet={Boolean(platform.data?.fee_recipient)} />}
+      <OperatorWarnings className="mb-5" />
+      {firstRun && <SetupChecklist hasBusiness={list.length > 0} />}
       {merchants.isPending ? (
         <Skeleton className="h-[5.75rem] w-full rounded-xl" />
       ) : (
         <StatStrip
           stats={[
             { label: "Active businesses", value: <span className="num">{formatInt(active)}</span>, note: list.length > active ? `${list.length - active} suspended` : "all active" },
-            { label: "Volume, 30 days", value: <Money atomic={volume} maxFraction={2} />, note: `${formatInt(payments)} ${plural(payments, "payment")}` },
-            ...(access.can("earnings.read") ? [{ label: "Platform earnings, 30 days", value: <Money atomic={fees.data?.total ?? "0"} maxFraction={2} />, note: "your fee from every payment" }] : []),
+            { label: "Volume, 30 days", value: <Money atomic={volume} />, note: `${formatInt(payments)} ${plural(payments, "payment")}` },
+            ...(agents
+              ? [
+                  {
+                    label: "Settlements on NEAR",
+                    value: <span className="num">{batches.data ? formatInt(confirmed.length) : "-"}</span>,
+                    note: lastSettled ? <>last <TimeAgo iso={lastSettled} /></> : "none final yet",
+                  },
+                ]
+              : []),
             { label: "Blocked, last 24h", value: <span className={cn("num", blocked > 0 && "text-negative")}>{formatInt(blocked)}</span>, note: blocked > 0 ? "refused, no money moved" : "nothing refused", tone: blocked > 0 ? ("negative" as const) : undefined },
           ]}
         />
@@ -81,12 +95,11 @@ function PlatformHome() {
 }
 
 /** First run (PRODUCT.md section 4.2): the three things a new platform owner does. */
-function SetupChecklist({ hasBusiness, hasFeeWallet }: { hasBusiness: boolean; hasFeeWallet: boolean }) {
+function SetupChecklist({ hasBusiness }: { hasBusiness: boolean }) {
   const access = useAccess();
   const steps = [
     { icon: Building2, title: "Add your first business", body: "Each business gets its own payment links, checkout page and payout wallet. You can also run this server for your own business.", done: hasBusiness, href: "/platform/businesses/new", label: "Add business", show: access.can("businesses.manage") },
-    { icon: Wallet, title: "Set the platform fee wallet", body: "Where your platform fee arrives. It is set on the server (PLATFORM_FEE_ADDRESS) so nobody can redirect it from the dashboard.", done: hasFeeWallet, href: "/settings/platform", label: "Open platform settings", show: access.can("platform.read") },
-    { icon: UserPlus, title: "Invite your team", body: "Add platform admins who help you manage businesses. They cannot change pricing or the fee wallet.", done: false, href: "/platform/team", label: "Invite teammates", show: access.can("team.read") },
+    { icon: UserPlus, title: "Invite your team", body: "Add platform admins who help you manage businesses. They cannot remove you or change who runs this server.", done: false, href: "/platform/team", label: "Invite teammates", show: access.can("team.read") },
   ].filter((s) => s.show);
   return (
     <section aria-labelledby="first-run" className="mb-5 rounded-xl border bg-card">
@@ -94,9 +107,9 @@ function SetupChecklist({ hasBusiness, hasFeeWallet }: { hasBusiness: boolean; h
         <h2 id="first-run" className="text-lg font-semibold tracking-[-0.01em]">
           Set up your platform
         </h2>
-        <p className="mt-1 max-w-[64ch] text-sm text-muted-foreground">Three steps and your server is ready to take payments for businesses.</p>
+        <p className="mt-1 max-w-[64ch] text-sm text-muted-foreground">Your server takes payments as soon as a business is added. Payminto charges no processing fee.</p>
       </div>
-      <ol className="stagger grid divide-y md:grid-cols-3 md:divide-x md:divide-y-0">
+      <ol className={cn("stagger grid divide-y md:divide-x md:divide-y-0", steps.length > 1 && "md:grid-cols-2")}>
         {steps.map((s, i) => (
           <li key={s.title} className="flex flex-col gap-3 px-5 py-5 sm:px-6">
             <div className="flex items-center gap-3">
@@ -119,7 +132,6 @@ function SetupChecklist({ hasBusiness, hasFeeWallet }: { hasBusiness: boolean; h
 
 function BusinessesCard() {
   const merchants = useMerchants();
-  const switchView = useSwitchView();
   const list = [...(merchants.data ?? [])].sort((a, b) => Number(BigInt(b.volume_30d ?? "0") - BigInt(a.volume_30d ?? "0"))).slice(0, 6);
   return (
     <Panel
@@ -137,18 +149,19 @@ function BusinessesCard() {
     >
       <ul className="stagger divide-y">
         {list.map((m) => (
-          <li key={m.id} className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors duration-150 ease-out hover:bg-muted/40 sm:px-5">
-            <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white" style={{ background: m.brand_color ?? "var(--primary)" }}>
-              {m.name.slice(0, 1).toUpperCase()}
-            </span>
-            <Link href={`/platform/businesses/${m.id}`} className="min-w-0 flex-1 truncate font-medium hover:underline">
-              {m.name}
+          <li key={m.id}>
+            <Link
+              href={`/platform/businesses/${m.id}`}
+              className="group flex min-h-12 items-center gap-3 px-4 py-2.5 text-sm transition-colors duration-150 ease-out hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none sm:px-5"
+            >
+              <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white" style={{ background: m.brand_color ?? "var(--primary)" }}>
+                {m.name.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium group-hover:underline">{m.name}</span>
+              {m.status === "suspended" && <Chip tone="warning">Suspended</Chip>}
+              <span className="text-muted-foreground">{m.volume_30d ? <Money atomic={m.volume_30d} size="sm" /> : "-"}</span>
+              <ChevronRight aria-hidden className="size-4 shrink-0 text-subtle transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none" />
             </Link>
-            {m.status === "suspended" && <Chip tone="warning">Suspended</Chip>}
-            <span className="num text-muted-foreground max-sm:hidden">{m.volume_30d ? <Money atomic={m.volume_30d} maxFraction={2} /> : "-"}</span>
-            <Button variant="ghost" size="sm" onClick={() => switchView({ kind: "business", merchantId: m.id })}>
-              Open
-            </Button>
           </li>
         ))}
       </ul>
@@ -159,7 +172,7 @@ function BusinessesCard() {
 /** The agents area on Home: AI agents paying per charge, bundled into settlements. */
 function AgentsOverview() {
   const overview = useOverview();
-  const mandates = useMandates();
+  const budgets = useBudgets();
   const providers = useProviders();
   const access = useAccess();
 
@@ -167,7 +180,7 @@ function AgentsOverview() {
 
   // The guide is for an empty server. A server with budgets already open shows the live area at zero, so the first
   // charges fill it in place instead of swapping the whole section.
-  const firstRun = overview.data && overview.data.calls.all === 0 && overview.data.batches === 0 && mandates.data !== undefined && mandates.data.length === 0;
+  const firstRun = overview.data && overview.data.calls.all === 0 && overview.data.batches === 0 && budgets.data !== undefined && budgets.data.length === 0;
 
   return (
     <section aria-labelledby="agents-title" className="mt-8">
@@ -176,7 +189,7 @@ function AgentsOverview() {
           <h2 id="agents-title" className="text-[1.0625rem] font-semibold tracking-[-0.01em]">
             AI agents
           </h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">Agents pay per charge from a budget with hard limits. Payminto bundles the charges into a few settlements, and each one can still be checked on chain.</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">Agents pay per Call from a Budget with hard limits. Payminto clears the Calls in a few settlement batches, and each Call can still be proven on chain.</p>
         </div>
         {!firstRun && access.can("agents.read") && (
           <Button asChild variant="outline" size="sm">
@@ -186,12 +199,15 @@ function AgentsOverview() {
           </Button>
         )}
       </div>
-      {overview.isPending || (overview.data?.calls.all === 0 && mandates.isPending) ? (
+      {overview.isPending || (overview.data?.calls.all === 0 && budgets.isPending) ? (
         <Skeleton className="h-[5.75rem] w-full rounded-xl" />
       ) : firstRun ? (
-        <FirstRun hasMandates={(mandates.data?.length ?? 0) > 0} hasProviders={(providers.data?.length ?? 0) > 0} />
+        <FirstRun hasBudgets={(budgets.data?.length ?? 0) > 0} hasProviders={(providers.data?.length ?? 0) > 0} />
       ) : (
-        <Kpis />
+        <>
+          <Kpis />
+          <SellerSettledLine />
+        </>
       )}
       {!firstRun && (
         <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
@@ -220,48 +236,68 @@ function Kpis() {
   return (
     <StatStrip
       stats={[
-        { label: "Settled by agents", value: <Money atomic={data.volume.settled} maxFraction={2} />, note: <>Waiting <Money atomic={data.volume.pending} maxFraction={4} /></> },
-        { label: "Charges, last 24h", value: <span className="num">{formatInt(data.calls.last24h)}</span>, note: `${formatInt(data.calls.all)} all time` },
+        { label: "Settled by agents", value: <Money atomic={data.volume.settled} />, note: <>Waiting <Money atomic={data.volume.pending} /></> },
+        { label: "Calls, last 24h", value: <span className="num">{formatInt(data.calls.last24h)}</span>, note: `${formatInt(data.calls.all)} all time` },
         projected !== null
-          ? { label: "Charges per transfer", value: <span className="num">{formatRatio(projected)}</span>, note: "expected in the next settlement" }
+          ? { label: "Calls per transfer", value: <span className="num">{formatRatio(projected)}</span>, note: "expected in the next settlement" }
           : data.batches === 0
-            ? { label: "Charges per transfer", value: <span className="text-muted-foreground">-</span>, note: "measured at settlement" }
-            : { label: "Charges per transfer", value: <span className="num">{formatRatio(data.compressionRatio)}</span>, note: "on average, per transfer" },
-        data.batches === 0
-          ? { label: "Network fee saved", value: <span className="text-muted-foreground">-</span>, note: "measured at settlement" }
-          : { label: "Network fee saved", value: <span className="num">{data.compressionRatio > 1 ? Math.round((1 - 1 / data.compressionRatio) * 100) : 0}%</span>, note: "vs one transfer per charge" },
+            ? { label: "Calls per transfer", value: <span className="text-muted-foreground">-</span>, note: "measured at settlement" }
+            : { label: "Calls per transfer", value: <span className="num">{formatRatio(data.compressionRatio)}</span>, note: "on average" },
+        data.settled && BigInt(data.settled.gross) > 0n
+          ? { label: "Tokens moved", value: <Money atomic={data.settled.net} />, note: <>for <Money atomic={data.settled.gross} /> gross cleared</> }
+          : { label: "Tokens moved", value: <span className="text-muted-foreground">-</span>, note: "measured at settlement" },
         {
-          label: "Blocked, last 24h",
+          label: "Refused, last 24h",
           value: <span className={cn("num", blocked > 0 && "text-negative")}>{formatInt(blocked)}</span>,
-          note: blocked > 0 ? "refused, no money moved" : "every charge passed",
+          note: blocked > 0 ? "no money moved" : "every Call passed",
         },
-        { label: "Active budgets", value: <span className="num">{formatInt(data.activeMandates)}</span>, note: `${data.providers} paid ${plural(data.providers, "service")}` },
+        { label: "Active Budgets", value: <span className="num">{formatInt(data.activeBudgets)}</span>, note: `${data.providers} ${plural(data.providers, "Payee")} on this server` },
       ]}
     />
   );
 }
 
+/**
+ * What sellers settled themselves on the hub, next to the batch totals above. These Calls are in no settlement batch, so
+ * nothing offsets and the gross amount is what the hub moved. Hidden until a seller has settled something.
+ */
+function SellerSettledLine() {
+  const { data } = useOverview();
+  const s = data?.settledBySeller;
+  if (!s || (s.calls === 0 && s.settlements === 0 && BigInt(s.gross) === 0n)) return null;
+  return (
+    <p className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-xl border bg-card px-4 py-3 text-sm sm:px-5">
+      <span className="font-medium">Settled by sellers on the hub</span>
+      <Money atomic={s.gross} />
+      <span className="text-muted-foreground">
+        in <span className="num">{formatInt(s.calls)}</span> {plural(s.calls, "Call")} across <span className="num">{formatInt(s.settlements)}</span> seller {plural(s.settlements, "settlement")}, outside any settlement batch. Nothing
+        offsets there, so this is the amount the hub moved from escrow to the sellers&apos; hub credit.
+      </span>
+    </p>
+  );
+}
+
 /** Teaches how agent payments work on a fresh server, with the next action for each step. */
-function FirstRun({ hasMandates, hasProviders }: { hasMandates: boolean; hasProviders: boolean }) {
+function FirstRun({ hasBudgets, hasProviders }: { hasBudgets: boolean; hasProviders: boolean }) {
   const steps = [
     {
       icon: FileSignature,
-      title: "An owner sets a budget",
-      body: "One signature gives an AI agent a budget with hard limits: total limit, limit per charge, daily limit, charges per minute, allowed services and an end date.",
-      done: hasMandates,
-      action: { href: "/mandates/new", label: "New budget" },
+      title: "An owner opens a Budget",
+      body: "From their NEAR wallet, the owner gives an agent a Budget with hard limits (cap, limit per Call, daily limit, Calls per minute, allowed Payees, end date) and funds its escrow.",
+      done: hasBudgets,
+      action: { href: "/budgets/new", label: "New Budget" },
     },
     {
       icon: Radio,
-      title: "The agent pays per charge",
-      body: "Each paid call carries a signed charge with no network fee. Your server checks it against the budget, books it and returns a signed receipt.",
+      title: "The agent pays per Call",
+      body: "Each paid Call carries a voucher the agent signs, with no network fee. Your server checks it against the Budget, books it and returns a signed receipt.",
       done: false,
       action: hasProviders ? { href: "/providers", label: "See paid services" } : { href: "/providers?register=1", label: "Add a paid service" },
     },
     {
       icon: Waypoints,
-      title: "Charges settle in bundles",
-      body: "Hundreds of charges settle in one transaction. Every signature and limit is checked again on chain, and only the difference moves, wallet to wallet.",
+      title: "Calls settle in bundles",
+      body: "Hundreds of Calls settle in one transaction on the hub. Every signature and limit is checked again on chain, and only each owner's net amount moves.",
       done: false,
       action: { href: "/netting", label: "Next settlement" },
     },
@@ -270,10 +306,10 @@ function FirstRun({ hasMandates, hasProviders }: { hasMandates: boolean; hasProv
     <section aria-labelledby="first-run" className="rounded-xl border bg-card">
       <div className="border-b px-5 py-5 sm:px-6">
         <h2 id="first-run" className="text-lg font-semibold tracking-[-0.01em]">
-          No agent charges yet
+          No agent Calls yet
         </h2>
         <p className="mt-1 max-w-[64ch] text-sm text-muted-foreground">
-          Agent payments work in three steps. Nobody, including this server, ever holds the money: agents pay services directly when a settlement runs.
+          Agent payments work in three steps. Funds are escrowed in an unaudited contract on NEAR that this server cannot move them out of.
         </p>
       </div>
       <ol className="grid divide-y md:grid-cols-3 md:divide-x md:divide-y-0">
@@ -305,13 +341,13 @@ function CallsChart() {
   const { bars: data, unit, hourly } = useMemo(() => bucketCalls(calls.data?.items ?? [], (tick + 1) * 5000), [calls.data, tick]);
 
   return (
-    <Panel title="Agent charges" description={hourly ? "Accepted charges per hour, last 12 hours" : `Accepted charges per ${unit}`}>
+    <Panel title="Agent Calls" description={hourly ? "Accepted Calls per hour, last 12 hours" : `Accepted Calls per ${unit}`}>
       {calls.isPending ? (
         <BlockSkeleton className="h-48" />
       ) : calls.isError ? (
         <ErrorState error={calls.error} onRetry={() => void calls.refetch()} />
       ) : (
-        <div className="h-48 w-full" role="img" aria-label={`Charges per ${unit}, peak ${Math.max(...data.map((d) => d.calls))}`}>
+        <div className="h-48 w-full" role="img" aria-label={`Calls per ${unit}, peak ${Math.max(...data.map((d) => d.calls))}`}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: -18 }} barCategoryGap={3}>
               <CartesianGrid vertical={false} stroke={chartColor("grid")} />
@@ -326,7 +362,7 @@ function CallsChart() {
                     <div className="rounded-md border bg-popover px-3 py-2 text-xs shadow-sm">
                       <p className="font-medium">{p.label}</p>
                       <p className="num mt-0.5 text-muted-foreground">
-                        {p.calls} {plural(p.calls, "charge")}, {formatMoney(p.volume, token.decimals, { maxFraction: 4 })} {token.symbol}
+                        {p.calls} {plural(p.calls, "Call")}, {formatMoney(p.volume, token.decimals)} {token.symbol}
                       </p>
                     </div>
                   );
@@ -354,7 +390,7 @@ function LiveStream() {
     ];
     return all.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 14);
   }, [calls.data, denials.data]);
-  const name = (a: string | null | undefined) => (a ? dir.lookup(a)?.name ?? `${a.slice(0, 8)}…` : "Unknown");
+  const name = (a: string | null | undefined) => (a ? dir.lookup(a)?.name ?? shortAddress(a) : "Unknown");
   const fresh = useFreshIds(
     rows.map((r) => (r.kind === "call" ? r.call.id : r.denial.id)),
     Boolean(calls.data && denials.data),
@@ -362,11 +398,11 @@ function LiveStream() {
 
   return (
     <Panel
-      title="Live charges"
-      description="Every charge your server accepted or refused"
+      title="Live Calls"
+      description="Every Call your server accepted or refused"
       actions={
         <Button asChild variant="ghost" size="sm">
-          <Link href="/mandates">All budgets</Link>
+          <Link href="/budgets">All budgets</Link>
         </Button>
       }
       bodyClassName="p-0 sm:p-0"
@@ -376,7 +412,7 @@ function LiveStream() {
       ) : calls.isError ? (
         <ErrorState className="m-4" error={calls.error} onRetry={() => void calls.refetch()} />
       ) : rows.length === 0 ? (
-        <EmptyState icon={<Radio className="size-4" />} title="Waiting for the first charge">
+        <EmptyState icon={<Radio className="size-4" />} title="Waiting for the first Call">
           Charges appear here the moment an agent pays a service through this server.
         </EmptyState>
       ) : (
@@ -390,7 +426,7 @@ function LiveStream() {
                   <span className="text-subtle"> paid </span>
                   <span className="font-medium">{name(r.call.payee)}</span>
                 </span>
-                <Link href={`/receipts/${r.call.id}`} className="shrink-0 rounded hover:underline" aria-label="Verify this charge">
+                <Link href={`/receipts/${r.call.id}`} className="shrink-0 rounded hover:underline" aria-label="Verify this Call">
                   <Money atomic={r.call.amount} />
                 </Link>
                 <TimeAgo iso={r.at} className="num w-16 shrink-0 text-right text-xs text-subtle max-sm:hidden" />
@@ -405,7 +441,7 @@ function LiveStream() {
                   <span className="text-subtle"> to </span>
                   <span className="font-medium">{name(r.denial.payee)}</span>
                 </span>
-                <RuleChip rule={r.denial.rule} />
+                <RuleChip rule={r.denial.rule} retry={refusalOf(r.denial).retry} />
                 <TimeAgo iso={r.at} className="num w-16 shrink-0 text-right text-xs text-subtle max-sm:hidden" />
               </li>
             ),
@@ -424,7 +460,7 @@ function PendingCard() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[0.9375rem] font-semibold">Waiting to settle</h2>
-          <p className="mt-0.5 text-[0.8125rem] text-muted-foreground">Accepted charges not yet in a settlement</p>
+          <p className="mt-0.5 text-[0.8125rem] text-muted-foreground">Accepted Calls not yet in a settlement</p>
         </div>
         <Waypoints className="size-4 text-subtle" />
       </div>
@@ -435,11 +471,11 @@ function PendingCard() {
       ) : (
         <>
           <p className="mt-4 text-[1.75rem] leading-none font-semibold tracking-[-0.02em]">
-            <Money atomic={p.grossTotal ?? "0"} maxFraction={4} />
+            <Money atomic={p.grossTotal ?? "0"} />
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            <span className="num">{formatInt(p.calls ?? 0)}</span> {plural(p.calls ?? 0, "charge")} bundle into <span className="num">{p.net.length}</span> {plural(p.net.length, "transfer")} moving{" "}
-            <Money atomic={p.netTotal ?? "0"} maxFraction={4} className="text-foreground" />.
+            <span className="num">{formatInt(p.calls ?? 0)}</span> {plural(p.calls ?? 0, "Call")} bundle into <span className="num">{p.net.length}</span> {plural(p.net.length, "transfer")} moving{" "}
+            <Money atomic={p.netTotal ?? "0"} className="text-foreground" />.
           </p>
           <Button asChild className="mt-4 w-full">
             <Link href="/netting">
@@ -455,19 +491,17 @@ function PendingCard() {
 /** The latest refusal, stated as an outcome: what was tried, which rule stopped it, and that nothing moved. */
 function BlockedCard() {
   const denials = useDenials();
-  const dir = useDirectory();
   // Lead with the most recent attack when there is one; an honest agent hitting a cap is less telling.
   const latest = denials.data?.find((d) => RULE_INFO[d.rule]?.kind === "attack") ?? denials.data?.[0];
   const n24 = useBlocked24h();
-  const name = (a: string | null | undefined) => (a ? dir.lookup(a)?.name ?? `${a.slice(0, 8)}…` : "an unknown wallet");
   return (
     <section className="rounded-xl border bg-card p-5" aria-labelledby="blocked-title">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 id="blocked-title" className="text-[0.9375rem] font-semibold">
-            Attacks and overspending blocked
+            Refused Calls
           </h2>
-          <p className="mt-0.5 text-[0.8125rem] text-muted-foreground">Refused by budget limits and safety checks before any money moved</p>
+          <p className="mt-0.5 text-[0.8125rem] text-muted-foreground">Stopped by a Budget rule before any money moved</p>
         </div>
         <span className={cn("num text-[1.75rem] leading-none font-semibold tracking-[-0.02em]", n24 > 0 ? "text-negative" : "text-muted-foreground")}>
           {formatInt(n24)}
@@ -478,34 +512,14 @@ function BlockedCard() {
         <Skeleton className="mt-4 h-20 w-full" />
       ) : !latest ? (
         <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-          <ShieldCheck className="size-4 text-positive" /> Every charge so far stayed inside its budget.
+          <ShieldCheck className="size-4 text-positive" /> Every Call so far stayed inside its Budget.
         </p>
       ) : (
         <>
-          <div className="mt-4 rounded-lg border border-negative/25 bg-negative-soft/60 p-3.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <ShieldBan className="size-4 text-negative" aria-hidden />
-              <span className="text-sm font-medium">{ruleTitle(latest.rule)}</span>
-              <RuleKindChip rule={latest.rule} />
-            </div>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              <span className="text-foreground">{name(latest.agent)}</span> tried to pay <span className="text-foreground">{name(latest.payee)}</span>
-              {latest.amount ? (
-                <>
-                  {" "}
-                  <Money atomic={latest.amount} className="text-foreground" />
-                </>
-              ) : null}
-              . {ruleDescription(latest.rule)}
-            </p>
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <NoMoneyMoved />
-              <TimeAgo iso={latest.createdAt} className="num text-xs text-subtle" />
-            </div>
-          </div>
+          <DenialItem as="div" denial={latest} className="mt-4 rounded-lg border px-3.5 sm:px-3.5" />
           <Button asChild variant="outline" className="mt-3 w-full">
             <Link href="/blocked">
-              See all blocked attempts <ArrowRight />
+              See all Refusals <ArrowRight />
             </Link>
           </Button>
         </>
@@ -564,10 +578,10 @@ function TimelineItem({ batch, last }: { batch: Batch; last: boolean }) {
           <BatchStatusChip status={batch.status} />
         </div>
         <p className="mt-1 text-[0.8125rem] text-muted-foreground">
-          <span className="num">{formatInt(batch.calls)}</span> {plural(batch.calls, "charge")}, <Money atomic={batch.gross} maxFraction={4} /> in total, {batch.transfers} {plural(batch.transfers, "transfer")}
+          <span className="num">{formatInt(batch.calls)}</span> {plural(batch.calls, "Call")}, <Money atomic={batch.gross} /> in total, {batch.transfers} {plural(batch.transfers, "transfer")}
         </p>
         <p className="mt-0.5 text-xs text-subtle">
-          <span className="num">{formatRatio(ratio)}</span> {plural(ratio, "charge")} per transfer, <TimeAgo iso={batch.confirmedAt ?? batch.createdAt} />
+          <span className="num">{formatRatio(ratio)}</span> {plural(ratio, "Call")} per transfer, <TimeAgo iso={batch.confirmedAt ?? batch.createdAt} />
         </p>
       </Link>
     </li>

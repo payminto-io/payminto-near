@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { getAddress } from "viem";
 import { aggregateObligations, beforeAfter, layoutFlow, netPositions, netTransfers, sumAmounts } from "@/lib/netting";
 
-const A = getAddress("0x00000000000000000000000000000000000000a1"); // Treasury Agent
-const B = getAddress("0x00000000000000000000000000000000000000b2"); // Trading Agent
-const MD = getAddress("0x00000000000000000000000000000000000000d1"); // Market Data
-const RS = getAddress("0x00000000000000000000000000000000000000d2"); // Risk Scan
-const RW = getAddress("0x00000000000000000000000000000000000000d3"); // Research Writer, buys and sells
+const A = "treasury.testnet"; // Treasury Agent
+const B = "trading-desk.testnet"; // Trading Agent
+const MD = "market-data.testnet"; // Market Data
+const RS = "risk-scan.testnet"; // Risk Scan
+const RW = "research-writer.testnet"; // Research Writer, buys and sells
 
 const gross = [
   { from: A, to: RW, amount: "500000", calls: 10 },
@@ -47,7 +46,7 @@ describe("netting projection", () => {
   it("aggregates per-call obligations into one edge per pair", () => {
     const calls = [
       { from: A, to: MD, amount: "2000" },
-      { from: A.toLowerCase(), to: MD, amount: "2000" },
+      { from: A, to: MD, amount: "2000" },
       { from: A, to: RS, amount: "10000" },
     ];
     const agg = aggregateObligations(calls);

@@ -3,7 +3,7 @@
 import { getView } from "@/lib/merchant-scope";
 import { useQuery } from "@tanstack/react-query";
 import { useApi } from "./session";
-import type { PaymentsQuery } from "./gateway-api";
+import type { PaymentsQuery, WebhookApi, WebhookScope } from "./gateway-api";
 
 /** Query keys for the gateway screens; every key starts with "gateway" so one invalidation refreshes them all. */
 export const gk = {
@@ -53,19 +53,25 @@ export function useRefunds(paymentId?: string) {
   return useQuery({ queryKey: gk.refunds(paymentId), queryFn: () => api.gateway.refunds({ payment_id: paymentId }) });
 }
 
-export function useWebhooks() {
+/** The webhook routes for a scope: a business's endpoints, or the platform's refusal alerts. */
+export function useWebhookApi(scope: WebhookScope = "business"): WebhookApi {
   const api = useApi();
-  return useQuery({ queryKey: gk.webhooks, queryFn: () => api.gateway.webhooks() });
+  return scope === "platform" ? api.platformWebhooks : api.gateway;
 }
 
-export function useWebhook(id: string) {
-  const api = useApi();
-  return useQuery({ queryKey: gk.webhook(id), queryFn: () => api.gateway.webhook(id), enabled: Boolean(id) });
+export function useWebhooks(scope: WebhookScope = "business") {
+  const hooks = useWebhookApi(scope);
+  return useQuery({ queryKey: [...gk.webhooks, scope], queryFn: () => hooks.webhooks() });
 }
 
-export function useDeliveries(endpointId: string) {
-  const api = useApi();
-  return useQuery({ queryKey: gk.deliveries(endpointId), queryFn: () => api.gateway.deliveries(endpointId), enabled: Boolean(endpointId) });
+export function useWebhook(id: string, scope: WebhookScope = "business") {
+  const hooks = useWebhookApi(scope);
+  return useQuery({ queryKey: [...gk.webhook(id), scope], queryFn: () => hooks.webhook(id), enabled: Boolean(id) });
+}
+
+export function useDeliveries(endpointId: string, scope: WebhookScope = "business") {
+  const hooks = useWebhookApi(scope);
+  return useQuery({ queryKey: [...gk.deliveries(endpointId), scope], queryFn: () => hooks.deliveries(endpointId), enabled: Boolean(endpointId) });
 }
 
 export function useApiKeys() {

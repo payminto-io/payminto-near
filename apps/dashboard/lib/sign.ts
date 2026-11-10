@@ -1,103 +1,76 @@
 /**
- * Owner-side mandate construction and signing for the create wizard.
- * Uses the shared protocol helpers only; EIP-712 types are never re-derived here.
+ * Owner-side Budget construction for the create wizard. The terms, their hashes and the transactions come from the
+ * shared protocol and chain helpers; signing and sending go through lib/wallet.ts.
  */
-import { createWalletClient, custom, getAddress, isAddress, numberToHex, toHex, type Address, type EIP1193Provider, type Hex } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
-  mandateId,
-  mandateToJson,
-  mandateTypedData,
-  payeesRoot,
+  budgetIdOf,
+  budgetTermsToJson,
+  depositBudgetTx,
+  isAccountId,
+  isPublicKey,
+  openBudgetTx,
   policyHash,
-  type Mandate,
-  type MandateJson,
+  toHex,
+  type AccountId,
+  type BudgetTerms,
+  type BudgetTermsJson,
+  type Id32,
+  type Network,
   type Policy,
+  type PublicKey,
+  type WalletTx,
 } from "@payminto/protocol";
 
-export type MandateDraft = {
-  agent: Address;
-  token: Address;
-  totalCap: bigint;
+export type BudgetDraft = {
+  agentPk: PublicKey;
+  settler: AccountId;
+  cap: bigint;
   validForSeconds: number;
-  payees: Address[];
+  payees: AccountId[];
   policy: Policy;
 };
 
-export type SignedMandate = { mandate: MandateJson; mandateId: Hex; ownerSignature: Hex; owner: Address };
+/**
+ * NEAR attached to `open_budget` for the Budget record and the storage it reserves for `settle_own` claims. The hub
+ * keeps what the storage costs (about 0.053 NEAR at 16 reserved entries) and refunds the rest in the same receipt.
+ */
+export const OPEN_BUDGET_STORAGE_YOCTO = (10n ** 23n).toString();
 
-declare global {
-  interface Window {
-    ethereum?: EIP1193Provider;
-  }
-}
-
-export function hasInjectedWallet(): boolean {
-  return typeof window !== "undefined" && Boolean(window.ethereum);
-}
-
-export function buildMandate(draft: MandateDraft, owner: Address, nowSec = Math.floor(Date.now() / 1000)): Mandate {
-  const salt = toHex(crypto.getRandomValues(new Uint8Array(32)));
+export function buildBudgetTerms(draft: BudgetDraft, owner: AccountId, nowMs = Date.now()): BudgetTerms {
   return {
-    owner: getAddress(owner),
-    agent: getAddress(draft.agent),
-    token: getAddress(draft.token),
-    totalCap: draft.totalCap,
-    // A small backdate tolerates clock skew between this browser and the chain.
-    validAfter: BigInt(nowSec - 60),
-    validUntil: BigInt(nowSec + draft.validForSeconds),
-    payeesRoot: payeesRoot(draft.payees),
+    owner,
+    agentPk: draft.agentPk,
+    settler: draft.settler,
+    cap: draft.cap,
+    validUntil: BigInt(nowMs + draft.validForSeconds * 1000),
+    payees: draft.payees,
     policyHash: policyHash(draft.policy),
-    salt,
+    salt: toHex(crypto.getRandomValues(new Uint8Array(32))),
   };
 }
 
-/** Signs with the browser wallet (EIP-1193), switching it to the node's chain first when needed. */
-export async function signWithInjected(chainId: number, hub: Address, draft: MandateDraft): Promise<SignedMandate> {
-  const provider = window.ethereum;
-  if (!provider) throw new Error("No browser wallet found. Install or unlock one, then try again.");
-  const wallet = createWalletClient({ transport: custom(provider) });
-  const [owner] = await wallet.requestAddresses();
-  if (!owner) throw new Error("The wallet did not share an account.");
-  const current = await wallet.getChainId();
-  if (current !== chainId) {
-    try {
-      await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: numberToHex(chainId) }] });
-    } catch {
-      throw new Error(`Switch your wallet to chain ${chainId} and sign again. It is on chain ${current}.`);
-    }
-  }
-  const m = buildMandate(draft, owner);
-  const ownerSignature = await wallet.signTypedData({ account: owner, ...mandateTypedData(chainId, hub, m) });
-  return { mandate: mandateToJson(m), mandateId: mandateId(chainId, hub, m), ownerSignature, owner };
+export type OpenBudget = { id: Id32; terms: BudgetTerms; json: BudgetTermsJson; txs: WalletTx[] };
+
+/**
+ * The owner opens a Budget in two transactions so they pay their own storage: `open_budget` from their account, then
+ * the first deposit as `ft_transfer_call` to the hub with the Budget id. With no first deposit, only the first is sent.
+ */
+export function openBudgetPlan(args: { hub: AccountId; token: AccountId; network: Network; terms: BudgetTerms; deposit: bigint }): OpenBudget {
+  const id = budgetIdOf(args.hub, args.network, args.terms);
+  const txs = [openBudgetTx(args.hub, args.terms, OPEN_BUDGET_STORAGE_YOCTO)];
+  if (args.deposit > 0n) txs.push(depositBudgetTx(args.token, args.hub, id, args.deposit));
+  return { id, terms: args.terms, json: budgetTermsToJson(args.terms), txs };
 }
 
-/** Local anvil only: signs with a pasted development key that never leaves this tab. */
-export async function signWithDevKey(chainId: number, hub: Address, draft: MandateDraft, key: string): Promise<SignedMandate> {
-  if (chainId !== 31337) throw new Error("Development keys are only accepted on the local test network (chain 31337).");
-  const pk = (key.startsWith("0x") ? key : `0x${key}`) as Hex;
-  if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) throw new Error("A private key is 32 bytes of hex.");
-  const account = privateKeyToAccount(pk);
-  const m = buildMandate(draft, account.address);
-  const ownerSignature = await account.signTypedData(mandateTypedData(chainId, hub, m));
-  return { mandate: mandateToJson(m), mandateId: mandateId(chainId, hub, m), ownerSignature, owner: account.address };
-}
+export const isAgentKey = (v: string): v is PublicKey => isPublicKey(v);
 
-export function parseAddressList(text: string): { valid: Address[]; invalid: string[] } {
+export function parseAccountList(text: string): { valid: AccountId[]; invalid: string[] } {
   const parts = text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-  const valid: Address[] = [];
+  const valid: AccountId[] = [];
   const invalid: string[] = [];
   for (const p of parts) {
-    if (isAddress(p)) valid.push(getAddress(p));
+    if (isAccountId(p)) valid.push(p);
     else invalid.push(p);
   }
   return { valid, invalid };
-}
-
-/** Mock mode only: a throwaway key so the wizard can be demoed without a wallet. Nothing reaches a chain. */
-export async function signWithEphemeral(chainId: number, hub: Address, draft: MandateDraft): Promise<SignedMandate> {
-  const account = privateKeyToAccount(generatePrivateKey());
-  const m = buildMandate(draft, account.address);
-  const ownerSignature = await account.signTypedData(mandateTypedData(chainId, hub, m));
-  return { mandate: mandateToJson(m), mandateId: mandateId(chainId, hub, m), ownerSignature, owner: account.address };
 }

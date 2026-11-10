@@ -23,20 +23,7 @@ import { TimeAgo } from "@/components/app/time-ago";
 import { LineItems, OrderHash } from "@/components/checkout/parts";
 import { RefundDialog, refundable } from "@/components/gateway/refund-dialog";
 
-const METHOD_LABEL: Record<string, string> = { wallet: "Pay with wallet", deposit: "Send to address", x402: "AI agent", voucher: "AI agent with budget", hsp: "Pay with HSP" };
-
-/** HSP statuses in plain words (GATEWAY.md section 17). Only the deposit reaching the payment address makes it paid. */
-const HSP_STATUS_LABEL: Record<string, string> = {
-  "order-created": "Order created, not signed yet",
-  "payment-submitted": "Submitted",
-  "payment-verified": "Verified by HSP",
-  "payment-processing": "Processing",
-  "payment-included": "On chain",
-  "payment-timeout": "Taking longer, HSP is still trying",
-  "payment-safe": "On chain, not final yet",
-  "payment-finalized": "Final",
-  "payment-failed": "Failed",
-};
+const METHOD_LABEL: Record<string, string> = { wallet: "Pay with a NEAR wallet", voucher: "AI agent with budget" };
 
 export default function PaymentDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -99,7 +86,7 @@ export default function PaymentDetailPage() {
         back={back}
         title={
           <span className="flex flex-wrap items-center gap-3">
-            <Money atomic={p.amount_due} maxFraction={2} />
+            <Money atomic={p.amount_due} />
             <PaymentStatusChip status={p.status} late={p.late} />
             {p.refund_status !== "none" && <Chip tone="neutral">{p.refund_status === "full" ? "Refunded" : "Partly refunded"}</Chip>}
           </span>
@@ -154,7 +141,7 @@ export default function PaymentDetailPage() {
           <Panel title="Payment breakdown">
             <Breakdown p={p} />
           </Panel>
-          <Panel title="Money received" description="Each on-chain transfer or agent charge counted toward this payment" bodyClassName="p-0 sm:p-0">
+          <Panel title="Money received" description="Each on-chain transfer or agent Call counted toward this payment" bodyClassName="p-0 sm:p-0">
             {p.credits.length === 0 ? (
               <EmptyState className="py-8" icon={<Circle className="size-4" />} title="No money received yet" />
             ) : (
@@ -227,10 +214,9 @@ export default function PaymentDetailPage() {
               <Field label="Payment link">{link ? <Link href={withBusiness(`/links/${link.id}`, p.merchant_id)} className="hover:underline">{link.title}</Link> : <span className="text-muted-foreground">Created with the API</span>}</Field>
               <Field label="Reference">{p.reference ?? <span className="text-muted-foreground">-</span>}</Field>
               <Field label="Method">{p.method ? METHOD_LABEL[p.method] : <span className="text-muted-foreground">Not chosen yet</span>}</Field>
-              <Field label="Payment address" hint="A one-time address for this payment that can only forward to your wallet."><Address address={p.deposit_address} showName={false} /></Field>
               <Field label="Currency" hint="The stablecoin contract this payment is in.">
-                <span className="inline-flex items-center gap-2">
-                  {t.symbol} <Address address={p.token} showName={false} />
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0">{t.symbol}</span> <Address address={p.token} showName={false} className="min-w-0" />
                 </span>
               </Field>
               <Field label="Customer">{p.customer_name || p.customer_email ? <span className="flex flex-col">{p.customer_name && <span>{p.customer_name}</span>}{p.customer_email && <span className="text-muted-foreground">{p.customer_email}</span>}</span> : <span className="text-muted-foreground">-</span>}</Field>
@@ -240,22 +226,6 @@ export default function PaymentDetailPage() {
               <Field label="Order fingerprint" hint="A code that proves exactly what was bought (order_hash: keccak256 of the order JSON; the payment proof commits to it)."><OrderHash value={p.order_hash} /></Field>
             </Fields>
           </Panel>
-          {p.hsp && (
-            <Panel title="HSP" description="HashKey's HSP sent this payment. The status is HSP's; the payment is paid once the money reaches its address.">
-              <Fields>
-                <Field label="Status">
-                  <span className={p.hsp.status === "payment-failed" ? "text-negative" : p.hsp.status === "payment-finalized" ? "text-positive" : undefined}>{HSP_STATUS_LABEL[p.hsp.status] ?? p.hsp.status}</span>
-                  {p.hsp.status_reason && <span className="block text-xs text-muted-foreground">{p.hsp.status_reason}</span>}
-                </Field>
-                <Field label="Flow ID" hint="HSP's id for this payment's order."><Hash value={p.hsp.flow_id} /></Field>
-                <Field label="Attributed to your team" hint="HSP confirmed the payment counts under this server's HSP merchant name.">
-                  {p.hsp.attribution_verified ? <span className="text-positive">Yes</span> : <span className="text-muted-foreground">Not yet</span>}
-                </Field>
-                {p.hsp.tx_hash && <Field label="HSP transaction"><Hash value={p.hsp.tx_hash} /></Field>}
-                {p.hsp.payer && <Field label="Signed by"><Address address={p.hsp.payer} showName={false} /></Field>}
-              </Fields>
-            </Panel>
-          )}
           {p.line_items.length > 0 && (
             <Panel title="Order">
               <LineItems items={p.line_items} token={{ address: p.token, symbol: t.symbol, decimals: t.decimals }} />

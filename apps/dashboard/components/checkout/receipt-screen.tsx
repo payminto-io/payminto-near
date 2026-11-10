@@ -1,20 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, ChevronDown, ExternalLink, LoaderCircle, Minus, Printer, ShieldCheck, ShieldX, X } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, LoaderCircle, Minus, Printer, RotateCw, ShieldAlert, ShieldCheck, ShieldX, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatDateTime, formatToken, shortAddress, shortHash } from "@/lib/format";
+import { formatDateTime, formatToken, shortHash } from "@/lib/format";
 import { gatewayNetwork } from "@/lib/gateway";
 import { ApiError } from "@/lib/http";
-import { expectedCheckIds, plainCheckTitle, proofVerdict, rpcReader, runProofChecks, type ProofCheck } from "@/lib/payment-proof";
+import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, type ProofCheck } from "@/lib/payment-proof";
 import { useCheckoutApi } from "@/lib/use-checkout";
+import { readErrorText, readerLabel } from "@/lib/near-reader";
 import type { CheckoutView, PaymentProof } from "@/lib/schemas";
 import { Button } from "@/components/ui/button";
 import { brandStyle, CheckoutFooter, LineItems, MerchantRow, Notice, OrderHash, Rows, TokenAmount } from "./parts";
 import { CheckoutMotion, EASE_OUT, ProgressRing, Shimmer, T, useCalm } from "./motion";
 import { NotFoundScreen, UnavailableScreen, useCheckoutTitle } from "./checkout";
+import { AccountText } from "@/components/ds/account-id";
 
 /** Time between checklist rows resolving, so the reader sees each check land. */
 const REVEAL_MS = 380;
@@ -31,11 +33,13 @@ export function ReceiptScreen({ id }: { id: string }) {
   const proof = useQuery({ queryKey: ["proof", id], queryFn: () => api!.proof(id), enabled, retry: retryable });
   const order = useQuery({ queryKey: ["order", id], queryFn: () => api!.order(id), enabled, retry: retryable });
   const info = useQuery({ queryKey: ["checkout-info"], queryFn: () => api!.info(), enabled, staleTime: Infinity, retry: 1 });
-  const network = view.data ? gatewayNetwork(view.data.chain_id, info.data) : null;
+  const network = view.data ? gatewayNetwork(info.data) : null;
+  const hub = view.data?.hub ?? null;
+  const source = useMemo(() => (api && network && hub ? api.reader({ network: network.id, hub, rpcUrl: info.data?.network.rpc_url }) : null), [api, network, hub, info.data]);
   const checks = useQuery({
-    queryKey: ["proof-checks", id, network?.rpcUrl],
-    enabled: Boolean(proof.data && (order.data || order.isError) && network && (api?.chainReader || network.rpcUrl)),
-    queryFn: () => runProofChecks({ ...proof.data!, deposit_address: proof.data!.deposit_address ?? view.data?.deposit_address ?? null }, order.data ?? null, api!.chainReader ? api!.chainReader() : rpcReader(network!.rpcUrl!)),
+    queryKey: ["proof-checks", id, source?.reader.rpcUrl ?? null],
+    enabled: Boolean(proof.data && (order.data || order.isError) && network && !info.isPending),
+    queryFn: () => runProofChecks({ ...proof.data!, tx_hash: proof.data!.tx_hash ?? view.data?.tx_hash ?? null }, order.data ?? null, source?.reader ?? null),
     staleTime: Infinity,
     retry: false,
   });
@@ -68,8 +72,13 @@ export function ReceiptScreen({ id }: { id: string }) {
                 p={p}
                 network={network}
                 checks={checks.data ?? null}
-                failedToRead={checks.isError}
-                source={api?.chainReader ? "Demo data: these checks run against an in-browser stand-in for the chain." : `Read straight from ${network.rpcUrl?.replace(/^https?:\/\//, "")}, not from the Payminto server.`}
+                failedToRead={checks.isError ? readErrorText(checks.error) : null}
+                onRetry={() => void checks.refetch()}
+                source={
+                  source
+                    ? `Every check reads NEAR from this browser, through ${readerLabel(source)}${checks.data?.read?.blockHeight ? ` at final block ${checks.data.read.blockHeight.toLocaleString("en-US")}` : ""}. The order is hashed here too.`
+                    : "The order is hashed in this browser. No NEAR RPC is configured for this network, so the chain checks are skipped."
+                }
                 items={order.data?.order.line_items ?? []}
                 reference={order.data?.order.reference ?? null}
               />
@@ -90,6 +99,7 @@ function ProofBody({
   network,
   checks,
   failedToRead,
+  onRetry,
   source,
   items,
   reference,
@@ -98,13 +108,15 @@ function ProofBody({
   p: PaymentProof;
   network: ReturnType<typeof gatewayNetwork>;
   checks: Checked | null;
-  failedToRead: boolean;
+  /** Why NEAR could not be read, or null. */
+  failedToRead: string | null;
+  onRetry: () => void;
   source: string;
   items: { name: string; quantity: number; unit_amount: string }[];
   reference: string | null;
 }) {
   const calm = useCalm();
-  const ids = checks ? checks.checks.map((c) => c.id) : expectedCheckIds(p.method);
+  const ids = checks ? checks.checks.map((c) => c.id) : expectedCheckIds();
   const [revealed, setRevealed] = useState(0);
   const total = ids.length;
   useEffect(() => {
@@ -121,26 +133,26 @@ function ProofBody({
   return (
     <div>
       <div className="flex items-center justify-between gap-3 border-b px-5 py-4 sm:px-8">
-        <MerchantRow merchant={v.merchant} livemode={v.livemode} chainId={v.chain_id} />
+        <MerchantRow merchant={v.merchant} livemode={v.livemode} />
         <Button variant="ghost" size="sm" onClick={() => window.print()} className="print:hidden">
           <Printer /> <span className="max-sm:sr-only">Print</span>
         </Button>
       </div>
 
       <div className="flex flex-col items-center px-5 pt-8 pb-6 text-center sm:px-8">
-        <Seal state={failedToRead ? "failed" : !done ? "checking" : verdict!.state} fraction={total ? revealed / total : 0} />
+        <Seal state={failedToRead ? "unverified" : !done ? "checking" : verdict!.state} fraction={total ? revealed / total : 0} />
         <p className="mt-5 text-xs font-medium tracking-wide text-muted-foreground uppercase">Payment proof</p>
         <div aria-live="polite">
           <AnimatePresence mode="wait" initial={false}>
             <motion.h1 key={failedToRead ? "f" : done ? verdict!.state : "c"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={T.base} className="mt-1 text-2xl font-semibold tracking-[-0.015em] text-balance">
-              {failedToRead ? "We could not read the chain" : !done ? `Checking ${network.name}` : verdict!.state === "verified" ? `Verified on ${network.name}` : "Some checks did not pass"}
+              {failedToRead ? "We could not read the chain" : !done ? `Checking ${network.name}` : verdict!.state === "verified" ? `Verified on ${network.name}` : verdict!.state === "unverified" ? "Not verified on chain yet" : "Some checks did not pass"}
             </motion.h1>
           </AnimatePresence>
         </div>
         <p className="mt-2 max-w-[46ch] text-sm text-pretty text-muted-foreground">
           <span className="font-medium text-foreground">{amount}</span> paid to {v.merchant.name}
           {p.paid_at ? <> on {formatDateTime(p.paid_at)}</> : null}. {v.description ? <>For {v.description}. </> : null}
-          Every check below runs in your browser, straight against the chain.
+          Every check below runs in your browser.
         </p>
       </div>
 
@@ -157,8 +169,11 @@ function ProofBody({
           </motion.p>
         )}
         {failedToRead && (
-          <Notice tone="negative" icon={<ShieldX />} className="mt-3">
-            The chain could not be read from this browser, so nothing here is verified yet. Try again later.
+          <Notice tone="warning" icon={<ShieldAlert />} className="mt-3">
+            <span className="block">{failedToRead}</span>
+            <Button variant="outline" size="sm" onClick={onRetry} className="mt-2 h-11 sm:h-8">
+              <RotateCw aria-hidden /> Read NEAR again
+            </Button>
           </Notice>
         )}
         {done && verdict?.state === "failed" && (
@@ -172,11 +187,26 @@ function ProofBody({
             ["Amount", <TokenAmount key="a" atomic={p.amount_paid} token={v.token} />],
             [
               "Paid to",
-              <span key="o" className="inline-flex items-center gap-1.5">
-                {v.merchant.name} <ChainLink text={shortAddress(p.payout)} title={p.payout} href={explorer ? `${explorer}/address/${p.payout}` : null} />
+              <span key="o" className="flex min-w-0 flex-col items-end gap-0.5">
+                <span>{v.merchant.name}</span>
+                <ChainLink text={p.payout} title={p.payout} href={explorer ? `${explorer}/address/${p.payout}` : null} />
               </span>,
             ],
-            ["Transaction", p.tx_hash ? <ChainLink key="t" text={shortHash(p.tx_hash)} title={p.tx_hash} href={explorer ? `${explorer}/tx/${p.tx_hash}` : null} /> : "Not on chain yet"],
+            [
+              "Transaction",
+              p.tx_hash ? (
+                <span key="t" className="flex min-w-0 flex-col items-end gap-0.5 text-right">
+                  <ChainLink text={shortHash(p.tx_hash)} title={p.tx_hash} href={explorer ? `${explorer}/txns/${p.tx_hash}` : null} />
+                  <span className="text-xs text-muted-foreground">
+                    {p.method === "voucher" ? "The settlement that paid it." : "As the payer's wallet reported it. The hub's own record of the payment is the proof."}
+                  </span>
+                </span>
+              ) : (
+                <span key="t" className="text-right text-muted-foreground">
+                  None reported. The hub&apos;s own record of the payment is the proof.
+                </span>
+              ),
+            ],
           ]}
         />
       </div>
@@ -184,28 +214,13 @@ function ProofBody({
       <Technical>
         <Rows
           rows={[
-            ["Block", <span key="b" className="num">{checks?.blockNumber?.toString() ?? p.block_number ?? "-"}</span>],
-            ["Final at", <span key="f">{p.finality_tag} head {checks?.finalBlock != null ? <span className="num text-muted-foreground">(block {checks.finalBlock.toString()})</span> : null}</span>],
-            ["Payer", p.payer ? <ChainLink key="p" text={shortAddress(p.payer)} title={p.payer} href={explorer ? `${explorer}/address/${p.payer}` : null} /> : "-"],
-            ["Paid with", p.method === "wallet" ? "Browser wallet" : p.method === "deposit" ? "Sent to address" : p.method === "hsp" ? "HSP" : p.method === "x402" || p.method === "voucher" ? "AI agent" : "-"],
+            ["Hub", p.hub ? <ChainLink key="h" text={p.hub} title={p.hub} href={explorer ? `${explorer}/address/${p.hub}` : null} /> : "-"],
+            ["Hub payment id", p.hub_payment_id ? <span key="i" className="hash text-[0.8125rem]" title={p.hub_payment_id}>{shortHash(p.hub_payment_id)}</span> : "-"],
+            ["Payer", p.payer ? <ChainLink key="p" text={p.payer} title={p.payer} href={explorer ? `${explorer}/address/${p.payer}` : null} /> : "-"],
+            ["Paid with", p.method === "wallet" ? "NEAR wallet" : p.method === "voucher" ? "AI agent with a Budget" : p.method ? "Transfer" : "-"],
             ["Order fingerprint", <OrderHash key="h" value={p.order_hash} className="justify-end" />],
-            ["Public record", p.attestation ? <span key="a" className="hash text-[0.8125rem]" title={p.attestation.uid}>{shortHash(p.attestation.uid)}</span> : "Not kept on this server"],
           ]}
         />
-        {checks && checks.events.length > 0 && (
-          <div className="mt-4">
-            <p className="mb-2 text-xs font-medium text-muted-foreground">Token events in the transaction</p>
-            <ul className="space-y-1.5 text-[0.8125rem]">
-              {checks.events.map((e, i) => (
-                <li key={i} className="hash rounded-md bg-muted px-2.5 py-1.5 break-all">
-                  {e.name === "Transfer"
-                    ? `Transfer(${shortAddress(e.from)} → ${shortAddress(e.to)}, ${formatToken(e.value, v.token.symbol, v.token.decimals)})`
-                    : `AuthorizationUsed(${shortAddress(e.authorizer)}, ${shortHash(e.nonce)})`}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
         {checks && (
           <ul className="mt-4 space-y-1 text-xs text-muted-foreground">
             {checks.checks.map((c) => (
@@ -228,10 +243,10 @@ function ProofBody({
   );
 }
 
-/** The seal: a ring that fills as checks land, then a shield that settles (or a crossed shield). */
-function Seal({ state, fraction }: { state: "checking" | "verified" | "failed"; fraction: number }) {
+/** The seal: a ring that fills as checks land, then a shield that settles, a crossed shield, or a neutral one when nothing was proven. */
+function Seal({ state, fraction }: { state: "checking" | "verified" | "failed" | "unverified"; fraction: number }) {
   const calm = useCalm();
-  const tone = state === "verified" ? "text-positive" : state === "failed" ? "text-negative" : "text-[var(--ink)]";
+  const tone = state === "verified" ? "text-positive" : state === "failed" ? "text-negative" : state === "unverified" ? "text-warning" : "text-[var(--ink)]";
   return (
     <ProgressRing fraction={state === "checking" ? Math.max(0.04, fraction) : 1} size={88} stroke={4} barClassName={cn("transition-colors duration-300", tone)}>
       <AnimatePresence mode="wait" initial={false}>
@@ -241,9 +256,17 @@ function Seal({ state, fraction }: { state: "checking" | "verified" | "failed"; 
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0 }}
           transition={state === "checking" ? T.base : T.spring}
-          className={cn("flex size-16 items-center justify-center rounded-full", state === "verified" ? "bg-positive text-white dark:text-background" : state === "failed" ? "bg-negative-soft text-negative" : "bg-muted text-[var(--ink)]")}
+          className={cn("flex size-16 items-center justify-center rounded-full", state === "verified" ? "bg-positive text-white dark:text-background" : state === "failed" ? "bg-negative-soft text-negative" : state === "unverified" ? "bg-warning-soft text-warning" : "bg-muted text-[var(--ink)]")}
         >
-          {state === "checking" ? <LoaderCircle className="size-6 animate-spin" aria-hidden /> : state === "verified" ? <ShieldCheck className="size-7" aria-hidden /> : <ShieldX className="size-7" aria-hidden />}
+          {state === "checking" ? (
+            <LoaderCircle className="size-6 animate-spin" aria-hidden />
+          ) : state === "verified" ? (
+            <ShieldCheck className="size-7" aria-hidden />
+          ) : state === "unverified" ? (
+            <ShieldAlert className="size-7" aria-hidden />
+          ) : (
+            <ShieldX className="size-7" aria-hidden />
+          )}
         </motion.span>
       </AnimatePresence>
     </ProgressRing>
@@ -321,11 +344,11 @@ function Technical({ children }: { children: React.ReactNode }) {
 }
 
 function ChainLink({ text, title, href }: { text: string; title: string; href: string | null }) {
-  const t = <span className="hash text-[0.8125rem]">{text}</span>;
+  const t = <AccountText value={text} className="hash text-[0.8125rem]" />;
   return href ? (
-    <a href={href} target="_blank" rel="noreferrer" title={title} className="inline-flex items-center gap-1 rounded hover:underline">
+    <a href={href} target="_blank" rel="noreferrer" title={title} className="inline-flex max-w-full min-w-0 items-center gap-1 rounded hover:underline">
       {t}
-      <ExternalLink className="size-3.5 text-subtle" aria-hidden />
+      <ExternalLink className="size-3.5 shrink-0 text-subtle" aria-hidden />
       <span className="sr-only">(opens the explorer)</span>
     </a>
   ) : (

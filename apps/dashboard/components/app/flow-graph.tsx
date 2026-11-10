@@ -67,7 +67,7 @@ export function FlowGraph({ obligations, nameOf, symbol, decimals, collapsed, cl
     }
   }
   const name = (a: string) => nameOf(a) ?? shortAddress(a);
-  const money = (v: bigint) => `${formatMoney(v, decimals, { maxFraction: 4 })} ${symbol}`;
+  const money = (v: bigint) => `${formatMoney(v, decimals)} ${symbol}`;
 
   const caption = activeLink
     ? `${name(activeLink.from)} owes ${name(activeLink.to)} ${money(activeLink.amount)} across ${formatInt(activeLink.calls)} calls`

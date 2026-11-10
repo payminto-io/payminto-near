@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useApi, useCan } from "@/lib/session";
-import { useInfo } from "@/lib/queries";
 import { gk, useMerchant } from "@/lib/gateway-queries";
 import { ok, useMerchantMethods } from "@/lib/operator-queries";
 import { normalizeBrandColor, safeRedirectUrl } from "@/lib/gateway";
@@ -35,7 +34,7 @@ export function BusinessProfile() {
   return <ProfileForm key={merchant.data.id} m={merchant.data} readOnly={!can("business.update")} />;
 }
 
-/** Settings > Payout wallet: where money arrives, and the signed change (payout.change). */
+/** Settings > Payout account: where money arrives, and the signed change (payout.change). */
 export function PayoutSettings() {
   const merchant = useBusiness();
   const can = useCan();
@@ -46,7 +45,7 @@ export function PayoutSettings() {
   return (
     <>
       <Panel
-        title="Payout wallet"
+        title="Payout account"
         description="The wallet where your money arrives. Changing it needs a signature from the new wallet, so a stolen dashboard session cannot redirect your money."
         actions={
           can("payout.change") && (
@@ -57,16 +56,15 @@ export function PayoutSettings() {
         }
       >
         <Fields>
-          <Field label="Payout wallet"><Address address={m.payout} showName={false} /></Field>
+          <Field label="Payout account"><Address address={m.payout} showName={false} /></Field>
           <Field label="Checkout page address"><span className="hash text-[0.8125rem] break-all">{m.checkout_base_url}</span></Field>
         </Fields>
       </Panel>
-      <Panel className="mt-5" title="Technical" description="Contracts this business is paid through, for developers and auditors.">
+      <Panel className="mt-5" title="Technical" description="The NEAR accounts this business is paid through, for developers and auditors.">
         <Fields>
           <Field label="Token"><Address address={m.token} showName={false} /></Field>
-          <Field label="Payment address factory" hint="Creates the one-time payment addresses that can only forward to your wallet."><Address address={m.deposit_factory} showName={false} /></Field>
-          <Field label="Payment router">{m.payment_router ? <Address address={m.payment_router} showName={false} /> : <span className="text-muted-foreground">Not reported</span>}</Field>
-          <Field label="Chain id">{m.chain_id}</Field>
+          <Field label="Hub" hint="The NEAR contract that records each checkout payment and credits this business.">{m.hub ? <Address address={m.hub} showName={false} /> : <span className="text-muted-foreground">Not reported</span>}</Field>
+          <Field label="Network"><span className="hash text-[0.8125rem]">{m.network}</span></Field>
         </Fields>
       </Panel>
       {open && <ChangePayout merchantId={m.id} onClose={() => setOpen(false)} />}
@@ -162,7 +160,6 @@ function MethodsPanel({ merchantId }: { merchantId: string }) {
     onError: (e) => toast.error(e.message),
   });
   const rows = draft ?? methods.data?.map(({ merchant_id: _m, ...r }) => (void _m, r)) ?? [];
-  const hsp = useInfo().data?.gateway?.hspPayments;
   return (
     <Panel
       title="Payment methods"
@@ -180,15 +177,7 @@ function MethodsPanel({ merchantId }: { merchantId: string }) {
         )
       }
     >
-      {methods.isPending ? <BlockSkeleton className="h-48" /> : methods.isError ? <ErrorState error={methods.error} /> : <MethodsEditor rows={rows} onChange={setDraft} editableFees={false} readOnly={!can("business.update")} notes={{ hsp: <HspNote state={hsp} /> }} />}
+      {methods.isPending ? <BlockSkeleton className="h-48" /> : methods.isError ? <ErrorState error={methods.error} /> : <MethodsEditor rows={rows} onChange={setDraft} editableFees={false} readOnly={!can("business.update")} />}
     </Panel>
   );
-}
-
-/** Whether HashKey's HSP can take payments on this server now (GATEWAY.md section 17). */
-function HspNote({ state }: { state: { state: string; message?: string | null; network?: string | null } | undefined }) {
-  if (!state || state.state === "off") return <span className="text-muted-foreground">Not set up on this server. The server owner sets HSP_MCP_URL to offer it.</span>;
-  if (state.state === "available") return <span className="text-positive">HSP is ready{state.network ? ` on ${state.network}` : ""}.</span>;
-  if (state.state === "checking") return <span className="text-muted-foreground">Checking HSP access.</span>;
-  return <span className="text-warning">{state.message ?? "HSP is not available right now."} Customers do not see it until it is.</span>;
 }

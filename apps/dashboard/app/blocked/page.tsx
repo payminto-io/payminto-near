@@ -9,8 +9,8 @@ import { ShieldBan, ShieldCheck, UserX, Wallet } from "lucide-react";
 import { useAccess, useApi } from "@/lib/session";
 import { qk, useToken } from "@/lib/queries";
 import { gk } from "@/lib/gateway-queries";
-import { checksum } from "@/lib/gateway";
-import { ruleDescription, summarizeDenials } from "@/lib/denials";
+import { parseAccount } from "@/lib/gateway";
+import { summarizeDenials } from "@/lib/denials";
 import { formatInt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Denial, ScreeningDecision, ScreeningRule } from "@/lib/schemas";
@@ -29,13 +29,14 @@ type Tab = "attempts" | "wallets";
 
 /** One plain sentence per screening rule (PRODUCT.md section 2.3), used when the server sends no message. */
 const PAYMENT_REASON: Record<ScreeningRule, string> = {
-  PAYER_BLACKLISTED: "This wallet is frozen by the token issuer",
-  PAYOUT_BLACKLISTED: "Your payout wallet is frozen by the token issuer",
+  PAYER_BLACKLISTED: "The token contract has blocked this account",
+  PAYOUT_BLACKLISTED: "The token contract has blocked your payout account",
   PAYER_DENIED: "This wallet is on your blocked list",
   PAYER_TOO_NEW: "This wallet has too little history to accept payments from",
 };
 
-const STAGE: Record<string, string> = { x402: "AI agent payment", voucher: "AI agent with budget", wallet: "Pay with wallet", deposit: "Send to address", authorize: "Pay with wallet", relay: "Pay with wallet", hsp: "Pay with HSP" };
+/** Reads after "with": how the refused payment was being made. */
+const STAGE: Record<string, string> = { x402: "an AI agent", voucher: "an AI agent's Budget", wallet: "a NEAR wallet", deposit: "a direct transfer", authorize: "a NEAR wallet", relay: "a NEAR wallet" };
 
 type Attempt = { kind: "agent"; at: string; denial: Denial } | { kind: "payment"; at: string; decision: ScreeningDecision };
 
@@ -58,7 +59,7 @@ function Blocked() {
     <>
       <PageHeader
         title="Blocked"
-        description="Payments and agent charges Payminto refused, with the reason, and the wallets you never want money from. A refused attempt never reaches your wallet or a settlement, so no money moves."
+        description="Payments and agent Calls Payminto refused, with the reason, and the wallets you never want money from. A refused attempt never reaches your wallet or a settlement, so no money moves."
         actions={
           <Segmented
             label="Show"
@@ -96,7 +97,7 @@ function Attempts() {
   }, [agents, denials.data, decisions.data]);
 
   const payments = decisions.data?.length ?? 0;
-  const charges = agents ? denials.data?.length ?? 0 : 0;
+  const refusedCalls = agents ? denials.data?.length ?? 0 : 0;
   const refused = (decisions.data ?? []).reduce((a, d) => a + BigInt(d.amount ?? "0"), 0n) + (agents ? BigInt(summary.attempted) : 0n);
   const day = useNow() - 86_400_000;
   const last24 = attempts.filter((a) => new Date(a.at).getTime() >= day).length;
@@ -110,8 +111,8 @@ function Attempts() {
         <div className="min-w-0 flex-1 text-sm">
           <p className="font-medium">Safety checks are on</p>
           <p className="mt-0.5 text-muted-foreground">
-            Payminto refuses wallets frozen by the token issuer, wallets on your blocked list and brand-new wallets before it hands out a payment address.
-            {agents && " Every agent charge is also checked against its budget before anything is booked."}
+            Payminto refuses accounts the token contract has blocked, accounts on your blocked list and brand-new accounts before it signs checkout terms for them.
+            {agents && " Every agent Call is also checked against its Budget before anything is booked."}
           </p>
         </div>
       </section>
@@ -125,9 +126,9 @@ function Attempts() {
           stats={[
             { label: "Blocked attempts", value: <span className={cn("num", attempts.length > 0 && "text-negative")}>{formatInt(attempts.length)}</span>, note: `${formatInt(last24)} in the last 24 hours` },
             agents
-              ? { label: "Agent charges refused", value: <span className="num">{formatInt(charges)}</span>, note: `${formatInt(summary.attacks)} looked like attacks` }
+              ? { label: "Agent Calls refused", value: <span className="num">{formatInt(refusedCalls)}</span>, note: `${formatInt(summary.attacks)} looked like attacks` }
               : { label: "Payments refused", value: <span className="num">{formatInt(payments)}</span>, note: "by the safety checks" },
-            agents ? { label: "Payments refused", value: <span className="num">{formatInt(payments)}</span>, note: "by the safety checks" } : { label: "Value refused", value: <Money atomic={refused.toString()} maxFraction={4} />, note: "asked for by refused attempts" },
+            agents ? { label: "Payments refused", value: <span className="num">{formatInt(payments)}</span>, note: "by the safety checks" } : { label: "Value refused", value: <Money atomic={refused.toString()} />, note: "asked for by refused attempts" },
             {
               label: "Money moved",
               value: (
@@ -143,7 +144,7 @@ function Attempts() {
       )}
 
       <div className={cn("mt-5 grid items-start gap-5", agents && summary.byRule.length > 0 && "xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]")}>
-        <Panel title="Recent attempts" description="Newest first, payments and agent charges together" bodyClassName="p-0 sm:p-0">
+        <Panel title="Recent attempts" description="Newest first, payments and agent Calls together" bodyClassName="p-0 sm:p-0">
           {pending ? (
             <RowsSkeleton className="px-5" rows={6} />
           ) : attempts.length === 0 ? (
@@ -163,15 +164,15 @@ function Attempts() {
           )}
         </Panel>
         {agents && summary.byRule.length > 0 && (
-          <Panel title="Agent rules that fired" description="Grouped by the budget rule that refused the charge" bodyClassName="p-0 sm:p-0">
+          <Panel title="Agent rules that fired" description="Grouped by the Budget rule that refused the Call" bodyClassName="p-0 sm:p-0">
             <ul className="divide-y">
               {summary.byRule.map((r) => (
-                <li key={r.rule} className="flex items-start gap-3 px-4 py-3 text-sm transition-colors duration-150 ease-out hover:bg-muted/40 sm:px-5">
+                <li key={r.title} className="flex items-start gap-3 px-4 py-3 text-sm transition-colors duration-150 ease-out hover:bg-muted/40 sm:px-5">
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium">{r.title}</span>
-                    <span className="mt-1 block text-xs text-muted-foreground">{ruleDescription(r.rule)}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">{r.description}</span>
                     <span className="mt-1.5 block">
-                      <RuleChip rule={r.rule} />
+                      <RuleChip rule={r.rule} retry={r.hubUnreadable} />
                     </span>
                   </span>
                   <span className="text-right">
@@ -239,7 +240,7 @@ function BlockedWallets() {
   const [address, setAddress] = useState("");
   const [note, setNote] = useState("");
   const [touched, setTouched] = useState(false);
-  const valid = checksum(address);
+  const valid = parseAccount(address);
   const add = useMutation({
     mutationFn: () => api.gateway.addDeny({ address: valid!, note: note.trim() || undefined }),
     onSuccess: () => {
@@ -271,7 +272,7 @@ function BlockedWallets() {
   }
 
   return (
-    <Panel title="Blocked wallets" description="Wallets you never want to accept money from. Payminto refuses them before it hands out a payment address." bodyClassName="p-0 sm:p-0" className="max-w-3xl">
+    <Panel title="Blocked wallets" description="Wallets you never want to accept money from. Payminto refuses them before it signs checkout terms." bodyClassName="p-0 sm:p-0" className="max-w-3xl">
       {canEdit && (
         <form
           className="grid gap-3 border-b p-4 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] sm:items-end sm:p-5"
@@ -282,7 +283,7 @@ function BlockedWallets() {
           }}
         >
           <FormRow id="deny-address" label="Wallet address" error={touched && !valid ? "Enter a valid 0x address." : null}>
-            <Input id="deny-address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="0x..." className="hash text-[0.8125rem]" spellCheck={false} autoComplete="off" />
+            <Input id="deny-address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="alice.testnet" className="hash text-[0.8125rem]" spellCheck={false} autoComplete="off" />
           </FormRow>
           <FormRow id="deny-note" label="Note" optional>
             <Input id="deny-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={140} placeholder="Only your team sees it" />

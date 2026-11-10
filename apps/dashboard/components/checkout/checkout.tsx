@@ -2,41 +2,19 @@
 
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "next/link";
-import { QRCodeSVG } from "qrcode.react";
-import type { Address } from "viem";
 import { AnimatePresence, motion } from "motion/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  ArrowLeftRight,
-  ArrowRight,
-  Check,
-  Clock3,
-  ExternalLink,
-  LoaderCircle,
-  Mail,
-  Printer,
-  QrCode,
-  RotateCw,
-  SearchX,
-  Send,
-  ShieldCheck,
-  Wallet,
-  WifiOff,
-  XCircle,
-} from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, Clock3, ExternalLink, LoaderCircle, Mail, Printer, RotateCw, SearchX, ShieldCheck, Wallet, WifiOff, XCircle } from "lucide-react";
+import { checkoutPayTx, type CheckoutTerms, type WalletTx } from "@payminto/protocol";
 import { cn } from "@/lib/utils";
 import { useDocumentTitle } from "@/lib/use-title";
-import { formatDateTime, formatToken, shortAddress, shortHash } from "@/lib/format";
-import { gatewayNetwork, groupAddress, manualPaymentUri, plainAmount, safeRedirectUrl, type GatewayNetwork } from "@/lib/gateway";
+import { formatDateTime, formatToken, shortHash } from "@/lib/format";
+import { gatewayNetwork, safeRedirectUrl, type GatewayNetwork } from "@/lib/gateway";
 import {
   availableMethods,
   checkoutModel,
   CONFIRM_STEPS,
   confirmationProgress,
-  HSP_STEPS,
-  hspInFlight,
-  hspProgress,
   initialMethod,
   METHOD_COPY,
   METHOD_FEE_LABEL,
@@ -60,7 +38,8 @@ import { useCheckout, type CheckoutLive } from "@/lib/use-checkout";
 import type { CheckoutApi } from "@/lib/gateway-api";
 import type { CheckoutView } from "@/lib/schemas";
 import { ApiError } from "@/lib/http";
-import { connectWallet, ensureChain, injected, sendTransfer, signAuthorization, signHspPayment, tokenBalance, walletErrorMessage, type ChainTarget } from "@/lib/wallet";
+import { ensureConnected, signAndSendTransaction, toWalletError, walletAvailable } from "@/lib/wallet";
+import { useWallet } from "@/lib/use-wallet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNow } from "@/components/app/time-ago";
@@ -68,7 +47,6 @@ import {
   BigAmount,
   BrandButton,
   CheckoutLayout,
-  CopyAction,
   CopyIcon,
   LineItems,
   LivePill,
@@ -78,14 +56,14 @@ import {
   OrderHash,
   PaidDirectly,
   Rows,
-  splitToken,
   StateIcon,
   SummaryFrame,
   TimeBar,
   TokenAmount,
   TokenMark,
 } from "./parts";
-import { Bar, EASE_OUT, ProgressRing, PulseDot, RollingText, ShakeOn, Shimmer, Stagger, StaggerItem, SuccessMark, Sweep, Swap, T, useCalm } from "./motion";
+import { Bar, EASE_OUT, ProgressRing, RollingText, ShakeOn, Shimmer, Stagger, StaggerItem, SuccessMark, Swap, T, useCalm } from "./motion";
+import { AccountText } from "@/components/ds/account-id";
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -112,8 +90,8 @@ export function CheckoutScreen({ id }: { id: string }) {
 /** The checkout's chain (name, explorer, RPC), from /v1/info with the protocol package as the fallback. */
 const NetworkContext = createContext<GatewayNetwork | null>(null);
 
-function useNetwork(view: Pick<CheckoutView, "chain_id">): GatewayNetwork {
-  return useContext(NetworkContext) ?? gatewayNetwork(view.chain_id);
+function useNetwork(): GatewayNetwork {
+  return useContext(NetworkContext) ?? gatewayNetwork();
 }
 
 /** The payer-facing tab title ("Pay Acme Store - Payminto"), kept over the route's static metadata title. */
@@ -126,7 +104,7 @@ const noopSubscribe = () => () => undefined;
 function useHasWallet(): boolean | null {
   return useSyncExternalStore(
     noopSubscribe,
-    () => Boolean(injected()),
+    () => walletAvailable(),
     () => null,
   );
 }
@@ -251,8 +229,7 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
   const signing = step === "approving" || step === "submitting";
   const model = checkoutModel(view, { now, signing });
   const methods = availableMethods(view);
-  const walletUsable = hasWallet === true || Boolean(api.mockSign);
-  const active: PayMethod | null = picked && methods.includes(picked) ? picked : hasWallet === null ? null : initialMethod(view, walletUsable);
+  const active: PayMethod | null = picked && methods.includes(picked) ? picked : hasWallet === null ? null : initialMethod(view);
   const quote = active ? quoteFor(view, active, cache) : null;
 
   // Fees depend on the method (GATEWAY.md section 14.3): re-quote an open, untouched payment for the method on screen.
@@ -300,21 +277,21 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
 // ---------------------------------------------------------------------------
 
 export function CheckoutSummary({ view, api, quote = null, method = null, dim = false }: { view: CheckoutView; api?: CheckoutApi; quote?: MethodQuote | null; method?: PayMethod | null; dim?: boolean }) {
-  const network = useNetwork(view);
+  const network = useNetwork();
   const order = useQuery({ queryKey: ["order", view.id], queryFn: () => api!.order(view.id), enabled: Boolean(api), staleTime: Infinity, retry: 1 });
   const items = order.data?.order.line_items ?? [];
   const t = view.token;
   const fmt = (v: bigint | string) => formatToken(v, t.symbol, t.decimals);
   const due = quote ? quote.due : BigInt(view.amount_due);
   const surcharge = quote ? quote.surcharge : BigInt(view.surcharge);
-  const feeMethod = method ?? view.method ?? "deposit";
+  const feeMethod = method ?? view.method ?? "wallet";
   const pending = Boolean(quote && !quote.known);
   const title = view.description || `Payment to ${view.merchant.name}`;
   const showItems = items.length > 1 || (items.length === 1 && items[0]!.quantity !== 1);
 
   return (
     <div className={cn("transition-[filter,opacity] duration-300", dim && "opacity-75 grayscale")}>
-      <SummaryFrame merchant={view.merchant} livemode={view.livemode} chainId={view.chain_id} compactTitle={title} compactAmount={<RollingText text={fmt(due)} className={cn(pending && "opacity-50")} />}>
+      <SummaryFrame merchant={view.merchant} livemode={view.livemode} compactTitle={title} compactAmount={<RollingText text={fmt(due)} className={cn(pending && "opacity-50")} />}>
         <Stagger>
           <StaggerItem>
             <p className="text-[0.9375rem] font-medium">{title}</p>
@@ -365,11 +342,7 @@ export function CheckoutSummary({ view, api, quote = null, method = null, dim = 
 // ---------------------------------------------------------------------------
 
 function explorerTx(network: GatewayNetwork, hash: string): string | null {
-  return network.explorer ? `${network.explorer}/tx/${hash}` : null;
-}
-
-function chainTarget(network: GatewayNetwork): ChainTarget {
-  return { chainId: network.chainId, name: network.name, rpcUrl: network.rpcUrl, explorer: network.explorer };
+  return network.explorer ? `${network.explorer}/txns/${hash}` : null;
 }
 
 type PanelProps = {
@@ -398,11 +371,11 @@ const CHIP_TONE: Record<CheckoutModel["chip"]["tone"], string> = {
 
 export function CheckoutPanel(props: PanelProps) {
   const { view, model, live } = props;
-  const network = useNetwork(view);
+  const network = useNetwork();
   const watching = model.panel === "pay" || model.panel === "signing" || model.panel === "confirming";
   return (
     <div className="relative flex h-full flex-col">
-      <div className="flex min-h-8 items-center justify-between gap-3">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <NetworkChip name={network.name} symbol={view.token.symbol} />
         <Swap id={watching ? `live-${live}` : model.chip.label} mode="popLayout">
           {watching ? <LivePill live={live} /> : <span className={cn("inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium", CHIP_TONE[model.chip.tone])}>{model.chip.label}</span>}
@@ -436,11 +409,8 @@ export function CheckoutPanel(props: PanelProps) {
   );
 }
 
-function PayBody({ view, api, model, methods, active, quote, onPick, step, setStep, refresh, hasWallet }: PanelProps) {
+function PayBody({ view, api, model, methods, active, quote, step, setStep, refresh, hasWallet }: PanelProps) {
   const partial = model.phase === "partially_paid";
-  const busy = step !== "idle";
-  // A submitted HSP payment holds the checkout: show where it is instead of ways to pay.
-  if (hspInFlight(view.hsp)) return <HspProgress view={view} />;
   if (!active || !quote) {
     return methods.length === 0 ? (
       <Notice tone="neutral" icon={<AlertTriangle />}>
@@ -453,92 +423,17 @@ function PayBody({ view, api, model, methods, active, quote, onPick, step, setSt
       </div>
     );
   }
-  const index = methods.indexOf(active);
   return (
     <div className="flex flex-col gap-5">
       {partial && <PartlyPaid view={view} model={model} />}
       {!partial && (
         <div>
-          <h1 className="text-lg font-semibold tracking-[-0.01em]">How would you like to pay?</h1>
+          <h1 className="text-lg font-semibold tracking-[-0.01em]">{METHOD_COPY.wallet.label}</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">{model.copy.next}</p>
         </div>
       )}
-      {methods.length > 1 && <MethodSwitch methods={methods} active={active} onPick={onPick} disabled={busy} />}
-      <div className="grid">
-        {methods.map((m, i) => {
-          const on = m === active;
-          return (
-            <motion.div
-              key={m}
-              id={`panel-${m}`}
-              role={methods.length > 1 ? "tabpanel" : undefined}
-              aria-labelledby={methods.length > 1 ? `tab-${m}` : undefined}
-              inert={!on}
-              className="[grid-area:1/1]"
-              initial={false}
-              animate={on ? { opacity: 1, x: 0, visibility: "visible" } : { opacity: 0, x: i < index ? -6 : 6, transitionEnd: { visibility: "hidden" } }}
-              transition={T.base}
-            >
-              {m === "wallet" ? (
-                <WalletPay view={view} api={api} quote={on ? quote : quoteFor(view, m)} active={on} ready={on && quote.ready} step={step} setStep={setStep} refresh={refresh} hasWallet={hasWallet} onUseDeposit={methods.includes("deposit") ? () => onPick("deposit") : null} />
-              ) : m === "hsp" ? (
-                <HspPay view={view} api={api} quote={on ? quote : quoteFor(view, m)} active={on} ready={on && quote.ready} step={step} setStep={setStep} refresh={refresh} hasWallet={hasWallet} onUseDeposit={methods.includes("deposit") ? () => onPick("deposit") : null} />
-              ) : (
-                <DepositPay view={view} api={api} quote={on ? quote : quoteFor(view, m)} hasWallet={hasWallet === true} />
-              )}
-            </motion.div>
-          );
-        })}
-      </div>
-      {view.hsp?.availability === "unavailable" && view.status === "open" && (
-        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-          <Clock3 className="mt-px size-3.5 shrink-0" aria-hidden /> Pay with HSP is not available right now. {view.hsp.message}
-        </p>
-      )}
+      <WalletPay view={view} api={api} quote={quote} ready={quote.ready} step={step} setStep={setStep} refresh={refresh} hasWallet={hasWallet} />
       {view.status === "open" && <ReceiptEmail view={view} api={api} />}
-    </div>
-  );
-}
-
-/** Segmented control; the selected pill slides under the active option. */
-function MethodSwitch({ methods, active, onPick, disabled }: { methods: PayMethod[]; active: PayMethod; onPick: (m: PayMethod) => void; disabled: boolean }) {
-  const icon = { wallet: <Wallet aria-hidden />, deposit: <QrCode aria-hidden />, hsp: <ShieldCheck aria-hidden /> };
-  const short = { wallet: "Wallet", deposit: "Address", hsp: "HSP" };
-  return (
-    <div role="tablist" aria-label="How to pay" className={cn("grid gap-1 rounded-xl bg-muted p-1", methods.length > 2 ? "grid-cols-3" : "grid-cols-2")}>
-      {methods.map((m) => {
-        const on = m === active;
-        return (
-          <button
-            key={m}
-            id={`tab-${m}`}
-            role="tab"
-            type="button"
-            aria-selected={on}
-            aria-controls={`panel-${m}`}
-            tabIndex={on ? 0 : -1}
-            disabled={disabled && !on}
-            onClick={() => onPick(m)}
-            onKeyDown={(e) => {
-              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-              e.preventDefault();
-              const next = methods[(methods.indexOf(active) + (e.key === "ArrowRight" ? 1 : methods.length - 1)) % methods.length]!;
-              onPick(next);
-              document.getElementById(`tab-${next}`)?.focus();
-            }}
-            className={cn(
-              "relative flex h-10 items-center justify-center gap-2 rounded-lg text-sm font-medium transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:opacity-50 [&_svg]:size-4",
-              on ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {on && <motion.span layoutId="method-pill" className="absolute inset-0 rounded-lg bg-card shadow-sm ring-1 ring-border dark:bg-input dark:ring-transparent" transition={T.base} />}
-            <span className="relative flex items-center gap-2">
-              {icon[m]}
-              {methods.length > 2 ? <span title={METHOD_COPY[m].label}>{short[m]}</span> : METHOD_COPY[m].label}
-            </span>
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -564,101 +459,80 @@ function PartlyPaid({ view, model }: { view: CheckoutView; model: CheckoutModel 
 }
 
 // ---------------------------------------------------------------------------
-// Pay with wallet
+// Pay with a NEAR wallet: one ft_transfer_call to the hub carrying the node-signed checkout terms
 // ---------------------------------------------------------------------------
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * The transaction the payer's wallet will sign: the node's prebuilt `ft_transfer_call`, accepted only when it is exactly
+ * what the chain package builds from the signed terms, the token and the hub. Null while there are no terms; "mismatch"
+ * when the server's transaction says anything else, so the page never asks a wallet to sign it.
+ */
+export function checkoutTxOf(view: Pick<CheckoutView, "wallet" | "hub" | "token">): WalletTx | "mismatch" | null {
+  const w = view.wallet;
+  if (!w) return null;
+  const terms: CheckoutTerms = { paymentId: w.terms.payment_id, merchant: w.terms.merchant, amount: BigInt(w.terms.amount), expiryMs: BigInt(w.terms.expiry_ms) };
+  const built = checkoutPayTx(view.token.address, view.hub, terms, w.signature);
+  return JSON.stringify(built) === JSON.stringify(w.transaction) ? built : "mismatch";
+}
 
 function WalletPay({
   view,
   api,
   quote,
-  active,
   ready,
   step,
   setStep,
   refresh,
-  hasWallet,
-  onUseDeposit,
 }: {
   view: CheckoutView;
   api: CheckoutApi;
   quote: MethodQuote;
-  active: boolean;
   ready: boolean;
   step: WalletStep;
   setStep: (s: WalletStep) => void;
   refresh: () => void;
   hasWallet: boolean | null;
-  onUseDeposit: (() => void) | null;
 }) {
-  const network = useNetwork(view);
-  const [account, setAccount] = useState<Address | null>(null);
-  const [balance, setBalance] = useState<bigint | null>(null);
-  const [error, setError] = useState<{ text: string; wrongNetwork?: boolean } | null>(null);
+  const network = useNetwork();
+  const wallet = useWallet();
+  const [error, setError] = useState<{ text: string; canceled?: boolean } | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
   const [shake, setShake] = useState(0);
   const amountText = formatToken(quote.remaining, view.token.symbol, view.token.decimals);
-  const short = balance !== null && balance < quote.remaining;
-  const simulated = !injected() && Boolean(api.mockSign);
+  const built = checkoutTxOf(view);
+  const tx = built === "mismatch" ? null : built;
   const busy = step !== "idle";
-  const current = walletStepIndex(active ? step : "idle");
+  const current = walletStepIndex(step);
 
   async function pay() {
     setError(null);
-    let at: WalletStep = "connecting";
+    if (!tx) return;
     try {
-      if (simulated) {
-        for (const s of ["connecting", "switching", "approving"] as const) {
-          setStep((at = s));
-          await sleep(650);
-        }
-        setStep((at = "submitting"));
-        await api.mockSign!(view.id);
-      } else {
-        setStep("connecting");
-        const from = account ?? (await connectWallet());
-        setAccount(from);
-        setStep((at = "switching"));
-        await ensureChain(chainTarget(network));
-        const bal = await tokenBalance(view.token.address as Address, from).catch(() => null);
-        setBalance(bal);
-        if (bal !== null && bal < quote.remaining) throw new Error(`This wallet holds less than ${amountText} on ${network.name}.`);
-        const auth = view.authorization;
-        if (!auth) throw new Error("This payment cannot be signed from a wallet right now. Use Send to address.");
-        setStep((at = "approving"));
-        const signature = await signAuthorization(auth, from);
-        setStep((at = "submitting"));
-        await api.authorize(view.id, { payer: from, signature });
+      setStep("connecting");
+      await ensureConnected();
+      setStep("approving");
+      const r = await signAndSendTransaction(tx);
+      if (r.status === "failed") {
+        setShake((n) => n + 1);
+        setError({ text: r.error });
+        setStep("idle");
+        return;
       }
+      // The node confirms from the hub's payment record; the view updates from server state, not from here.
+      setSent(r.hash);
+      // Tell the node which transaction paid; it still confirms from the hub's own record, never from this report.
+      void api.walletSent(view.id, r.hash).catch(() => undefined);
+      setStep("submitting");
       refresh();
     } catch (e) {
-      const wrongNetwork = at === "switching";
-      if (wrongNetwork) setShake((n) => n + 1);
-      setError({ text: e instanceof ApiError ? e.message : walletErrorMessage(e), wrongNetwork });
+      const err = toWalletError(e);
+      if (err.kind !== "rejected") setShake((n) => n + 1);
+      setError({ text: err.message, canceled: err.kind === "rejected" });
       setStep("idle");
     }
   }
 
-  if (hasWallet === false && !api.mockSign) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-4 py-6 text-center">
-          <StateIcon tone="neutral">
-            <Wallet />
-          </StateIcon>
-          <p className="text-sm font-medium">No browser wallet on this device</p>
-          <p className="max-w-[32ch] text-sm text-muted-foreground">Install one such as MetaMask or Rabby, or send the money from any wallet or exchange instead.</p>
-        </div>
-        {onUseDeposit && (
-          <BrandButton onClick={onUseDeposit}>
-            <QrCode /> Send to address instead
-          </BrandButton>
-        )}
-      </div>
-    );
-  }
-
-  const copy = walletStepCopy(active ? step : "idle", network.name);
+  const copy = walletStepCopy(step, network.name);
   return (
     <ShakeOn token={shake} className="flex flex-col gap-4">
       <ol className="flex flex-col gap-0.5 rounded-xl border p-1.5" aria-label="Steps to pay with your wallet">
@@ -666,9 +540,9 @@ function WalletPay({
           const done = current > i;
           const now = current === i;
           const c = walletStepCopy(s, network.name);
-          const label = s === "connecting" ? (account ? `Connected ${shortAddress(account)}` : "Connect your wallet") : s === "switching" ? `Use ${network.name}` : "Approve the payment";
+          const label = s === "connecting" ? (wallet.account ? `Connected as ${wallet.account}` : "Connect a NEAR wallet") : "Approve the transfer";
           return (
-            <li key={s} aria-current={now ? "step" : undefined} className={cn("flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors duration-200", now && "bg-muted")}>
+            <li key={s} aria-current={now ? "step" : undefined} className={cn("flex min-h-11 items-center gap-3 rounded-lg px-2.5 py-2 transition-colors duration-200", now && "bg-muted")}>
               <span
                 className={cn(
                   "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors duration-200",
@@ -682,7 +556,7 @@ function WalletPay({
                 </AnimatePresence>
               </span>
               <span className="min-w-0 flex-1">
-                <span className={cn("block text-sm", done || now ? "font-medium text-foreground" : "text-muted-foreground")}>{label}</span>
+                <span className={cn("block truncate text-sm", done || now ? "font-medium text-foreground" : "text-muted-foreground")}>{label}</span>
                 {now && (
                   <motion.span initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} transition={T.base} className="block text-xs text-muted-foreground">
                     {c.hint}
@@ -694,45 +568,41 @@ function WalletPay({
           );
         })}
       </ol>
-      <div className="min-h-5 text-xs text-muted-foreground">
-        {account && balance !== null ? (
-          <p className="flex justify-between gap-3">
-            <span>Wallet balance</span>
-            <TokenAmount atomic={balance} token={view.token} className={cn("text-foreground", short && "text-warning")} />
-          </p>
-        ) : (
-          <p>No network fee. You only need {view.token.symbol} on {network.name}.</p>
-        )}
-      </div>
+      {tx && <TransferDetails tx={tx} view={view} />}
       <AnimatePresence initial={false}>
+        {built === "mismatch" && (
+          <Notice tone="negative" icon={<AlertTriangle />}>
+            The server&apos;s transaction does not match its signed terms, so this page will not ask your wallet to sign it. No money moved. Contact {view.merchant.name}.
+          </Notice>
+        )}
         {error && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={T.base} className="overflow-hidden">
-            <Notice tone={error.wrongNetwork ? "warning" : "negative"} icon={error.wrongNetwork ? <ArrowLeftRight /> : <XCircle />}>
-              {error.wrongNetwork ? (
-                <>
-                  Your wallet is on another network. <strong>Switch to {network.name}</strong> to pay. No money moved.
-                </>
-              ) : (
-                <>{error.text} No money moved.</>
-              )}
+            <Notice tone={error.canceled ? "neutral" : "negative"} icon={error.canceled ? <XCircle /> : <AlertTriangle />}>
+              {error.canceled ? error.text : <>{error.text} No money moved.</>}
             </Notice>
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="sticky bottom-0 z-10 -mx-1 bg-card px-1 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] lg:static lg:pb-0">
-        <BrandButton onClick={() => void pay()} disabled={busy || !ready || short} aria-describedby="wallet-step" className={cn(busy && "disabled:opacity-100")}>
-          <Swap id={busy ? step : ready ? "pay" : "quote"} mode="popLayout" className="flex items-center gap-2">
+      {sent && step === "submitting" && (
+        <p role="status" className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+          Sent in <span className="hash text-foreground">{shortHash(sent)}</span>
+          {explorerTx(network, sent) && (
+            <a href={explorerTx(network, sent)!} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-1 font-medium text-foreground underline underline-offset-2">
+              View on the NEAR explorer <ExternalLink className="size-3.5" aria-hidden />
+            </a>
+          )}
+        </p>
+      )}
+      <div className="sticky bottom-0 z-10 -mx-1 bg-card px-1 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:static lg:pb-0">
+        <BrandButton onClick={() => void pay()} disabled={busy || !ready || !tx} aria-describedby="wallet-step" className={cn(busy && "disabled:opacity-100")}>
+          <Swap id={busy ? step : ready && tx ? "pay" : "quote"} mode="popLayout" className="flex items-center gap-2">
             {busy ? (
               <>
                 <LoaderCircle className="animate-spin" aria-hidden /> {copy.title}
               </>
-            ) : error?.wrongNetwork ? (
-              <>
-                <ArrowLeftRight aria-hidden /> Switch network and pay {amountText}
-              </>
             ) : (
               <>
-                <Wallet aria-hidden /> Pay {ready ? amountText : <Shimmer className="inline-block h-4 w-20 bg-white/30" />}
+                <Wallet aria-hidden /> Pay {ready && tx ? amountText : <Shimmer className="inline-block h-4 w-20 bg-white/30" />}
               </>
             )}
           </Swap>
@@ -740,333 +610,53 @@ function WalletPay({
         <p id="wallet-step" className="sr-only" aria-live="polite">
           {busy ? copy.title : ""}
         </p>
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          You pay in {view.token.symbol} on {network.name}. Your wallet adds a small NEAR network fee.
+        </p>
       </div>
-      {simulated && <p className="text-center text-xs text-subtle">Demo data: no wallet is installed, so paying walks through the steps without one.</p>}
     </ShakeOn>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Pay with HSP (GATEWAY.md section 17)
-// ---------------------------------------------------------------------------
-
-/**
- * HashKey's HSP: the payer's wallet signs the EIP-712 data HSP prepared, the node submits it through HSP, and HSP's
- * gateway sends the money into this payment's address. Same wallet steps as Pay with wallet.
- */
-function HspPay({
-  view,
-  api,
-  quote,
-  active,
-  ready,
-  step,
-  setStep,
-  refresh,
-  hasWallet,
-  onUseDeposit,
-}: {
-  view: CheckoutView;
-  api: CheckoutApi;
-  quote: MethodQuote;
-  active: boolean;
-  ready: boolean;
-  step: WalletStep;
-  setStep: (s: WalletStep) => void;
-  refresh: () => void;
-  hasWallet: boolean | null;
-  onUseDeposit: (() => void) | null;
-}) {
-  const network = useNetwork(view);
-  const [error, setError] = useState<string | null>(null);
-  const amountText = formatToken(quote.remaining, view.token.symbol, view.token.decimals);
-  const busy = step !== "idle";
-  const failed = view.hsp?.status === "payment-failed";
-
-  async function pay() {
-    setError(null);
-    try {
-      setStep("connecting");
-      const from = await connectWallet();
-      setStep("switching");
-      await ensureChain(chainTarget(network));
-      const bal = await tokenBalance(view.token.address as Address, from).catch(() => null);
-      if (bal !== null && bal < quote.remaining) throw new Error(`This wallet holds less than ${amountText} on ${network.name}.`);
-      // An HSP quote lasts five minutes. If it ran out while the wallet was open, get a new one and sign that; an old
-      // signature is never sent again.
-      for (let attempt = 0; ; attempt++) {
-        const prepared = await api.hspPrepare!(view.id, from);
-        setStep("approving");
-        const signature = await signHspPayment(prepared.eip712, from);
-        setStep("submitting");
-        try {
-          await api.hspSubmit!(view.id, { payer: from, signature });
-          break;
-        } catch (e) {
-          if (!(e instanceof ApiError && e.code === "HSP_QUOTE_EXPIRED" && attempt === 0)) throw e;
-        }
-      }
-      refresh();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : walletErrorMessage(e));
-      setStep("idle");
-    }
-  }
-
-  if (!api.hspPrepare || !api.hspSubmit) {
-    return (
-      <Notice tone="neutral" icon={<ShieldCheck />}>
-        Pay with HSP needs a live server. Demo data has no HSP behind it.
-      </Notice>
-    );
-  }
-  if (hasWallet === false) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-4 py-6 text-center">
-          <StateIcon tone="neutral">
-            <Wallet />
-          </StateIcon>
-          <p className="text-sm font-medium">No browser wallet on this device</p>
-          <p className="max-w-[32ch] text-sm text-muted-foreground">Pay with HSP needs a browser wallet to sign. You can send the money from any wallet or exchange instead.</p>
-        </div>
-        {onUseDeposit && (
-          <BrandButton onClick={onUseDeposit}>
-            <QrCode /> Send to address instead
-          </BrandButton>
-        )}
-      </div>
-    );
-  }
-  const copy = walletStepCopy(active ? step : "idle", network.name);
-  const intro = hspProgress(null);
+/** What the wallet will be asked to sign, readable before approving: a transfer to the hub carrying this payment's terms. */
+function TransferDetails({ tx, view }: { tx: WalletTx; view: CheckoutView }) {
+  const call = tx.actions[0]!;
+  const t = view.wallet!.terms;
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-start gap-3 rounded-xl border p-3.5">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          <ShieldCheck className="size-4" aria-hidden />
-        </span>
-        <div className="min-w-0 text-sm">
-          <p className="font-medium">{intro.title}</p>
-          <p className="text-muted-foreground">{intro.hint}</p>
-        </div>
-      </div>
-      {failed && (
-        <Notice tone="warning" icon={<AlertTriangle />}>
-          {hspProgress("payment-failed").title}
-          {view.hsp?.status_reason ? `: ${view.hsp.status_reason}.` : "."} {hspProgress("payment-failed").hint}
-        </Notice>
-      )}
-      <AnimatePresence initial={false}>
-        {error && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={T.base} className="overflow-hidden">
-            <Notice tone="negative" icon={<XCircle />}>
-              {error} No money moved.
-            </Notice>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <div className="sticky bottom-0 z-10 -mx-1 bg-card px-1 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] lg:static lg:pb-0">
-        <BrandButton onClick={() => void pay()} disabled={busy || !ready} aria-describedby="hsp-step" className={cn(busy && "disabled:opacity-100")}>
-          <Swap id={busy ? step : ready ? "pay" : "quote"} mode="popLayout" className="flex items-center gap-2">
-            {busy ? (
-              <>
-                <LoaderCircle className="animate-spin" aria-hidden /> {copy.title}
-              </>
-            ) : (
-              <>
-                <ShieldCheck aria-hidden /> Pay {ready ? amountText : <Shimmer className="inline-block h-4 w-20 bg-white/30" />} with HSP
-              </>
-            )}
-          </Swap>
-        </BrandButton>
-        <p id="hsp-step" className="sr-only" aria-live="polite">
-          {busy ? copy.title : ""}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/** A submitted HSP payment: submitted, on chain, final, with HSP's transaction once there is one. */
-function HspProgress({ view }: { view: CheckoutView }) {
-  const network = useNetwork(view);
-  const p = hspProgress(view.hsp?.status ?? null);
-  const tx = view.hsp?.tx_hash ?? null;
-  return (
-    <div className="flex flex-col items-center gap-5 pt-2 text-center" role="status">
-      <StateIcon tone="info">
-        <LoaderCircle className="animate-spin" />
-      </StateIcon>
-      <div>
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">{p.title}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{p.hint}</p>
-      </div>
-      <ol className="grid w-full grid-cols-3 gap-2" aria-label="HSP progress">
-        {HSP_STEPS.map((label, i) => {
-          const done = p.step > i + 1 || (p.step === 3 && i === 2);
-          const now = p.step === i + 1;
-          return (
-            <li key={label} aria-current={now ? "step" : undefined} className="flex flex-col items-center gap-1.5">
-              <Bar fraction={done ? 1 : now ? 0.5 : 0} className="h-1 w-full" barClassName={done ? "bg-positive" : "bg-[var(--ink)]"} />
-              <span className={cn("flex items-center gap-1 text-xs", done || now ? "font-medium text-foreground" : "text-muted-foreground")}>
-                {done && <Check className="size-3 text-positive" aria-hidden />}
-                {label}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-      <Rows
-        className="w-full text-left"
-        rows={[
-          ["Amount", <TokenAmount key="a" atomic={view.amount_due} token={view.token} />],
-          ["Paid with", "HSP"],
-          ["Transaction", tx ? <TxLink key="t" hash={tx} href={explorerTx(network, tx)} /> : <span key="t" className="text-muted-foreground">Waiting for HSP</span>],
-        ]}
-      />
-      <p className="text-xs text-muted-foreground">We mark it paid as soon as the money reaches {view.merchant.name}. You can keep this page open.</p>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Send to address
-// ---------------------------------------------------------------------------
-
-function DepositPay({ view, api, quote, hasWallet }: { view: CheckoutView; api: CheckoutApi; quote: MethodQuote; hasWallet: boolean }) {
-  const network = useNetwork(view);
-  const calm = useCalm();
-  const t = view.token;
-  const remaining = quote.remaining;
-  const uri = manualPaymentUri({ ...view, amount_remaining: remaining.toString() });
-  const [qrOpen, setQrOpen] = useState(false);
-  const [claimed, setClaimed] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [num, sym] = splitToken(formatToken(remaining, t.symbol, t.decimals));
-
-  async function sendFromWallet() {
-    setError(null);
-    setSending(true);
-    try {
-      const from = await connectWallet();
-      await ensureChain(chainTarget(network));
-      setSent(await sendTransfer({ token: t.address as Address, to: view.deposit_address as Address, amount: remaining, from }));
-      setClaimed(true);
-    } catch (e) {
-      setError(walletErrorMessage(e));
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-end justify-between gap-3 rounded-xl border p-3.5">
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">Send exactly</p>
-          <p className={cn("mt-0.5 text-2xl font-semibold tracking-[-0.02em] transition-opacity", !quote.known && "opacity-50")}>
-            <RollingText text={num} /> <span className="text-base font-medium text-muted-foreground">{sym}</span>
-          </p>
-        </div>
-        <CopyAction value={plainAmount(remaining, t.decimals)} label="Copy amount" toast="Amount copied" className="shrink-0" />
-      </div>
-
-      <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-        {/* QR codes need a light quiet zone to scan in either theme. On a phone the payer usually pays from the same
-            device, so the code waits behind a toggle and the copy rows come first. */}
-        <motion.div
-          initial={calm ? false : { opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.24, ease: EASE_OUT }}
-          className={cn("relative shrink-0 overflow-hidden rounded-xl border bg-white p-2.5 shadow-sm max-sm:order-2", !qrOpen && "max-sm:hidden")}
-        >
-          <QRCodeSVG value={uri} size={136} level="H" marginSize={0} title={`Pay ${plainAmount(remaining, t.decimals)} ${t.symbol} to this payment's address`} />
-          <span className="absolute top-1/2 left-1/2 flex size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white">
-            <TokenMark symbol={t.symbol} className="size-6" />
+    <details className="group rounded-xl border text-sm">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-xl px-3.5 font-medium focus-visible:outline-2 [&::-webkit-details-marker]:hidden">
+        What your wallet will sign
+        <ArrowRight aria-hidden className="size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-90" />
+      </summary>
+      <dl className="grid gap-2.5 border-t px-3.5 py-3 text-xs">
+        <Row label="Transfer">
+          <TokenAmount atomic={t.amount} token={view.token} className="text-foreground" />
+        </Row>
+        <Row label="To the hub">
+          <AccountText value={view.hub} className="hash text-foreground" />
+        </Row>
+        <Row label="For">
+          <AccountText value={t.merchant} className="hash text-foreground" />
+        </Row>
+        <Row label="Call">
+          <span className="hash text-foreground">
+            {call.params.methodName} on {view.token.symbol}
           </span>
-          <Sweep />
-        </motion.div>
-        <div className="w-full min-w-0 flex-1 max-sm:order-1">
-          <p className="text-xs text-muted-foreground">To this one-time payment address</p>
-          <p className="hash mt-1 flex flex-wrap gap-x-1.5 text-[0.8125rem] leading-relaxed break-all" aria-label={`Payment address ${view.deposit_address}`}>
-            {groupAddress(view.deposit_address).map((g, i) => (
-              <span key={i}>{g}</span>
-            ))}
-          </p>
-          <CopyAction value={view.deposit_address} label="Copy address" toast="Address copied" className="mt-2 w-full" />
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={() => setQrOpen((v) => !v)}
-        aria-expanded={qrOpen}
-        className="-mt-1 inline-flex items-center gap-1.5 self-center rounded text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 sm:hidden"
-      >
-        <QrCode className="size-3.5" aria-hidden /> {qrOpen ? "Hide QR code" : "Show QR code to pay from another device"}
-      </button>
+        </Row>
+        <Row label="Valid until">
+          <span className="hash text-foreground">{formatDateTime(new Date(Number(t.expiry_ms)).toISOString())}</span>
+        </Row>
+      </dl>
+      <p className="border-t px-3.5 py-2.5 text-xs text-muted-foreground">The hub checks this business&apos;s signed terms and sends the money back if anything does not match.</p>
+    </details>
+  );
+}
 
-      <Notice tone="warning" icon={<AlertTriangle />}>
-        Send only <strong>{t.symbol}</strong> on <strong>{network.name}</strong>. Money sent in another token or on another network cannot be recovered.
-        <span className="mt-1 block text-[0.75rem] opacity-90">
-          {t.symbol} contract ends with <span className="hash">{t.address.slice(-6)}</span>
-        </span>
-      </Notice>
-
-      {error && (
-        <Notice tone="negative" icon={<XCircle />}>
-          {error} No money moved.
-        </Notice>
-      )}
-
-      <div className="min-h-[4.25rem]">
-        <Swap id={claimed ? "watching" : "actions"}>
-          {claimed ? (
-            <div className="flex items-start gap-3 rounded-xl border bg-muted/40 p-3.5" role="status">
-              <span className="mt-1.5 text-positive">
-                <PulseDot />
-              </span>
-              <div className="min-w-0 text-sm">
-                <p className="font-medium">Watching for your payment</p>
-                <p className="text-muted-foreground">
-                  We detect it automatically, usually seconds after it lands. Keep this page open.{" "}
-                  {sent && explorerTx(network, sent) && (
-                    <a href={explorerTx(network, sent)!} target="_blank" rel="noreferrer" className="font-medium text-foreground underline underline-offset-2">
-                      View transfer
-                    </a>
-                  )}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={() => setClaimed(true)}>
-                <Check /> I&apos;ve sent it
-              </Button>
-              {hasWallet && (
-                <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={() => void sendFromWallet()} disabled={sending}>
-                  {sending ? <LoaderCircle className="animate-spin" /> : <Send />}
-                  Send from wallet
-                </Button>
-              )}
-            </div>
-          )}
-        </Swap>
-      </div>
-
-      {api.mockDeposit && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-          <span>Demo data, simulate a payment:</span>
-          <button type="button" className="font-medium text-foreground underline-offset-2 hover:underline" onClick={() => void api.mockDeposit!(view.id, remaining.toString())}>
-            Full
-          </button>
-          <button type="button" className="font-medium text-foreground underline-offset-2 hover:underline" onClick={() => void api.mockDeposit!(view.id, ((remaining * 4n) / 5n).toString())}>
-            Partial
-          </button>
-        </div>
-      )}
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0">{children}</dd>
     </div>
   );
 }
@@ -1130,7 +720,7 @@ function ReceiptEmail({ view, api }: { view: CheckoutView; api: CheckoutApi }) {
 // ---------------------------------------------------------------------------
 
 function Confirming({ view, model }: { view: CheckoutView; model: CheckoutModel }) {
-  const network = useNetwork(view);
+  const network = useNetwork();
   const calm = useCalm();
   const conf = confirmationProgress(view);
   const href = view.tx_hash ? explorerTx(network, view.tx_hash) : null;
@@ -1206,17 +796,14 @@ function TxLink({ hash, href }: { hash: string; href: string | null }) {
 
 function Success({ view, model, watched }: { view: CheckoutView; model: CheckoutModel; watched: boolean }) {
   const back = safeRedirectUrl(view.success_url);
-  const network = useNetwork(view);
+  const network = useNetwork();
   const calm = useCalm();
   const payer = view.payer ?? null;
   const payout = view.payout ?? null;
   const t = view.token;
   const rows: [ReactNode, ReactNode][] = [
     ["Amount", <TokenAmount key="a" atomic={view.amount_paid} token={t} />],
-    ["Paid with", view.method === "wallet" ? "Browser wallet" : view.method === "hsp" ? "HSP" : "Sent to address"],
-    ...(view.hsp?.status && view.hsp.status !== "order-created"
-      ? ([["HSP status", hspProgress(view.hsp.status).title]] as [ReactNode, ReactNode][])
-      : []),
+    ["Paid with", view.method === "voucher" ? "AI agent with a Budget" : "NEAR wallet"],
     ["Network", network.name],
     ...(payer ? ([["From", <AddressValue key="f" address={payer} />]] as [ReactNode, ReactNode][]) : []),
     ["To", payout ? <AddressValue key="to" address={payout} label={view.merchant.name} /> : view.merchant.name],
@@ -1269,11 +856,12 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
   );
 }
 
+/** A NEAR account on the receipt: one line, never broken at "-" or ".", with the full value in the title and copy. */
 function AddressValue({ address, label }: { address: string; label?: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5" title={address}>
+    <span className="inline-flex max-w-full min-w-0 flex-col items-end gap-0.5">
       {label && <span>{label}</span>}
-      <span className={cn("hash text-[0.8125rem]", label && "text-muted-foreground")}>{shortAddress(address)}</span>
+      <AccountText value={address} className={cn("hash text-[0.8125rem]", label && "text-muted-foreground")} />
     </span>
   );
 }

@@ -1,9 +1,8 @@
 "use client";
 
-/** Help and keyboard shortcuts (`?`, PRODUCT.md section 7), with links to the docs and the HashKey Chain page. */
+/** Help and keyboard shortcuts (`?`, PRODUCT.md section 7), with a link to the docs. */
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Blocks, BookOpen } from "lucide-react";
+import { BookOpen } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { goShortcuts, navPages } from "@/lib/nav";
 import { useNavModel } from "./sidebar";
@@ -63,9 +62,6 @@ export function ShortcutsSheet() {
           ))}
         </ul>
         <div className="mt-2 flex flex-wrap gap-2">
-          <Link href="/developers/hashkey" onClick={() => setOpen(false)} className="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors hover:bg-muted">
-            <Blocks className="size-3.5" aria-hidden /> HashKey Chain resources
-          </Link>
           {DOCS_URL && (
             <a href={DOCS_URL} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors hover:bg-muted">
               <BookOpen className="size-3.5" aria-hidden /> Payminto docs

@@ -424,54 +424,57 @@ export function Sidebar() {
   const access = useAccess();
   const model = useNavModel();
   const [rail, toggleRail] = useRail(userKey(access));
+  // The column carries the rail colour and border down the whole page; the sidebar itself stays pinned to the viewport.
   return (
-    <aside
-      aria-label="Sidebar"
-      data-rail={rail || undefined}
-      className={cn(
-        "sticky top-0 hidden h-dvh flex-col gap-3 border-r bg-rail py-4 transition-[width,padding] duration-200 ease-out lg:flex",
-        rail ? "w-16 items-center px-3" : "w-[15.5rem] px-3",
-      )}
-    >
-      <AccountSwitcher compact={rail} />
-      {rail ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button type="button" onClick={() => openPalette()} aria-label="Search or jump to" className="flex size-10 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:text-foreground">
-              <Search className="size-4" aria-hidden />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8}>
-            Search <kbd className="hash ml-1 text-[0.625rem]">{isMac() ? "⌘K" : "Ctrl K"}</kbd>
-          </TooltipContent>
-        </Tooltip>
-      ) : (
-        <SearchField />
-      )}
-      <ScrollArea className={rail ? "w-full" : undefined}>{rail ? <RailNav model={model} /> : <NavSections model={model} />}</ScrollArea>
-      <div className={cn("flex flex-col gap-2 border-t pt-3", rail ? "w-full items-center" : "")}>
-        <FooterLinks model={model} rail={rail} />
-        <div className={cn("flex items-center gap-1", rail ? "flex-col" : "")}>
-          <UserMenu compact={rail} />
+    <div className="hidden shrink-0 border-r bg-rail lg:block">
+      <aside
+        aria-label="Sidebar"
+        data-rail={rail || undefined}
+        className={cn(
+          "sticky top-0 flex h-dvh flex-col gap-3 bg-rail py-4 transition-[width,padding] duration-200 ease-out",
+          rail ? "w-16 items-center px-3" : "w-[15.5rem] px-3",
+        )}
+      >
+        <AccountSwitcher compact={rail} />
+        {rail ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={toggleRail}
-                aria-label={rail ? "Expand sidebar" : "Collapse sidebar"}
-                aria-keyshortcuts="["
-                className="flex size-8 shrink-0 items-center justify-center rounded-md text-subtle transition-colors hover:bg-muted hover:text-foreground"
-              >
-                {rail ? <PanelLeftOpen className="size-4" aria-hidden /> : <PanelLeftClose className="size-4" aria-hidden />}
+              <button type="button" onClick={() => openPalette()} aria-label="Search or jump to" className="flex size-10 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:text-foreground">
+                <Search className="size-4" aria-hidden />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">
-              {rail ? "Expand sidebar" : "Collapse sidebar"} <kbd className="hash ml-1 text-[0.625rem]">[</kbd>
+            <TooltipContent side="right" sideOffset={8}>
+              Search <kbd className="hash ml-1 text-[0.625rem]">{isMac() ? "⌘K" : "Ctrl K"}</kbd>
             </TooltipContent>
           </Tooltip>
+        ) : (
+          <SearchField />
+        )}
+        <ScrollArea className={rail ? "w-full" : undefined}>{rail ? <RailNav model={model} /> : <NavSections model={model} />}</ScrollArea>
+        <div className={cn("flex flex-col gap-2 border-t pt-3", rail ? "w-full items-center" : "")}>
+          <FooterLinks model={model} rail={rail} />
+          <div className={cn("flex items-center gap-1", rail ? "flex-col" : "")}>
+            <UserMenu compact={rail} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={toggleRail}
+                  aria-label={rail ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-keyshortcuts="["
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-subtle transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {rail ? <PanelLeftOpen className="size-4" aria-hidden /> : <PanelLeftClose className="size-4" aria-hidden />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                {rail ? "Expand sidebar" : "Collapse sidebar"} <kbd className="hash ml-1 text-[0.625rem]">[</kbd>
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </div>
   );
 }
 

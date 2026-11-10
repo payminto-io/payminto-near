@@ -1,19 +1,14 @@
-import { concat, keccak256, type Hex } from "viem";
+import { compareAscii, hashPair, type Id32 } from "@payminto/protocol";
 
-export type PathStep = { level: number; node: Hex; sibling: Hex; parent: Hex; siblingOnLeft: boolean };
+export type PathStep = { level: number; node: Id32; sibling: Id32; parent: Id32; siblingOnLeft: boolean };
 
-/**
- * Replays an OpenZeppelin Merkle proof (sorted-pair keccak256) from leaf to root, one step per level,
- * so the screen can show every intermediate hash rather than just "valid".
- */
-export function replayProof(leaf: Hex, proof: readonly Hex[]): { steps: PathStep[]; root: Hex } {
-  let node = leaf.toLowerCase() as Hex;
+/** Replays a receipt proof from leaf to root, one step per level, so the screen can show every intermediate hash. */
+export function replayProof(leaf: Id32, proof: readonly Id32[]): { steps: PathStep[]; root: Id32 } {
+  let node = leaf;
   const steps: PathStep[] = [];
-  proof.forEach((raw, level) => {
-    const sibling = raw.toLowerCase() as Hex;
-    const siblingOnLeft = BigInt(sibling) < BigInt(node);
-    const parent = keccak256(siblingOnLeft ? concat([sibling, node]) : concat([node, sibling]));
-    steps.push({ level, node, sibling, parent, siblingOnLeft });
+  proof.forEach((sibling, level) => {
+    const parent = hashPair(node, sibling);
+    steps.push({ level, node, sibling, parent, siblingOnLeft: compareAscii(sibling, node) < 0 });
     node = parent;
   });
   return { steps, root: node };

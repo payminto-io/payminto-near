@@ -1,6 +1,5 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { getAddress } from "viem";
 import { FlowGraph, wrapLabel } from "@/components/app/flow-graph";
 import { StatStrip } from "@/components/app/stat-strip";
 
@@ -19,8 +18,8 @@ beforeAll(() => {
   globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver;
 });
 
-const A = getAddress("0x00000000000000000000000000000000000000a1");
-const MD = getAddress("0x00000000000000000000000000000000000000d1");
+const A = "treasury.testnet";
+const MD = "market-data.testnet";
 const names: Record<string, string> = { [A]: "Treasury Agent", [MD]: "Market Data" };
 
 describe("FlowGraph", () => {

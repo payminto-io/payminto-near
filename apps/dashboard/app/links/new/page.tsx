@@ -6,10 +6,10 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ChevronDown, Monitor, Smartphone } from "lucide-react";
-import { toHex } from "viem";
+import { NEAR_TESTNET_USDC, toHex } from "@payminto/protocol";
 import { useApi } from "@/lib/session";
 import { gk, useMerchant } from "@/lib/gateway-queries";
-import { chainIdOf, useInfo, useToken } from "@/lib/queries";
+import { useInfo, useToken } from "@/lib/queries";
 import { gatewayNetwork, linkExpiry, parseAmountInput, safeRedirectUrl, type ExpiryChoice } from "@/lib/gateway";
 import { ExpiryField } from "@/components/gateway/link-expiry";
 import { cn } from "@/lib/utils";
@@ -48,7 +48,7 @@ export default function NewLinkPage() {
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [idem] = useState(() => toHex(crypto.getRandomValues(new Uint8Array(16))).slice(2));
+  const [idem] = useState(() => toHex(crypto.getRandomValues(new Uint8Array(16))));
 
   const fixed = kind === "fixed" ? parseAmountInput(amount, t.decimals) : null;
   const minP = kind === "open" && min ? parseAmountInput(min, t.decimals) : null;
@@ -72,7 +72,6 @@ export default function NewLinkPage() {
   const preview = {
     merchant: { name: brand.name, support_email: brand.support_email, brand_color: brand.brand_color, logo_url: brand.logo_url },
     livemode: brand.livemode,
-    chain_id: chainIdOf(info.data) || undefined,
     title: title.trim() || "Untitled link",
     description: description.trim() || null,
     // A fixed link with no amount typed yet previews as 0.00 rather than flipping to "Customer chooses".
@@ -82,9 +81,9 @@ export default function NewLinkPage() {
     collect_email: collectEmail,
     collect_name: collectName,
     active: true,
-    token: { address: info.data?.token.address ?? "0x0000000000000000000000000000000000000000", symbol: t.symbol, decimals: t.decimals },
+    token: { address: info.data?.token.address ?? NEAR_TESTNET_USDC, symbol: t.symbol, decimals: t.decimals },
   };
-  const network = gatewayNetwork(chainIdOf(info.data), info.data);
+  const network = gatewayNetwork(info.data);
 
   async function create() {
     setSubmitted(true);

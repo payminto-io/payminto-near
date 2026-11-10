@@ -5,7 +5,7 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, Plus, Store } from "lucide-react";
-import { getAddress, isAddress, type Address as Addr } from "viem";
+import { isAccountId } from "@payminto/protocol";
 import { toAtomic } from "@payminto/protocol";
 import { useApi, useCan } from "@/lib/session";
 import { qk, useProviders, useToken } from "@/lib/queries";
@@ -44,7 +44,7 @@ function Providers() {
     <>
       <PageHeader
         title="Paid services"
-        description="APIs, tools and agents that charge AI agents per call. Each one is paid straight into its own wallet when a settlement runs."
+        description="APIs, tools and agents that AI agents pay per Call. A settlement batch credits each Payee on the hub, and anyone can pay the credit out to the Payee's account."
         actions={
           can("agents.manage") && (
             <Button onClick={() => setOpen(true)}>
@@ -95,7 +95,7 @@ function ProviderRow({ p, total }: { p: Provider; total: bigint }) {
         <div>
           <dt className="text-xs text-muted-foreground">Price</dt>
           <dd className="font-medium">
-            <Money atomic={p.priceAtomic} /> <span className="text-xs font-normal text-muted-foreground">per charge</span>
+            <Money atomic={p.priceAtomic} /> <span className="text-xs font-normal text-muted-foreground">per Call</span>
           </dd>
         </div>
         <div>
@@ -108,7 +108,7 @@ function ProviderRow({ p, total }: { p: Provider; total: bigint }) {
       <div className="min-w-0">
         <div className="flex items-baseline justify-between gap-2 text-sm">
           <span className="text-xs text-muted-foreground">Revenue</span>
-          <Money atomic={settled + pending} maxFraction={4} className="font-semibold" />
+          <Money atomic={settled + pending} className="font-semibold" />
         </div>
         <div className="mt-2 flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-muted" aria-hidden>
           <span className="h-full rounded-l-full bg-positive" style={{ width: `${share(settled)}%` }} />
@@ -116,10 +116,10 @@ function ProviderRow({ p, total }: { p: Provider; total: bigint }) {
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-positive" /> Settled <Money atomic={settled} maxFraction={4} className="text-foreground" />
+            <span className="size-2 rounded-full bg-positive" /> Settled <Money atomic={settled} className="text-foreground" />
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-warning" /> Pending <Money atomic={pending} maxFraction={4} className="text-foreground" />
+            <span className="size-2 rounded-full bg-warning" /> Pending <Money atomic={pending} className="text-foreground" />
           </span>
         </div>
         <p className="num mt-1 text-xs text-subtle">{formatInt(p.calls24h)} calls in the last 24h</p>
@@ -145,7 +145,7 @@ function RegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   }
   const errors = {
     name: form.name.trim() ? null : "Required.",
-    payee: isAddress(form.payee.trim()) ? null : "Enter the wallet that receives payouts.",
+    payee: isAccountId(form.payee.trim()) ? null : "Enter the NEAR account that receives payouts.",
     price: priceAtomic && priceAtomic > 0n ? null : `A price in ${token.symbol}, for example 0.01.`,
     resource: /^https?:\/\//.test(form.resource.trim()) ? null : "The URL agents call, starting with http.",
   };
@@ -156,7 +156,7 @@ function RegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
       api.createProvider({
         name: form.name.trim(),
         description: form.description.trim(),
-        payee: getAddress(form.payee.trim()) as Addr,
+        payee: form.payee.trim(),
         priceAtomic: priceAtomic!.toString(),
         resource: form.resource.trim(),
         category: form.category.trim() || "Other",
@@ -212,7 +212,7 @@ function RegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
           <form onSubmit={submit} noValidate className="grid gap-4">
             <DialogHeader>
               <DialogTitle>New paid service</DialogTitle>
-              <DialogDescription>Agents pay this service per call; the money goes straight to its wallet.</DialogDescription>
+              <DialogDescription>Agents pay this service per Call; each settlement batch credits it on the hub.</DialogDescription>
             </DialogHeader>
             <FormRow id="p-name" label="Name" error={touched ? errors.name : null}>
               <Input id="p-name" value={form.name} onChange={set("name")} placeholder="Market Data" aria-invalid={Boolean(touched && errors.name)} />
@@ -221,7 +221,7 @@ function RegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
               <Textarea id="p-desc" rows={2} value={form.description} onChange={set("description")} placeholder="What one paid call returns" />
             </FormRow>
             <div className="grid gap-4 sm:grid-cols-2">
-              <FormRow id="p-price" label="Price per charge" error={touched ? errors.price : null}>
+              <FormRow id="p-price" label="Price per Call" error={touched ? errors.price : null}>
                 <div className="relative">
                   <Input id="p-price" inputMode="decimal" value={form.price} onChange={set("price")} className="num pr-14" aria-invalid={Boolean(touched && errors.price)} />
                   <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">{token.symbol}</span>
@@ -232,7 +232,7 @@ function RegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
               </FormRow>
             </div>
             <FormRow id="p-payee" label="Service wallet" error={touched ? errors.payee : null}>
-              <Input id="p-payee" value={form.payee} onChange={set("payee")} placeholder="0x..." className="hash" aria-invalid={Boolean(touched && errors.payee)} />
+              <Input id="p-payee" value={form.payee} onChange={set("payee")} placeholder="service.testnet" className="hash" aria-invalid={Boolean(touched && errors.payee)} />
             </FormRow>
             <FormRow id="p-res" label="Resource URL" error={touched ? errors.resource : null}>
               <Input id="p-res" value={form.resource} onChange={set("resource")} placeholder="https://api.example.com/quote" className="hash" aria-invalid={Boolean(touched && errors.resource)} />
