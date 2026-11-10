@@ -123,6 +123,10 @@ pub struct Budget {
     pub policy_hash: Id32,
     /// True when the Budget can pay any account; `payees` is then empty.
     pub allow_any_payee: bool,
+    /// The most distinct payees the Budget can ever pay: the length of `payees`, or the declared `max_payees`.
+    pub max_payees: u32,
+    /// Distinct payees the Budget has paid so far: one per `settled` entry it ever wrote. Never above `max_payees`.
+    pub payees_paid: u32,
     /// Storage bytes the owner prepaid at `open_budget` for this Budget's settlement records and not used yet.
     /// `settle_batch` and `settle_own` draw the bytes of each new `(Budget, payee)` pair from it, a removed credit
     /// entry the Budget paid for returns its bytes, and `prune` refunds what is left to the owner.
@@ -255,6 +259,8 @@ pub struct Config {
     pub pending_admin: Option<AccountId>,
     pub token: AccountId,
     pub network: String,
+    /// The smallest checkout payment the hub accepts, in token base units. Smaller payments are refunded.
+    pub min_payment: U128,
 }
 
 /// The tagged JSON accepted as `msg` by `ft_on_transfer`.

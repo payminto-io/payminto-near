@@ -281,9 +281,9 @@ fn a5_one_unit_claims_to_new_payees_cost_the_settler_permanent_storage() {
         "64-character payees cost exactly a pair each"
     );
 
-    // A 101st new payee is beyond what the owner prepaid, and the batch is refused whole.
+    // A 101st new payee is beyond what the owner declared and prepaid, and the batch is refused whole.
     let extra = format!("{:064x}", 1000);
-    h.expect_code(INSUFFICIENT_RESERVE, |h| {
+    h.expect_code(TOO_MANY_PAYEES, |h| {
         h.settle(
             id(2),
             vec![claim(&a, &extra, &key, 1, 1)],

@@ -50,6 +50,15 @@ pub const MAX_ANY_PAYEES: u32 = 256;
 pub const MAX_PAYOUT_ACCOUNTS: usize = 10;
 /// Payees one `prune` call can clear.
 pub const MAX_PRUNE_PAYEES: usize = 100;
+/// The smallest checkout payment a new hub accepts, in token base units: 0.01 USDC. Every accepted payment writes a
+/// permanent record on the checkout settler's storage balance, so a floor keeps one-unit payments from burning it.
+/// The admin can change it with `set_min_payment`.
+pub const DEFAULT_MIN_PAYMENT: u128 = 10_000;
+/// The latest `valid_until` the hub accepts, in Unix milliseconds: 10^13 ms is in the year 2286. Any real expiry in
+/// milliseconds is far below it, while the same time in microseconds (about 1.8 * 10^15 today) or nanoseconds
+/// (1.8 * 10^18) is far above it, so a client that sends the wrong unit is refused instead of opening a Budget that
+/// never expires.
+pub const MAX_VALID_UNTIL_MS: u64 = 10_000_000_000_000;
 
 /// Receipt keys one settler can register. Keys are append-only, so the cap bounds what a settler can make the hub
 /// store and what a seller has to look through.
@@ -102,6 +111,10 @@ pub struct Hub {
     network: String,
     settlers: LookupSet<AccountId>,
     checkout: Option<Checkout>,
+    /// Named by the admin's `set_checkout_key`; becomes `checkout` when its settler calls `accept_checkout`.
+    pending_checkout: Option<Checkout>,
+    /// The smallest checkout payment accepted, in token base units.
+    min_payment: u128,
     budgets: LookupMap<Id32, Budget>,
     settled: LookupMap<(Id32, AccountId), u128>,
     credits: LookupMap<AccountId, Credit>,
@@ -132,6 +145,8 @@ impl Hub {
             network,
             settlers: LookupSet::new(StorageKey::Settlers),
             checkout: None,
+            pending_checkout: None,
+            min_payment: DEFAULT_MIN_PAYMENT,
             budgets: LookupMap::new(StorageKey::Budgets),
             settled: LookupMap::new(StorageKey::Settled),
             credits: LookupMap::new(StorageKey::Credits),

@@ -18,7 +18,7 @@ use crate::events::{
 use crate::storage::{refund, storage_cost};
 use crate::types::*;
 use crate::{
-    BASE_GAS, CALLBACK_GAS, EXPIRY_GRACE_MS, Hub, MAX_ANY_PAYEES, MAX_PAYEES, MAX_PRUNE_PAYEES, PAIR_BYTES,
+    BASE_GAS, CALLBACK_GAS, Hub, MAX_ANY_PAYEES, MAX_PAYEES, MAX_PRUNE_PAYEES, MAX_VALID_UNTIL_MS, PAIR_BYTES,
     PAYOUT_ACCOUNT_GAS, REVOKE_BYTES, add, canonicalize_payees, now_ms, require_gas, settle_deadline, sub,
 };
 
@@ -36,9 +36,12 @@ impl Hub {
         let mut terms = terms;
         let now = now_ms();
         require!(
-            terms.cap.0 > 0 && terms.valid_until.0 > now && terms.valid_until.0 <= u64::MAX - EXPIRY_GRACE_MS,
+            terms.cap.0 > 0 && terms.valid_until.0 > now && terms.valid_until.0 <= MAX_VALID_UNTIL_MS,
             INVALID_BUDGET
         );
+        // The hub and the token can never call `settle_batch`, so a Budget naming them could only be settled by its
+        // payees.
+        require!(!self.is_reserved(&terms.settler), INVALID_BUDGET);
         terms.payees = canonicalize_payees(terms.payees);
         let slots = if terms.allow_any_payee {
             require!(
@@ -81,6 +84,8 @@ impl Hub {
                 payees: terms.payees,
                 policy_hash: terms.policy_hash,
                 allow_any_payee: terms.allow_any_payee,
+                max_payees: slots as u32,
+                payees_paid: 0,
                 storage_reserve_bytes: U64(reserve),
             },
         );

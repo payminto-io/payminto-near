@@ -1,6 +1,8 @@
 //! NEP-297 events: every state change the hub makes is logged as
-//! `EVENT_JSON:{"standard":"payminto","version":"1.0.0","event":"<name>","data":[...]}`, so an indexer can follow the
-//! hub without polling its views. Amounts and times are decimal strings, ids and keys lowercase hex, as in the views.
+//! `EVENT_JSON:{"standard":"payminto","version":"1.0.0","event":"<name>","data":[...]}`, and a call that changes
+//! nothing logs nothing. Amounts and times are decimal strings, ids and keys lowercase hex, as in the views.
+//! `batch_settled` is a summary: the per-Budget and per-account amounts of a batch are its `claims` and `expected_net`
+//! arguments, which are public in the transaction, so an indexer reads them there (or reads the views).
 //!
 //! Invariant owned here: logging never panics, so a callback that emits an event can still never fail.
 
@@ -103,7 +105,13 @@ event!(
 );
 event!(
     /// `settle_own`.
-    ClaimSettledByPayee, "claim_settled_by_payee" { budget_id: Id32, payee: AccountId, cumulative: U128, amount: U128 }
+    ClaimSettledByPayee, "claim_settled_by_payee" {
+        budget_id: Id32,
+        payee: AccountId,
+        cumulative: U128,
+        amount: U128,
+        storage_reserve_bytes: U64,
+    }
 );
 event!(
     /// One account `payout` sent credit to.
@@ -122,8 +130,20 @@ event!(
     SettlerSet, "settler_set" { account: AccountId, allowed: bool }
 );
 event!(
-    /// `set_checkout_key`.
+    /// `set_checkout_key`: the admin proposes a checkout key and settler. Nothing changes until the settler accepts.
+    CheckoutKeyProposed, "checkout_key_proposed" { key: Id32, settler: AccountId }
+);
+event!(
+    /// `accept_checkout`: the settler took the checkout role, and payments under this key now draw on its balance.
     CheckoutKeySet, "checkout_key_set" { key: Id32, settler: AccountId }
+);
+event!(
+    /// `set_min_payment`.
+    MinPaymentSet, "min_payment_set" { amount: U128 }
+);
+event!(
+    /// A credit entry a Budget paid for was removed, and its bytes went back to the Budget's storage reserve.
+    StorageReserveReturned, "storage_reserve_returned" { budget_id: Id32, bytes: U64, storage_reserve_bytes: U64 }
 );
 event!(
     /// `register_receipt_key`.
@@ -161,7 +181,10 @@ pub const ALL: &[&str] = &[
     PayoutFinished::EVENT,
     PaymentReceived::EVENT,
     SettlerSet::EVENT,
+    CheckoutKeyProposed::EVENT,
     CheckoutKeySet::EVENT,
+    MinPaymentSet::EVENT,
+    StorageReserveReturned::EVENT,
     ReceiptKeyRegistered::EVENT,
     StorageFunded::EVENT,
     StorageWithdrawn::EVENT,

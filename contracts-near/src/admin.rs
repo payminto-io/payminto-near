@@ -23,14 +23,16 @@ impl Hub {
     pub fn set_settler(&mut self, account: AccountId, allowed: bool) {
         let ctx = self.require_admin();
         let before = self.storage_mark();
-        if allowed {
-            self.settlers.insert(account.clone());
+        let changed = if allowed {
+            self.settlers.insert(account.clone())
         } else {
-            self.settlers.remove(&account);
-        }
+            self.settlers.remove(&account)
+        };
         let grown = self.storage_growth(before);
         self.charge_deposit_keep_one(ctx.admin(), grown);
-        SettlerSet { account, allowed }.emit();
+        if changed {
+            SettlerSet { account, allowed }.emit();
+        }
     }
 
     /// Registers a key the calling settler signs acceptances with, which `settle_own` checks.
@@ -62,14 +64,17 @@ impl Hub {
             require!(*account != env::current_account_id(), ADMIN_IS_HUB);
         }
         let before = borsh_len(&self.pending_admin);
+        let changed = self.pending_admin != new_admin;
         self.pending_admin = new_admin.clone();
         let after = borsh_len(&self.pending_admin);
         self.charge_deposit_keep_one(ctx.admin(), after.saturating_sub(before));
-        AdminProposed {
-            admin: ctx.admin().clone(),
-            pending_admin: new_admin,
+        if changed {
+            AdminProposed {
+                admin: ctx.admin().clone(),
+                pending_admin: new_admin,
+            }
+            .emit();
         }
-        .emit();
     }
 
     /// Step two: the proposed account becomes the admin. Exactly one yoctoNEAR, so only a full-access key can accept.

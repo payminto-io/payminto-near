@@ -4,13 +4,13 @@
 //! payments, `fund_from_credit` and confirmed transfers. A payout moves credit to in-flight before its promise, and its
 //! callback either confirms the transfer or restores the credit; it never panics after its guard.
 
-use near_sdk::json_types::U128;
+use near_sdk::json_types::{U64, U128};
 use near_sdk::{AccountId, Gas, NearToken, Promise, env, ext_contract, near, require};
 
 #[allow(unused_imports)]
 use crate::HubExt;
 use crate::errors::*;
-use crate::events::{PayoutFinished, PayoutStarted};
+use crate::events::{PayoutFinished, PayoutStarted, StorageReserveReturned};
 use crate::types::*;
 use crate::{
     BASE_GAS, CALLBACK_GAS, FT_TRANSFER_GAS, Hub, MAX_PAYOUT_ACCOUNTS, PAYOUT_ACCOUNT_GAS, add, require_gas, sub,
@@ -141,6 +141,12 @@ impl Hub {
                 // Fixed-width record: adding to the reserve never grows storage.
                 if let Some(budget) = self.budgets.get_mut(&id) {
                     budget.storage_reserve_bytes.0 = budget.storage_reserve_bytes.0.saturating_add(freed);
+                    StorageReserveReturned {
+                        budget_id: id,
+                        bytes: U64(freed),
+                        storage_reserve_bytes: budget.storage_reserve_bytes,
+                    }
+                    .emit();
                 }
             }
             None => {}

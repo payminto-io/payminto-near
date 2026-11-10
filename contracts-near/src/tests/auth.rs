@@ -183,6 +183,25 @@ fn guarded() -> Vec<(&'static str, Vec<Role>, &'static str, Call)> {
             }),
         ),
         (
+            // Nothing is proposed, so every role is wrong, the settlers included.
+            "accept_checkout",
+            vec![],
+            NOT_PENDING_CHECKOUT,
+            Box::new(|h, who, _, _| {
+                h.ctx(who, 1);
+                h.hub.accept_checkout(pk(&agent(9)));
+            }),
+        ),
+        (
+            "set_min_payment",
+            vec![Role::Admin],
+            NOT_ADMIN,
+            Box::new(|h, who, _, _| {
+                h.ctx(who, 1);
+                h.hub.set_min_payment(U128(5));
+            }),
+        ),
+        (
             "register_receipt_key",
             vec![Role::Settler, Role::OtherSettler],
             NOT_SETTLER,
@@ -212,6 +231,7 @@ const ANYONE: &[&str] = &[
     "is_settler",
     "checkout_key",
     "checkout_settler",
+    "pending_checkout",
     "totals",
     "config",
     "verify_receipt",
