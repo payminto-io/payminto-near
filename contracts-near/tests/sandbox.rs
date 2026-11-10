@@ -225,7 +225,7 @@ async fn callbacks_cannot_be_called_directly() -> TestResult<()> {
             json!({ "account": attacker, "amount": "1000" }),
         )
         .await?;
-    result.assert_failure();
+    assert_refused(result, "NOT_SELF");
     assert_eq!(w.credit(&attacker).await?, 0);
     let result = w
         .call(
@@ -235,7 +235,7 @@ async fn callbacks_cannot_be_called_directly() -> TestResult<()> {
             json!({ "budget_id": id32(1), "amount": "1000" }),
         )
         .await?;
-    result.assert_failure();
+    assert_refused(result, "NOT_SELF");
     Ok(())
 }
 
