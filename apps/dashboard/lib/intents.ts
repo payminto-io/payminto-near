@@ -5,7 +5,7 @@
  */
 import { isOriginAddress, originOf, type AddressFormat } from "@payminto/near-addons/intents";
 import { countdownTone, formatCountdown, secondsLeft } from "./checkout";
-import type { CheckoutView, IntentsAmount, IntentsOrigin, IntentsPayout, IntentsQuote, IntentsQuoteStatus, Payment } from "./schemas";
+import type { CheckoutView, IntentsAmount, IntentsOrigin, IntentsPayout, IntentsQuote, IntentsQuoteStatus, IntentsSummary, Payment, PublicLinkIntents } from "./schemas";
 
 /** The two ways a person pays on the hosted checkout, in order: the NEAR wallet always first. */
 export type PayTab = "wallet" | "oneclick";
@@ -288,12 +288,30 @@ export function verificationText(v: IntentsQuote["verification"]): string {
   return "Not delivered yet";
 }
 
-/** "Any chain - USDC on Base" when the paying quote is known, "Any chain - from Base" from the payer alone. */
-export function anyChainMethodLabel(p: Pick<Payment, "method" | "payer">, quotes: readonly Pick<IntentsQuote, "status" | "origin">[] = []): string {
+/**
+ * "Any chain - USDC on Base" when the paying quote is known (a list item's `intents` summary, or the detail's quotes),
+ * "Any chain - from Base" from the payer alone.
+ */
+export function anyChainMethodLabel(p: Pick<Payment, "method" | "payer"> & { intents?: Pick<IntentsSummary, "origin"> | null }, quotes: readonly Pick<IntentsQuote, "status" | "origin">[] = []): string {
   const paid = quotes.find((q) => q.status === "confirmed") ?? quotes.find((q) => q.status === "delivered") ?? null;
   if (paid) return `Any chain - ${paid.origin.symbol} on ${paid.origin.chain_name}`;
+  if (p.intents) return `Any chain - ${p.intents.origin.symbol} on ${p.intents.origin.chain_name}`;
   const code = p.payer && p.method === "oneclick" ? /^([a-z]+):/.exec(p.payer)?.[1] : undefined;
   return code ? `Any chain - from ${chainName(code)}` : "Any chain (NEAR Intents)";
+}
+
+/** Whether a list row names the any-chain origin: paid that way, or a buyer asked for a deposit address. */
+export function showsAnyChain(p: Pick<Payment, "method"> & { intents?: unknown }): boolean {
+  return p.method === "oneclick" || Boolean(p.intents);
+}
+
+/** A NEAR mainnet transaction on NearBlocks. */
+export const mainnetTxUrl = (hash: string): string => `https://nearblocks.io/txns/${hash}`;
+
+/** The link page's words on how the buyer pays next, from the link's `intents`. */
+export function linkPayCopy(intents: PublicLinkIntents | null | undefined): { lead: string; chip: string } {
+  if (intents?.offered) return { lead: "Next you pay from your NEAR wallet, or from another chain with USDC, USDT or ETH through NEAR Intents.", chip: "Pay from NEAR or any chain" };
+  return { lead: "Next you pay from your NEAR wallet. A plain transfer from an exchange cannot carry this order, so it would not count as this payment.", chip: "Pay from your NEAR wallet" };
 }
 
 /** The other chain's address in a `base:0x...` payer, for display. */

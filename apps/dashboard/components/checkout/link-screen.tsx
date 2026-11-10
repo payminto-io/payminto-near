@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { ArrowRight, LoaderCircle, Mail, ShieldCheck, Store, Wallet, XCircle } from "lucide-react";
+import { ArrowRight, Globe, LoaderCircle, Mail, ShieldCheck, Store, Wallet, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatToken } from "@/lib/format";
 import { gatewayNetwork, parseAmountInput, plainAmount } from "@/lib/gateway";
 import { amountPresets, rememberReceiptEmail } from "@/lib/checkout";
+import { linkPayCopy } from "@/lib/intents";
 import { ApiError } from "@/lib/http";
 import { captureOpenerOrigin } from "@/lib/embed";
 import { useCheckoutApi } from "@/lib/use-checkout";
@@ -129,7 +130,7 @@ export function LinkSummary({ link, networkName, chosen = null }: { link: Summar
 }
 
 type LinkBody = { amount?: string; email?: string; name?: string };
-type PanelLink = Pick<PublicLink, "active" | "merchant" | "amount" | "min_amount" | "max_amount" | "collect_email" | "collect_name" | "token">;
+type PanelLink = Pick<PublicLink, "active" | "merchant" | "amount" | "min_amount" | "max_amount" | "collect_email" | "collect_name" | "token"> & { intents?: PublicLink["intents"] };
 
 /** Amount (when the payer chooses), email and name as the business configured, then one button to the checkout. */
 export function LinkPanel({
@@ -188,6 +189,8 @@ export function LinkPanel({
   const atomic = open ? (parsed?.ok ? parsed.atomic : null) : BigInt(link.amount!);
   const amountError = open && touched && parsed && !parsed.ok ? parsed.error : null;
   const fmt = (v: bigint) => formatToken(v, t.symbol, t.decimals);
+  // "Pay from your NEAR wallet" only when that is the one way: a link that offers Any chain says so.
+  const copy = linkPayCopy(link.intents);
   const choose = (text: string) => {
     setAmount(text);
     if (!onAmountChange) return;
@@ -220,7 +223,7 @@ export function LinkPanel({
       )}
       <div>
         <h1 className="text-lg font-semibold tracking-[-0.01em]">{open ? "Choose an amount" : link.collect_email || link.collect_name ? "Your details" : "Ready to pay"}</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">Next you pay from your NEAR wallet. A plain transfer from an exchange cannot carry this order, so it would not count as this payment.</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">{copy.lead}</p>
       </div>
 
       {open && (
@@ -293,7 +296,7 @@ export function LinkPanel({
 
       <ul className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
         <li className="flex items-center gap-2 rounded-xl border px-3 py-2.5">
-          <Wallet className="size-4 shrink-0 text-[var(--ink)]" aria-hidden /> Pay from your NEAR wallet
+          {link.intents?.offered ? <Globe className="size-4 shrink-0 text-[var(--ink)]" aria-hidden /> : <Wallet className="size-4 shrink-0 text-[var(--ink)]" aria-hidden />} {copy.chip}
         </li>
         <li className="flex items-center gap-2 rounded-xl border px-3 py-2.5">
           <ShieldCheck className="size-4 shrink-0 text-[var(--ink)]" aria-hidden /> A proof you can check on chain

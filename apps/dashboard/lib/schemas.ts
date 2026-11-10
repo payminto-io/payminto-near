@@ -830,6 +830,45 @@ export type IntentsCheckout = z.infer<typeof intentsCheckoutSchema>;
 export const paymentIntentsSchema = z.object({ mode: intentsModeSchema, label: z.string(), quotes: z.array(intentsQuoteSchema) });
 export type PaymentIntents = z.infer<typeof paymentIntentsSchema>;
 
+/** `intents` on each item of `GET /v1/payments`: where an any-chain payment came from ("Any chain - USDC on Base"). */
+export const intentsSummarySchema = z.object({
+  mode: intentsModeSchema,
+  label: z.string(),
+  status: intentsQuoteStatusSchema,
+  origin: intentsOriginSchema.pick({ asset: true, chain: true, chain_name: true, symbol: true }),
+});
+export type IntentsSummary = z.infer<typeof intentsSummarySchema>;
+
+/** `intents` on `GET /v1/links/public/{slug}`: whether a buyer of the link can pay from another chain. */
+export const publicLinkIntentsSchema = z.object({ mode: intentsModeSchema, label: z.string(), offered: z.boolean(), reason: z.string().nullable() });
+export type PublicLinkIntents = z.infer<typeof publicLinkIntentsSchema>;
+
+/**
+ * A credit paid through NEAR Intents in `GET /v1/checkout/{id}/proof`: the NEAR delivery transaction is the evidence
+ * (this browser reads it again), and `oneclick` is what 1Click last reported, as the server read it.
+ */
+export const intentsProofSchema = z.object({
+  method: z.literal("oneclick"),
+  amount: atomicSchema,
+  payer: z.string().nullable(),
+  quote_id: z.string(),
+  mode: intentsModeSchema,
+  label: z.string(),
+  settlement_network: z.string(),
+  token: addressSchema,
+  recipient: addressSchema,
+  origin: intentsOriginSchema,
+  deposited: intentsAmountSchema.nullable(),
+  origin_txs: z.array(intentsTxSchema),
+  delivery_tx: intentsTxSchema.nullable(),
+  delivery_senders: z.array(addressSchema),
+  oneclick: z.object({ status: z.string().nullable(), correlation_id: z.string(), deposit_address: z.string(), read_at: z.string() }),
+  verification: z.enum(["rpc_checked", "provider_only"]).nullable(),
+  delivered_on_chain: atomicSchema.nullable(),
+  verified: z.boolean().nullable(),
+});
+export type IntentsProof = z.infer<typeof intentsProofSchema>;
+
 const walletTxSchema = z.object({ receiverId: addressSchema, actions: z.array(z.object({ type: z.literal("FunctionCall"), params: z.object({ methodName: z.string(), args: z.record(z.string(), z.unknown()), gas: z.string(), deposit: z.string() }) })).min(1) });
 
 /** `GET` and `PUT /v1/merchant/intents-payout`: the business's NEAR account for any-chain payments and its checks. */
@@ -905,6 +944,8 @@ export const publicLinkSchema = z.object({
   merchant: merchantBrandSchema,
   network: networkField,
   token: tokenSchema,
+  /** Whether "Any chain" is offered; null or absent when the node does not run the any-chain checkout. */
+  intents: publicLinkIntentsSchema.nullable().default(null),
 });
 export type PublicLink = z.infer<typeof publicLinkSchema>;
 
@@ -983,6 +1024,10 @@ export const paymentSchema = z.object({
   updated_at: timeSchema.optional(),
 });
 export type Payment = z.infer<typeof paymentSchema>;
+
+/** An item of GET /v1/payments: the payment and, for an any-chain payment, where it came from. */
+export const paymentListItemSchema = paymentSchema.extend({ intents: intentsSummarySchema.nullable().default(null) });
+export type PaymentListItem = z.infer<typeof paymentListItemSchema>;
 
 /** GET /v1/payments/{id}: the payment with each credit, its refunds and the timeline. */
 export const paymentDetailSchema = paymentSchema.extend({
@@ -1275,6 +1320,8 @@ export const paymentProofSchema = z.object({
   hub_payment_id: bytes32Schema.nullable().optional(),
   order_hash: bytes32Schema,
   paid_at: nullableTime,
+  /** Paid from another chain through NEAR Intents: the delivery on NEAR is the evidence, not a hub record. */
+  intents: intentsProofSchema.nullable().optional(),
 });
 export type PaymentProof = z.infer<typeof paymentProofSchema>;
 
@@ -1293,9 +1340,11 @@ export const nodeProofSchema = z
     hub_payment_id: bytes32Schema.nullable().optional(),
     paid_at: nullableTime,
     credits: z.array(
-      z
-        .object({
-          method: paymentMethodSchema,
+      z.union([
+        intentsProofSchema,
+        z
+          .object({
+            method: paymentMethodSchema,
           amount: atomicSchema,
           payer: addressSchema.nullable(),
           /** Voucher credits: the settling batch's transaction. Wallet credits carry none; the hub record is the evidence. */
@@ -1304,11 +1353,35 @@ export const nodeProofSchema = z
           checkout_id: bytes32Schema.nullable().optional(),
         })
         .passthrough(),
+      ]),
     ),
   })
   .passthrough()
   .transform((n): PaymentProof => {
-    const c = n.credits.filter((x) => x.method === "wallet" && x.checkout_id).at(-1) ?? n.credits.at(-1) ?? null;
+    // A payment paid from another chain is proven by its NEAR delivery; anything else by the hub's record.
+    const any = n.credits.filter((x): x is IntentsProof => x.method === "oneclick" && "quote_id" in x).at(-1) ?? null;
+    if (any) {
+      return {
+        payment_id: n.payment_id,
+        status: n.status,
+        network: n.network,
+        hub: n.hub ?? null,
+        token: any.token,
+        payout: any.recipient,
+        amount_due: n.amount_due,
+        amount_paid: n.amount_paid,
+        credit_amount: any.amount,
+        method: "oneclick",
+        payer: any.payer,
+        tx_hash: any.delivery_tx?.hash ?? null,
+        hub_payment_id: null,
+        order_hash: n.order_hash,
+        paid_at: n.paid_at,
+        intents: any,
+      };
+    }
+    const c = n.credits.filter((x) => x.method === "wallet" && "checkout_id" in x && x.checkout_id).at(-1) ?? n.credits.at(-1) ?? null;
+    const plain = c && !("quote_id" in c) ? c : null;
     return {
       payment_id: n.payment_id,
       status: n.status,
@@ -1318,11 +1391,11 @@ export const nodeProofSchema = z
       payout: n.payout,
       amount_due: n.amount_due,
       amount_paid: n.amount_paid,
-      credit_amount: c?.amount ?? null,
-      method: c?.method ?? null,
-      payer: c?.payer ?? null,
-      tx_hash: c?.tx_hash ?? null,
-      hub_payment_id: c?.checkout_id ?? n.hub_payment_id ?? null,
+      credit_amount: plain?.amount ?? null,
+      method: plain?.method ?? null,
+      payer: plain?.payer ?? null,
+      tx_hash: plain?.tx_hash ?? null,
+      hub_payment_id: plain?.checkout_id ?? n.hub_payment_id ?? null,
       order_hash: n.order_hash,
       paid_at: n.paid_at,
     };
@@ -1381,7 +1454,10 @@ const contract: [
   Parses<typeof intentsCheckoutSchema, P.IntentsCheckout>,
   Parses<typeof paymentIntentsSchema, P.PaymentIntents>,
   Parses<typeof intentsPayoutSchema, P.IntentsPayout>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+  Parses<typeof paymentListItemSchema, P.PaymentListItem>,
+  Parses<typeof publicLinkIntentsSchema, P.PublicLinkIntents>,
+  Parses<typeof intentsProofSchema, P.IntentsProofCredit>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 void contract;
 
 // ---------------------------------------------------------------------------

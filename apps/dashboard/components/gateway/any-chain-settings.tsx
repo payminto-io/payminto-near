@@ -1,16 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, Circle, CircleAlert, CircleHelp, LoaderCircle, PenLine, RotateCw, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, CircleAlert, CircleHelp, Globe, LoaderCircle, PenLine, RotateCw, XCircle } from "lucide-react";
 import { intentsPayoutProofRequest, isAccountId, type AccountId } from "@payminto/protocol";
 import { useApi, useCan } from "@/lib/session";
 import { gk } from "@/lib/gateway-queries";
 import { ok } from "@/lib/operator-queries";
 import { ApiError } from "@/lib/http";
-import { enableErrorText, payoutChecklist, type CheckState } from "@/lib/intents";
-import { ensureConnected, signAndSendTransaction, signMessage, walletErrorMessage } from "@/lib/wallet";
+import { enableErrorText, mainnetTxUrl, payoutChecklist, type CheckState } from "@/lib/intents";
+import {
+  connectMainnet,
+  disconnectMainnet,
+  MAINNET_LABEL,
+  mainnetAccount,
+  sendOnMainnet,
+  signMessage,
+  signMessageOnMainnet,
+  walletErrorMessage,
+  type Nep413Proof,
+} from "@/lib/wallet";
 import type { IntentsPayout } from "@/lib/schemas";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,11 +28,53 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Address, Panel } from "@/components/app/primitives";
 import { BlockSkeleton, ErrorState } from "@/components/app/states";
+import { useTxFlow, type TxPlan } from "@/components/ds/tx-flow";
 import { IntentsLabel } from "@/components/checkout/intents";
 import { FormRow } from "./kit";
 
 const payoutKey = [...gk.all, "intents-payout"] as const;
 const unixNow = () => Math.floor(Date.now() / 1000);
+
+/**
+ * Signs the any-chain payout proof. Live (the USDC lands on NEAR mainnet): with the separate NEAR mainnet connection,
+ * opened for this account only. Simulated: with the dashboard's own wallet, where the local chain stands in for mainnet.
+ */
+export async function signPayoutProof(o: { live: boolean; merchantId: string; account: AccountId; timestamp: number; scope: { settlementNetwork: string; hub: AccountId } }): Promise<Nep413Proof> {
+  const req = intentsPayoutProofRequest(o.merchantId, o.account, o.timestamp, o.scope);
+  if (!o.live) return signMessage(req.message, req.recipient, o.account, req.nonce);
+  await connectMainnet(o.account);
+  return signMessageOnMainnet(req.message, req.recipient, o.account, req.nonce);
+}
+
+/**
+ * The storage deposit as a reviewed transaction: the exact call, its deposit and gas, and who signs it, before any
+ * wallet opens. Live, it goes through the NEAR mainnet connection and links to NearBlocks.
+ */
+export function storagePlan(p: IntentsPayout, account: AccountId): TxPlan {
+  const step = p.storage_step!;
+  const live = p.mode === "live";
+  return {
+    title: `Register ${account} with USDC`,
+    description: live
+      ? `${step.why} It is sent on ${MAINNET_LABEL} from your own wallet; the rest of this dashboard keeps its own connection.`
+      : step.why,
+    summary: [{ label: "Deposit", value: <span className="num">{step.deposit_near} NEAR, once</span> }],
+    txs: [step.transaction],
+    confirmLabel: live ? `Open my ${MAINNET_LABEL} wallet` : "Send the storage deposit",
+    signer: account,
+    finalNote: `${account} is registered with USDC. The checks are read again now.`,
+    ...(live
+      ? {
+          wallet: {
+            label: MAINNET_LABEL,
+            connect: (signer?: AccountId) => connectMainnet(signer ?? account),
+            send: async (txs) => [await sendOnMainnet(txs[0]!, account)],
+            explorerTx: mainnetTxUrl,
+          },
+        }
+      : {}),
+  };
+}
 
 /**
  * Settings > Payment methods: "Accept any chain (NEAR Intents)". The USDC of an any-chain payment lands straight in the
@@ -88,6 +140,8 @@ function Settings({ merchantId, p, refetch, refreshing, canPayout, canToggle }: 
             <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden /> {toggleError}
           </p>
         )}
+
+        {live && <MainnetConnection />}
 
         <section aria-labelledby="any-account" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -158,6 +212,43 @@ function Settings({ merchantId, p, refetch, refreshing, canPayout, canToggle }: 
   );
 }
 
+/**
+ * Live mode only: the second wallet connection, on NEAR mainnet, said plainly. It signs two things on this page (the
+ * proof and the storage deposit) and nothing else; the dashboard's own connection stays as it is.
+ */
+export function MainnetConnection() {
+  const [account, setAccount] = useState<AccountId | null>(null);
+  useEffect(() => {
+    let live = true;
+    void mainnetAccount().then((a) => live && setAccount(a));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (
+    <div role="note" aria-label={`${MAINNET_LABEL} wallet`} className="flex flex-col gap-2 rounded-lg border bg-info-soft/50 p-3 sm:flex-row sm:items-start sm:gap-3 sm:p-4">
+      <span className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border bg-background px-2 py-0.5 text-xs font-medium">
+        <Globe className="size-3.5" aria-hidden /> {MAINNET_LABEL}
+      </span>
+      <div className="min-w-0 flex-1 text-sm">
+        <p>Real money. Signing here opens a separate {MAINNET_LABEL} wallet connection, for two steps only: the message that proves the account is yours, and its USDC storage deposit.</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {account ? (
+            <>
+              Connected on {MAINNET_LABEL} as <span className="hash text-foreground">{account}</span>.{" "}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => void disconnectMainnet().then(() => setAccount(null))}>
+                Disconnect
+              </button>
+            </>
+          ) : (
+            "No mainnet wallet is connected yet; it opens when you sign. The rest of this dashboard keeps its own wallet."
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function CheckIcon({ state }: { state: CheckState }) {
   const cls = "mt-0.5 size-4 shrink-0";
   if (state === "done") return <CheckCircle2 className={cn(cls, "text-positive")} aria-hidden />;
@@ -186,6 +277,7 @@ function AccountForm({ p, merchantId, onSaved, onCancel }: { p: IntentsPayout; m
     onError: (e) => setError(e.message),
   });
 
+  const live = p.mode === "live";
   async function sign() {
     setError(null);
     if (!target) return;
@@ -193,8 +285,7 @@ function AccountForm({ p, merchantId, onSaved, onCancel }: { p: IntentsPayout; m
     try {
       const timestamp = unixNow();
       setStamp(timestamp);
-      const req = intentsPayoutProofRequest(merchantId, target, timestamp, scope);
-      const signed = await signMessage(req.message, req.recipient, target, req.nonce);
+      const signed = await signPayoutProof({ live, merchantId, account: target, timestamp, scope });
       setProof({ account: target, timestamp, public_key: signed.publicKey, signature: signed.signature });
     } catch (e) {
       setError(walletErrorMessage(e));
@@ -227,7 +318,7 @@ function AccountForm({ p, merchantId, onSaved, onCancel }: { p: IntentsPayout; m
         />
       </FormRow>
       <div className="rounded-lg border bg-muted/30 p-3">
-        <p className="text-xs font-medium text-muted-foreground">Message the account signs (NEP-413, for this server only)</p>
+        <p className="text-xs font-medium text-muted-foreground">Message the account signs{live ? ` on ${MAINNET_LABEL}` : ""} (NEP-413, for this server only)</p>
         <p className="hash mt-1 text-[0.8125rem] [overflow-wrap:anywhere]">{message}</p>
       </div>
       {proof ? (
@@ -239,7 +330,7 @@ function AccountForm({ p, merchantId, onSaved, onCancel }: { p: IntentsPayout; m
         {!proof ? (
           <Button type="button" variant="outline" className="h-11 md:h-9" onClick={() => void sign()} disabled={busy || !target}>
             {busy ? <LoaderCircle className="animate-spin" aria-hidden /> : <PenLine aria-hidden />}
-            Sign with this account
+            {live ? `Sign with a ${MAINNET_LABEL} wallet` : "Sign with this account"}
           </Button>
         ) : (
           <Button type="button" className="h-11 md:h-9" onClick={() => save.mutate()} disabled={save.isPending}>
@@ -262,29 +353,15 @@ function AccountForm({ p, merchantId, onSaved, onCancel }: { p: IntentsPayout; m
   );
 }
 
-/** The one human step when the account is not registered with USDC: a storage_deposit it sends itself. */
-function StorageStep({ p, account, onDone }: { p: IntentsPayout; account: AccountId; onDone: () => void }) {
+/**
+ * The one human step when the account is not registered with USDC: a storage_deposit it sends itself, reviewed in full
+ * before the wallet opens.
+ */
+export function StorageStep({ p, account, onDone }: { p: IntentsPayout; account: AccountId; onDone: () => void }) {
   const step = p.storage_step!;
   const call = step.transaction.actions[0]!;
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  async function send() {
-    setError(null);
-    setBusy(true);
-    try {
-      await ensureConnected(account);
-      const r = await signAndSendTransaction(step.transaction);
-      if (r.status === "failed") setError(`The transaction failed: ${r.error}`);
-      else {
-        toast.success("Storage deposit sent. Checking the account again.");
-        onDone();
-      }
-    } catch (e) {
-      setError(walletErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const live = p.mode === "live";
+  const { open, flow } = useTxFlow();
   return (
     <section aria-labelledby="any-storage" className="flex flex-col gap-3 rounded-lg border border-warning/30 bg-warning-soft/40 p-3 sm:p-4">
       <h3 id="any-storage" className="text-sm font-medium">
@@ -292,6 +369,12 @@ function StorageStep({ p, account, onDone }: { p: IntentsPayout; account: Accoun
       </h3>
       <p className="text-sm text-muted-foreground">{step.why}</p>
       <dl className="grid gap-1.5 text-xs sm:grid-cols-[7rem_minmax(0,1fr)]">
+        {live && (
+          <>
+            <dt className="text-muted-foreground">Network</dt>
+            <dd className="font-medium">{MAINNET_LABEL}</dd>
+          </>
+        )}
         <dt className="text-muted-foreground">Sent from</dt>
         <dd className="hash min-w-0 [overflow-wrap:anywhere]">{account}</dd>
         <dt className="text-muted-foreground">To</dt>
@@ -302,16 +385,11 @@ function StorageStep({ p, account, onDone }: { p: IntentsPayout; account: Accoun
         <dd className="num">{step.deposit_near} NEAR, once</dd>
       </dl>
       <div>
-        <Button type="button" variant="outline" className="h-11 md:h-9" onClick={() => void send()} disabled={busy}>
-          {busy && <LoaderCircle className="animate-spin" aria-hidden />}
-          Send the storage deposit
+        <Button type="button" variant="outline" className="h-11 md:h-9" onClick={() => open(storagePlan(p, account), () => onDone())}>
+          Review the storage deposit
         </Button>
       </div>
-      {error && (
-        <p role="alert" className="flex items-start gap-2 text-sm text-negative">
-          <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden /> {error}
-        </p>
-      )}
+      {flow}
     </section>
   );
 }

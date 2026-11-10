@@ -54,6 +54,7 @@ import type {
   IntentsQuote,
   MerchantProfile,
   Payment,
+  PaymentListItem,
   PaymentDetail,
   PaymentLink,
   PaymentMethod,
@@ -173,6 +174,8 @@ const merchants: Merchant[] = [
  * through; otherwise Acme Store takes payments from other chains (simulated) into its own NEAR account.
  */
 const INTENTS_SETUP = demo("intents-setup");
+/** `?demo=intents-live`: the any-chain checkout as on a server that runs it live, not set up yet, for its NEAR mainnet screens. */
+const INTENTS_LIVE = demo("intents-live");
 
 const methodRows: MerchantMethod[] = merchants.flatMap((m) => [
   { merchant_id: m.id, method: "wallet" as const, enabled: true, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
@@ -681,7 +684,7 @@ const intents = new MockIntents(
     },
     merchant: { id: ACME_ID, hub: HUB },
   },
-  { account: INTENTS_SETUP ? null : "acme-store.near" },
+  { account: INTENTS_SETUP || INTENTS_LIVE ? null : "acme-store.near", live: INTENTS_LIVE },
 );
 
 /** One payment paid from USDC on Base an hour ago, so the console shows an any-chain payment and its NEAR Intents card. */
@@ -860,6 +863,7 @@ function publicLinkOf(l: PaymentLink): PublicLink {
     merchant: { name: merchant.name, support_email: merchant.support_email, brand_color: merchant.brand_color, logo_url: merchant.logo_url },
     network: NETWORK,
     token: TOKEN_META,
+    intents: intents.linkOffer(ACME_ID),
   };
 }
 
@@ -921,7 +925,7 @@ export class MockGatewayApi implements GatewayApi {
     };
   }
 
-  async payments(q: PaymentsQuery = {}): Promise<GatewayPage<Payment>> {
+  async payments(q: PaymentsQuery = {}): Promise<GatewayPage<PaymentListItem>> {
     await delay();
     if (foreign()) return page([], 50, undefined, {});
     const text = q.q?.trim().toLowerCase();
@@ -943,7 +947,7 @@ export class MockGatewayApi implements GatewayApi {
     const items = base
       .filter((p) => (!q.status?.length || q.status.includes(p.status)) && (!q.refunded || p.refund_status !== "none"))
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .map(stripPayment);
+      .map((p) => ({ ...stripPayment(p), intents: intents.summary(p.id) }));
     return page(items, q.limit ?? 50, q.cursor, counts);
   }
 
@@ -1539,6 +1543,28 @@ export class MockCheckoutApi implements CheckoutApi {
     const p = find(id);
     if (p.status !== "paid" && p.status !== "overpaid") throw new ApiError(409, "PAYMENT_NOT_PAID", "A proof exists only for a paid payment.");
     const c = p.credits.filter((x) => x.status === "confirmed").at(-1);
+    // Paid from another chain: the delivery on NEAR is the evidence, as on a node.
+    const any = intents.proof(p.id);
+    if (any) {
+      return {
+        payment_id: p.id,
+        status: p.status,
+        network: NETWORK,
+        hub: HUB,
+        token: any.token,
+        payout: any.recipient,
+        amount_due: p.amount_due,
+        amount_paid: p.amount_paid,
+        credit_amount: any.amount,
+        method: "oneclick",
+        payer: any.payer,
+        tx_hash: any.delivery_tx?.hash ?? null,
+        hub_payment_id: null,
+        order_hash: p.order_hash,
+        paid_at: p.paid_at,
+        intents: any,
+      };
+    }
     return {
       payment_id: p.id,
       status: p.status,
@@ -1634,7 +1660,13 @@ export class MockCheckoutApi implements CheckoutApi {
 
   /** The demo hub, read through the same NearReader and JSON-RPC the receipt page uses against NEAR. */
   reader(): ReaderSource {
-    demoReader ??= mockReader({ hub: HUB, view: hubView, txFinal: (hash) => payments.some((p) => p.credits.some((c) => c.tx_hash === hash && c.status === "confirmed")) });
+    demoReader ??= mockReader({
+      hub: HUB,
+      view: hubView,
+      txFinal: (hash) => payments.some((p) => p.credits.some((c) => c.tx_hash === hash && c.status === "confirmed")),
+      // An any-chain delivery carries the USDC contract's NEP-141 event, which the receipt page reads.
+      txReceipts: (hash) => intents.deliveryReceipts(hash),
+    });
     return demoReader;
   }
 }

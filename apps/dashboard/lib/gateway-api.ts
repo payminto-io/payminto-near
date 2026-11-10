@@ -20,6 +20,7 @@ import {
   paymentDetailSchema,
   paymentLinkSchema,
   paymentSchema,
+  paymentListItemSchema,
   publicLinkSchema,
   refundSchema,
   webhookDeliverySchema,
@@ -42,6 +43,7 @@ import {
   type IntentsQuote,
   type MerchantProfile,
   type Payment,
+  type PaymentListItem,
   type PaymentDetail,
   type PaymentLink,
   type PaymentMethod,
@@ -93,7 +95,7 @@ export type MerchantPatch = Partial<Pick<MerchantProfile, "name" | "support_emai
 
 export interface GatewayApi {
   overview(): Promise<GatewayOverview>;
-  payments(q?: PaymentsQuery): Promise<GatewayPage<Payment>>;
+  payments(q?: PaymentsQuery): Promise<GatewayPage<PaymentListItem>>;
   payment(id: string): Promise<PaymentDetail>;
   cancelPayment(id: string): Promise<Payment>;
   links(): Promise<PaymentLink[]>;
@@ -236,7 +238,7 @@ export class HttpGatewayApi implements GatewayApi {
   }
   payments(q: PaymentsQuery = {}) {
     const { status, method, refunded, merchant_id, ...rest } = q;
-    return this.req(`/v1/payments${qs({ ...rest, status: status?.join(","), method: method?.join(","), refunded })}`, gatewayPageSchema(paymentSchema), merchant_id ? { headers: { "Merchant-Id": merchant_id } } : {});
+    return this.req(`/v1/payments${qs({ ...rest, status: status?.join(","), method: method?.join(","), refunded })}`, gatewayPageSchema(paymentListItemSchema), merchant_id ? { headers: { "Merchant-Id": merchant_id } } : {});
   }
   payment(id: string) {
     return this.req(`/v1/payments/${encodeURIComponent(id)}`, paymentDetailSchema);
