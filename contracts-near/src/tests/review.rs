@@ -187,12 +187,14 @@ fn acceptance_time_is_compared_in_milliseconds_at_the_boundaries() {
         settle_own_as(h, S, after.clone(), past_expiry.clone())
     });
 
-    // A revoke after expiry does not reopen anything: the earlier of the two bounds applies.
+    // After expiry a revoke is refused (F5), and acceptances after expiry stay too late.
     let (mut h, a, key) = funded(500);
     let valid_until = h.budget(&a).valid_until.0;
     h.advance(DAY + 10_000);
-    h.ctx(acct(A), 0);
-    h.hub.revoke_budget(a);
+    h.expect_code(BUDGET_NOT_OPEN, |h| {
+        h.ctx(acct(A), 0);
+        h.hub.revoke_budget(a);
+    });
     let between = claim(&a, S, &key, 1, 1);
     let after_expiry = acceptance(&between, &node_key(), valid_until / 1000 + 5);
     h.expect_err(ACCEPTANCE_TOO_LATE, |h| {
@@ -281,7 +283,7 @@ fn receipt_keys_are_registered_by_the_settler_itself_and_only_appended() {
     });
     // Exactly one yoctoNEAR, so the node's function-call key cannot register a key.
     for deposit in [0, 2] {
-        h.expect_err("Requires attached deposit of exactly 1 yoctoNEAR", |h| {
+        h.expect_code(ONE_YOCTO_REQUIRED, |h| {
             h.ctx(node(), deposit);
             h.hub.register_receipt_key(id(1));
         });
@@ -413,14 +415,14 @@ fn f3_settle_own_never_writes_storage_the_hub_pays_for() {
     h.finish_payout(S, 10, true);
     assert!(h.hub.credits.get(&acct(S)).is_none());
 
-    let reserve = h.budget(&a).reserved_settle_own_bytes;
+    let reserve = h.budget(&a).storage_reserve_bytes.0;
     let before = h.usage();
     h.ctx(acct(S), 0);
     h.own(claim(&a, S, &agent(1), 5, 15));
     let grown = h.usage() - before;
     assert!(grown > 0, "a new credits entry was written");
     assert_eq!(
-        reserve - h.budget(&a).reserved_settle_own_bytes,
+        reserve - h.budget(&a).storage_reserve_bytes.0,
         grown,
         "and the Budget's reserve paid for it"
     );
@@ -428,28 +430,42 @@ fn f3_settle_own_never_writes_storage_the_hub_pays_for() {
 }
 
 #[test]
-fn f3_settle_batch_charges_the_settlers_storage_balance_for_every_byte() {
+fn f3_settle_batch_charges_every_byte_to_the_budgets_reserve_or_the_settlers_balance() {
     let (mut h, a, key) = funded(1_000);
     let payees: Vec<String> = (0..20).map(|i| format!("payee-{i}.test")).collect();
     let claims: Vec<Claim> = payees.iter().map(|p| claim(&a, p, &key, 1, 1)).collect();
     let lines: Vec<(&str, &str, u128)> = payees.iter().map(|p| (A, p.as_str(), 1)).collect();
 
-    let (balance, before) = (h.storage_of(node().as_str()), h.usage());
+    let (balance, reserve, before) = (
+        h.storage_of(node().as_str()),
+        h.budget(&a).storage_reserve_bytes.0,
+        h.usage(),
+    );
     h.settle(id(1), claims, entries(&lines));
     let grown = h.usage() - before;
     assert!(
         grown > 20 * 100,
         "20 settled entries, 20 credit entries and a batch record: {grown} bytes"
     );
+    let from_reserve = reserve - h.budget(&a).storage_reserve_bytes.0;
+    let from_balance = balance - h.storage_of(node().as_str());
     assert_eq!(
-        balance - h.storage_of(node().as_str()),
+        u128::from(from_reserve) * byte_cost() + from_balance,
         u128::from(grown) * byte_cost(),
-        "the settler paid for exactly the bytes written"
+        "the Budget and the settler paid for exactly the bytes written"
+    );
+    assert!(
+        from_balance < 300 * byte_cost(),
+        "the settler paid for its batch record only"
     );
 
     // A second voucher for the same pairs overwrites the entries, so only the batch record is new.
     let again: Vec<Claim> = payees.iter().map(|p| claim(&a, p, &key, 1, 2)).collect();
-    let (balance, before) = (h.storage_of(node().as_str()), h.usage());
+    let (balance, reserve, before) = (
+        h.storage_of(node().as_str()),
+        h.budget(&a).storage_reserve_bytes.0,
+        h.usage(),
+    );
     h.settle(id(2), again, entries(&lines));
     let record = h.usage() - before;
     assert!(record < 300, "only the batch record: {record} bytes");
@@ -457,6 +473,7 @@ fn f3_settle_batch_charges_the_settlers_storage_balance_for_every_byte() {
         balance - h.storage_of(node().as_str()),
         u128::from(record) * byte_cost()
     );
+    assert_eq!(h.budget(&a).storage_reserve_bytes.0, reserve);
     h.assert_solvent();
 }
 
@@ -476,7 +493,7 @@ fn f3_settle_batch_without_storage_balance_is_refused_whole() {
     });
     assert_eq!(h.usage(), before, "nothing was written");
     assert_eq!(h.budget(&a).spent.0, 0);
-    assert!(h.hub.batch(id(1)).is_none());
+    assert!(h.batch(id(1)).is_none());
 
     // Anyone can top the settler up, and the same batch then settles.
     h.ctx(acct(MALLORY), byte_cost() * 1_000);
@@ -522,9 +539,9 @@ fn f3_checkout_payment_storage_is_charged_to_the_checkout_settler() {
 }
 
 #[test]
-fn f3_payout_removes_empty_credit_entries_and_returns_their_storage_to_the_settler() {
+fn f3_payout_removes_empty_credit_entries_and_returns_their_storage_to_the_budget_that_paid() {
     let (mut h, a, key) = funded(100);
-    let start = h.storage_of(node().as_str());
+    let (start, reserve) = (h.storage_of(node().as_str()), h.budget(&a).storage_reserve_bytes.0);
     let base = h.usage();
     h.settle(id(1), vec![claim(&a, S, &key, 40, 40)], entries(&[(A, S, 40)]));
     let with_entry = h.usage();
@@ -536,22 +553,19 @@ fn f3_payout_removes_empty_credit_entries_and_returns_their_storage_to_the_settl
     assert_eq!(h.usage(), with_entry);
     assert_eq!(h.hub.credit_of(acct(S)).0, 40);
 
-    // A successful payout removes the entry, and the settler that paid for it gets that storage back.
-    let before_release = h.storage_of(node().as_str());
+    // A successful payout removes the entry, and the Budget whose settlement created it gets that storage back.
+    let before_release = h.budget(&a).storage_reserve_bytes.0;
     h.payout(&[S]);
     h.finish_payout(S, 40, true);
     let freed = with_entry - h.usage();
     assert!(freed > 0, "the credits entry is gone");
     assert!(h.hub.credits.get(&acct(S)).is_none());
-    assert_eq!(
-        h.storage_of(node().as_str()) - before_release,
-        u128::from(freed) * byte_cost()
-    );
-    // What the settler has paid in the end is exactly what is still stored: the settled entry and the batch record.
-    assert_eq!(
-        start - h.storage_of(node().as_str()),
-        u128::from(h.usage() - base) * byte_cost()
-    );
+    assert_eq!(h.budget(&a).storage_reserve_bytes.0 - before_release, freed);
+    // What the Budget and the settler have paid in the end is exactly what is still stored: the settled entry and the
+    // batch record.
+    let paid = u128::from(reserve - h.budget(&a).storage_reserve_bytes.0) * byte_cost() + start
+        - h.storage_of(node().as_str());
+    assert_eq!(paid, u128::from(h.usage() - base) * byte_cost());
     h.assert_solvent();
 }
 
@@ -586,16 +600,23 @@ fn f3_overlapping_payouts_keep_the_entry_until_nothing_is_in_flight() {
 }
 
 #[test]
-fn f3_storage_released_from_an_entry_no_settler_paid_for_stays_with_the_hub() {
+fn f3_storage_released_from_a_settle_own_entry_goes_back_to_the_budgets_reserve() {
     let (mut h, a, key) = funded(100);
     let c = claim(&a, S, &key, 10, 10);
     let accepted = h.accept(&c);
     settle_own_as(&mut h, S, c, accepted);
     let node_balance = h.storage_of(node().as_str());
+    let reserve = h.budget(&a).storage_reserve_bytes.0;
     let before = h.usage();
     h.payout(&[S]);
     h.finish_payout(S, 10, true);
-    assert!(h.usage() < before, "the entry is removed");
+    let freed = before - h.usage();
+    assert!(freed > 0, "the entry is removed");
+    assert_eq!(
+        h.budget(&a).storage_reserve_bytes.0,
+        reserve + freed,
+        "the reserve that paid gets it back"
+    );
     assert_eq!(
         h.storage_of(node().as_str()),
         node_balance,
@@ -612,12 +633,18 @@ fn f3_fund_from_credit_releases_an_emptied_entry_too() {
     let b = h.open_simple(B, &agent(2), 1000);
     h.deposit(B, &b, 100);
     h.settle(id(1), vec![claim(&b, A, &agent(2), 30, 30)], entries(&[(B, A, 30)]));
-    let (balance, before) = (h.storage_of(node().as_str()), h.usage());
+    let (balance, reserve, before) = (
+        h.storage_of(node().as_str()),
+        h.budget(&b).storage_reserve_bytes.0,
+        h.usage(),
+    );
     h.ctx(acct(A), 1);
     h.hub.fund_from_credit(a, U128(30));
     let freed = before - h.usage();
     assert!(freed > 0);
-    assert_eq!(h.storage_of(node().as_str()) - balance, u128::from(freed) * byte_cost());
+    // B's settlement created A's credit entry, so B's reserve gets the bytes back, and the node nothing.
+    assert_eq!(h.budget(&b).storage_reserve_bytes.0, reserve + freed);
+    assert_eq!(h.storage_of(node().as_str()), balance);
     assert_eq!(h.budget(&a).escrow.0, 30);
     h.assert_solvent();
 }
@@ -637,7 +664,7 @@ fn f3_a_revoke_is_paid_for_when_the_budget_opens() {
     };
     assert_eq!(
         plenty() - refund,
-        u128::from(record + REVOKE_BYTES + RESERVED_SETTLE_OWN_BYTES) * byte_cost()
+        u128::from(record + REVOKE_BYTES + crate::PAIR_BYTES) * byte_cost()
     );
 
     let before = h.usage();
@@ -675,7 +702,7 @@ fn storage_balance_is_funded_by_anyone_and_withdrawn_only_by_its_account() {
         h.ctx(acct(MALLORY), 1);
         h.hub.withdraw_storage(U128(1));
     });
-    h.expect_err("Requires attached deposit of exactly 1 yoctoNEAR", |h| {
+    h.expect_code(ONE_YOCTO_REQUIRED, |h| {
         h.ctx(acct(other), 0);
         h.hub.withdraw_storage(U128(1));
     });

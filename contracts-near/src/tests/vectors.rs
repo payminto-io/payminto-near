@@ -112,6 +112,9 @@ fn budget_ids_match() {
             payees: canonical,
             policy_hash: id32(i, "policy_hash"),
             salt: id32(i, "salt"),
+            // Not part of the id: the hub ties the flag to an empty list.
+            allow_any_payee: false,
+            max_payees: 0,
         };
         let budget = budget_id(s(i, "hub"), s(i, "network"), s(i, "owner"), &terms);
         assert_eq!(budget.to_hex(), s(&case, "budget_id"), "{}", s(&case, "name"));
@@ -309,9 +312,10 @@ fn storage_bytes_match() {
     setup();
     let file = load("storage.json");
     assert_eq!(s(&file, "byte_cost_yocto").parse::<u128>().unwrap(), byte_cost());
+    assert_eq!(file["pair_bytes"].as_u64().unwrap(), crate::PAIR_BYTES);
     assert_eq!(
-        file["reserved_settle_own_bytes"].as_u64().unwrap(),
-        RESERVED_SETTLE_OWN_BYTES
+        file["max_any_payees"].as_u64().unwrap(),
+        u64::from(crate::MAX_ANY_PAYEES)
     );
     assert_eq!(file["revoke_bytes"].as_u64().unwrap(), REVOKE_BYTES);
     let all = cases("storage.json");
@@ -325,18 +329,23 @@ fn storage_bytes_match() {
                 h.hub.settled.insert((id(1), name("payee")), 7);
             }
             "credit" => {
+                let funder = match &case["funder"] {
+                    Value::Null => None,
+                    f if f["settler"].is_string() => Some(Funder::Settler(acct(s(f, "settler")))),
+                    f => Some(Funder::Budget(id32(f, "budget"))),
+                };
                 h.hub.credits.insert(
                     name("account"),
                     Credit {
                         amount: 7,
                         in_flight: 0,
-                        funder: case["funder"].as_str().map(acct),
+                        funder,
                     },
                 );
             }
             "batch" => {
                 h.hub.batches.insert(
-                    id(1),
+                    (name("settler"), id(1)),
                     BatchRecord {
                         root: id(2),
                         settler: name("settler"),
