@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "source": "POST https://1click.chaindefuser.com/v0/quote",
+    "recorded": "2026-11-10",
+    "live": true,
+    "note": "Tron USDT origin below the $100 swap limit. Addresses are clearly fake; no deposit address was created."
+  },
+  "request": {
+    "dry": true,
+    "swapType": "EXACT_OUTPUT",
+    "slippageTolerance": 10,
+    "originAsset": "nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "amount": "5000000",
+    "refundTo": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "1111111111111111111111111111111111111111111111111111111111111111",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-10T15:49:42.000Z"
+  },
+  "status": 400,
+  "body": {
+    "message": "Temporary swap limits: minimum swap amount is $100",
+    "correlationId": "c47ea36c-f9f0-49fa-9d80-d0d393947cd6",
+    "timestamp": "2026-11-10T15:19:47.947Z",
+    "path": "/v0/quote"
+  }
+}

@@ -28,7 +28,10 @@ export class OneClickError extends Error {
 
 export type OneClickClientOptions = {
   baseUrl?: string;
-  /** Partner JWT from the 1Click partner dashboard, sent as `X-API-Key`. Without one, 1Click adds a 25 bps fee. */
+  /**
+   * Partner JWT from the 1Click partner dashboard, sent as `X-API-Key`. Without one the docs say 1Click adds 25 bps;
+   * live quotes on 2026-11-10 showed 1 bp on stablecoin routes and 20 bps on others. Read fees from each quote.
+   */
   apiKey?: string;
   fetch?: FetchLike;
 };
