@@ -1,0 +1,30 @@
+{
+  "note": "Hub batch view for a batch id the hub never stored.",
+  "request": {
+    "method": "query",
+    "params": {
+      "request_type": "call_function",
+      "finality": "final",
+      "account_id": "hub.payminto.testnet",
+      "method_name": "batch",
+      "args": {
+        "batch_id": "abababababababababababababababababababababababababababababababab"
+      }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "payminto-1",
+    "result": {
+      "block_hash": "8sPRLUk5FXH3vdTdXV3tWrw7WkoFJEn5RFGtXNhrqgwN",
+      "block_height": 219402871,
+      "logs": [],
+      "result": [
+        110,
+        117,
+        108,
+        108
+      ]
+    }
+  }
+}

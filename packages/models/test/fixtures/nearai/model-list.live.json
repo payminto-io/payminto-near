@@ -1,0 +1,411 @@
+{
+ "_fixture": {
+  "kind": "live recording, trimmed",
+  "request": "GET https://cloud-api.near.ai/v1/model/list?limit=200 with no API key",
+  "recorded_at": "2026-11-10T04:42:49.000Z",
+  "trimmed": [
+   "6 of 64 models kept; metadata.modelIcon and metadata.modelDescription shortened"
+  ]
+ },
+ "models": [
+  {
+   "modelId": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+   "inputCostPerToken": {
+    "amount": 300,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "outputCostPerToken": {
+    "amount": 1200,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "costPerImage": {
+    "amount": 0,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "cacheReadCostPerToken": {
+    "amount": 6,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "metadata": {
+    "verifiable": true,
+    "contextLength": 1048576,
+    "modelDisplayName": "DeepSeek V4.1 Flash 1017",
+    "modelDescription": "October 17, 2026 snapshot of DeepSeek V4.1 Flash, a reasoning and coding model. ",
+    "modelIcon": null,
+    "ownedBy": "nearai",
+    "aliases": [
+     "deepseek-ai/DeepSeek-V4-Flash"
+    ],
+    "providerType": "vllm",
+    "providerConfig": {},
+    "attestationSupported": true,
+    "architecture": {
+     "inputModalities": [
+      "text",
+      "image"
+     ],
+     "outputModalities": [
+      "text"
+     ]
+    },
+    "supportedFeatures": [
+     "tools",
+     "reasoning"
+    ]
+   }
+  },
+  {
+   "modelId": "moonshotai/kimi-k3",
+   "inputCostPerToken": {
+    "amount": 3300,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "outputCostPerToken": {
+    "amount": 16500,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "costPerImage": {
+    "amount": 0,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "cacheReadCostPerToken": {
+    "amount": 330,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "metadata": {
+    "verifiable": true,
+    "contextLength": 1048576,
+    "modelDisplayName": "Kimi K3",
+    "modelDescription": "Moonshot AI native multimodal agentic model with a 1M-token context window, buil",
+    "modelIcon": null,
+    "ownedBy": "attested 3p",
+    "aliases": [
+     "kimi-k3"
+    ],
+    "providerType": "chutes",
+    "attestationSupported": true,
+    "architecture": {
+     "inputModalities": [
+      "text",
+      "image"
+     ],
+     "outputModalities": [
+      "text"
+     ]
+    },
+    "quantization": "fp4",
+    "maxOutputLength": 65535,
+    "supportedSamplingParameters": [
+     "temperature",
+     "top_p",
+     "top_k",
+     "repetition_penalty",
+     "frequency_penalty",
+     "presence_penalty",
+     "stop",
+     "seed",
+     "max_tokens"
+    ],
+    "supportedFeatures": [
+     "tools",
+     "json_mode",
+     "structured_outputs",
+     "reasoning"
+    ],
+    "isReady": true
+   }
+  },
+  {
+   "modelId": "openai/gpt-5-nano",
+   "inputCostPerToken": {
+    "amount": 50,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "outputCostPerToken": {
+    "amount": 400,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "costPerImage": {
+    "amount": 0,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "cacheReadCostPerToken": {
+    "amount": 5,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "textPricing": {
+    "version": 1,
+    "currency": "USD",
+    "unit": "million_tokens",
+    "tiers": {
+     "default": {
+      "short": {
+       "uncachedInput": "0.05",
+       "cachedInput": "0.005",
+       "output": "0.40"
+      }
+     },
+     "flex": {
+      "short": {
+       "uncachedInput": "0.025",
+       "cachedInput": "0.0025",
+       "output": "0.20"
+      }
+     }
+    }
+   },
+   "metadata": {
+    "verifiable": false,
+    "contextLength": 400000,
+    "modelDisplayName": "GPT-5 Nano",
+    "modelDescription": "GPT-5-Nano is the smallest and fastest variant in the GPT-5 system, optimized fo",
+    "modelIcon": null,
+    "ownedBy": "openai",
+    "providerType": "external",
+    "providerConfig": {
+     "backend": "openai_compatible",
+     "base_url": "https://api.openai.com/v1",
+     "model_name": "gpt-5-nano"
+    },
+    "attestationSupported": false,
+    "architecture": {
+     "inputModalities": [
+      "text"
+     ],
+     "outputModalities": [
+      "text"
+     ]
+    },
+    "maxOutputLength": 16384,
+    "supportedSamplingParameters": [
+     "temperature",
+     "top_p",
+     "frequency_penalty",
+     "presence_penalty",
+     "max_tokens",
+     "stop",
+     "seed"
+    ],
+    "supportedFeatures": [
+     "tools",
+     "structured_outputs",
+     "json_mode",
+     "reasoning"
+    ],
+    "isReady": false
+   }
+  },
+  {
+   "modelId": "Qwen/Qwen3.8-27B",
+   "inputCostPerToken": {
+    "amount": 40,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "outputCostPerToken": {
+    "amount": 1350,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "costPerImage": {
+    "amount": 0,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "cacheReadCostPerToken": {
+    "amount": 18,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "metadata": {
+    "verifiable": true,
+    "contextLength": 262144,
+    "modelDisplayName": "Qwen 3.8 27B",
+    "modelDescription": "Qwen 3.8 27B is a dense FP8 multimodal model with reasoning, coding, tool use, v",
+    "modelIcon": null,
+    "ownedBy": "nearai",
+    "providerType": "vllm",
+    "attestationSupported": true,
+    "architecture": {
+     "inputModalities": [
+      "text",
+      "image"
+     ],
+     "outputModalities": [
+      "text"
+     ]
+    },
+    "huggingFaceId": "Qwen/Qwen3.8-27B-FP8",
+    "quantization": "fp8",
+    "maxOutputLength": 65536,
+    "supportedSamplingParameters": [
+     "temperature",
+     "top_p",
+     "top_k",
+     "max_tokens",
+     "stop",
+     "seed"
+    ],
+    "supportedFeatures": [
+     "tools",
+     "structured_outputs",
+     "reasoning"
+    ],
+    "datacenters": [
+     {
+      "country_code": "US"
+     }
+    ],
+    "isReady": true,
+    "openrouterSlug": "qwen/qwen3.8-27b"
+   }
+  },
+  {
+   "modelId": "Qwen/Qwen3-Embedding-0.6B",
+   "inputCostPerToken": {
+    "amount": 10,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "outputCostPerToken": {
+    "amount": 10,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "costPerImage": {
+    "amount": 0,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "metadata": {
+    "verifiable": true,
+    "contextLength": 32768,
+    "modelDisplayName": "Qwen3-Embedding-0.6B",
+    "modelDescription": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen fam",
+    "modelIcon": null,
+    "ownedBy": "nearai",
+    "providerType": "vllm",
+    "attestationSupported": true,
+    "architecture": {
+     "inputModalities": [
+      "text"
+     ],
+     "outputModalities": [
+      "embedding"
+     ]
+    },
+    "huggingFaceId": "Qwen/Qwen3-Embedding-0.6B",
+    "quantization": "bf16",
+    "maxOutputLength": 1024,
+    "datacenters": [
+     {
+      "country_code": "US"
+     }
+    ]
+   }
+  },
+  {
+   "modelId": "z-ai/glm-5.3-flash",
+   "inputCostPerToken": {
+    "amount": 80,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "outputCostPerToken": {
+    "amount": 500,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "costPerImage": {
+    "amount": 0,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "cacheReadCostPerToken": {
+    "amount": 12,
+    "scale": 9,
+    "currency": "USD"
+   },
+   "metadata": {
+    "verifiable": true,
+    "contextLength": 1048576,
+    "modelDisplayName": "GLM 5.3 Flash",
+    "modelDescription": "GLM-5.3-Flash is a native multimodal mixture-of-experts model for coding, agenti",
+    "modelIcon": null,
+    "ownedBy": "nearai",
+    "aliases": [
+     "zai-org/GLM-5.3-Flash",
+     "GLM-5.3-Flash",
+     "glm-5.3-flash",
+     "zai-org/GLM-5.1-FP8",
+     "zai-org/GLM-5-FP8",
+     "glm-latest",
+     "zai-org/GLM-latest",
+     "GLM-5",
+     "zai-org/GLM-4.7",
+     "glm",
+     "GLM-5.1",
+     "zai-org/GLM-5.1",
+     "z-ai/glm-5.2"
+    ],
+    "providerType": "vllm",
+    "providerConfig": {
+     "long_context": {
+      "inference_url": "https://glm-5-3-flash-long.completions.near.ai",
+      "max_context_tokens": 1048576,
+      "base_max_context_tokens": 100000
+     }
+    },
+    "attestationSupported": true,
+    "architecture": {
+     "inputModalities": [
+      "text",
+      "image"
+     ],
+     "outputModalities": [
+      "text"
+     ]
+    },
+    "huggingFaceId": "zai-org/GLM-5.3-Flash",
+    "quantization": "fp8",
+    "maxOutputLength": 1048576,
+    "supportedSamplingParameters": [
+     "temperature",
+     "top_p",
+     "top_k",
+     "min_p",
+     "frequency_penalty",
+     "presence_penalty",
+     "repetition_penalty",
+     "max_tokens",
+     "stop",
+     "seed",
+     "logit_bias"
+    ],
+    "supportedFeatures": [
+     "tools",
+     "structured_outputs",
+     "reasoning",
+     "json_mode"
+    ],
+    "isReady": true,
+    "openrouterSlug": "z-ai/glm-5.3-flash"
+   }
+  }
+ ],
+ "limit": 200,
+ "offset": 0,
+ "total": 64
+}

@@ -14,6 +14,7 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   google: "Google Gemini",
   openai_compatible: "the OpenAI-compatible endpoint",
   replicate: "Replicate",
+  nearai: "NEAR AI Cloud",
 };
 
 /** Key-shaped strings providers sometimes echo back in error messages (masked or not). */
@@ -52,10 +53,10 @@ export function httpError(
   provider: Provider,
   status: number,
   detail: string,
-  o: { headers?: Headers; apiKey: string; kind?: ModelErrorKind; retryable?: boolean; retryAfterMs?: number | null },
+  o: { headers?: Headers; apiKey: string; kind?: ModelErrorKind; retryable?: boolean; retryAfterMs?: number | null; label?: string },
 ): ModelError {
   const kind = o.kind ?? kindOfStatus(status);
-  const who = PROVIDER_LABEL[provider];
+  const who = o.label ?? PROVIDER_LABEL[provider];
   const what: Record<ModelErrorKind, string> = {
     auth: `${who} rejected the API key (${status})`,
     rate_limit: `rate limited by ${who} (${status})`,
@@ -71,9 +72,9 @@ export function httpError(
 }
 
 /** A failure before any HTTP status: our timeout or the caller's abort (timeout), or the network. */
-export function transportError(provider: Provider, err: unknown, apiKey: string, timedOut: boolean): ModelError {
+export function transportError(provider: Provider, err: unknown, apiKey: string, timedOut: boolean, label?: string): ModelError {
   if (err instanceof ModelError) return err;
-  const who = PROVIDER_LABEL[provider];
+  const who = label ?? PROVIDER_LABEL[provider];
   const name = err instanceof Error ? err.name : "";
   if (timedOut || name === "AbortError" || name === "TimeoutError") {
     return new ModelError("timeout", timedOut ? `${who} did not answer in time` : `the request to ${who} was aborted`, { provider, cause: err });
@@ -89,6 +90,15 @@ export type JsonRequest = {
   method?: "GET" | "POST";
   headers: Record<string, string>;
   body?: unknown;
+  /**
+   * The request body as the exact text to send, instead of `body`. For providers that sign a hash of the request
+   * bytes (NEAR AI Cloud): the caller serializes once and keeps the same text for verification.
+   */
+  bodyText?: string;
+  /** Receives the exact bytes of a 2xx response body, before any parsing. */
+  onRawResponse?: (bytes: Uint8Array) => void;
+  /** The name errors use for the endpoint, when it is better known than the provider id says (NEAR AI Cloud). */
+  label?: string;
   fetch: typeof fetch;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -101,23 +111,26 @@ export async function requestJson(r: JsonRequest): Promise<unknown> {
   const timer = new AbortController();
   const t = setTimeout(() => timer.abort(), r.timeoutMs);
   const signal = r.signal ? AbortSignal.any([r.signal, timer.signal]) : timer.signal;
+  const payload = r.bodyText ?? (r.body === undefined ? undefined : JSON.stringify(r.body));
   try {
     let res: Response;
     try {
       res = await r.fetch(r.url, {
-        method: r.method ?? (r.body === undefined ? "GET" : "POST"),
-        headers: { accept: "application/json", ...(r.body === undefined ? {} : { "content-type": "application/json" }), ...r.headers },
-        body: r.body === undefined ? undefined : JSON.stringify(r.body),
+        method: r.method ?? (payload === undefined ? "GET" : "POST"),
+        headers: { accept: "application/json", ...(payload === undefined ? {} : { "content-type": "application/json" }), ...r.headers },
+        body: payload,
         signal,
       });
     } catch (err) {
-      throw transportError(r.provider, err, r.apiKey, timer.signal.aborted && !r.signal?.aborted);
+      throw transportError(r.provider, err, r.apiKey, timer.signal.aborted && !r.signal?.aborted, r.label);
     }
     let text: string;
     try {
-      text = await res.text();
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (res.ok) r.onRawResponse?.(bytes);
+      text = new TextDecoder().decode(bytes);
     } catch (err) {
-      throw transportError(r.provider, err, r.apiKey, timer.signal.aborted && !r.signal?.aborted);
+      throw transportError(r.provider, err, r.apiKey, timer.signal.aborted && !r.signal?.aborted, r.label);
     }
     let body: unknown = null;
     try {
@@ -127,7 +140,7 @@ export async function requestJson(r: JsonRequest): Promise<unknown> {
     }
     if (!res.ok) throw r.onError(res.status, body, res.headers);
     if (body === null || typeof body !== "object") {
-      throw new ModelError("unknown", `${PROVIDER_LABEL[r.provider]} answered ${res.status} without a JSON body`, { status: res.status, provider: r.provider, retryable: true });
+      throw new ModelError("unknown", `${r.label ?? PROVIDER_LABEL[r.provider]} answered ${res.status} without a JSON body`, { status: res.status, provider: r.provider, retryable: true });
     }
     return body;
   } finally {

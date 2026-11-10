@@ -1,0 +1,21 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "call_function",
+    "account_id": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "method_name": "no_such_method",
+    "args_base64": "e30="
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "block_hash": "WRufnfcHsAAhHWW4zQLtw8MEdkqutWYUregXjtkhauo",
+      "block_height": 277021796,
+      "error": "wasm execution failed with error: MethodResolveError(MethodNotFound)",
+      "logs": []
+    },
+    "id": "payminto"
+  }
+}

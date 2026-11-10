@@ -1,0 +1,22 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "view_account",
+    "account_id": "near-examples.testnet"
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "amount": "66905404306835848800000000",
+      "block_hash": "GXCej5zeYMfSFNLAYnfF2vxbgzpEnew64hiEPihv2zJV",
+      "block_height": 277021741,
+      "code_hash": "11111111111111111111111111111111",
+      "locked": "0",
+      "storage_paid_at": 0,
+      "storage_usage": 1835
+    },
+    "id": "payminto"
+  }
+}

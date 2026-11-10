@@ -1,0 +1,69 @@
+{
+  "_meta": {
+    "source": "read-only call_function views on omni.bridge.near (mainnet) and omni.n-bridge.testnet",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "views": {
+    "mainnet native USDC -> Base": {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "omni.bridge.near",
+      "method": "get_token_address",
+      "args": {
+        "chain_kind": "Base",
+        "token": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+      },
+      "block_height": 223861511,
+      "result": null
+    },
+    "mainnet USDC.e -> Eth": {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "omni.bridge.near",
+      "method": "get_token_address",
+      "args": {
+        "chain_kind": "Eth",
+        "token": "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.factory.bridge.near"
+      },
+      "block_height": 223861517,
+      "result": "eth:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    },
+    "mainnet wrap.near -> Base": {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "omni.bridge.near",
+      "method": "get_token_address",
+      "args": {
+        "chain_kind": "Base",
+        "token": "wrap.near"
+      },
+      "block_height": 223861524,
+      "result": "base:0x02eea354d135d1a912967c2d2a6147deb01ef92e"
+    },
+    "testnet Circle USDC -> Eth": {
+      "rpc": "https://rpc.testnet.near.org",
+      "contract": "omni.n-bridge.testnet",
+      "method": "get_token_address",
+      "args": {
+        "chain_kind": "Eth",
+        "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af"
+      },
+      "block_height": 277014175,
+      "result": null
+    },
+    "required_balance_for_init_transfer": {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "omni.bridge.near",
+      "method": "required_balance_for_init_transfer",
+      "args": {},
+      "block_height": 223861545,
+      "result": "4690000000000000000000"
+    },
+    "required_balance_for_account": {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "omni.bridge.near",
+      "method": "required_balance_for_account",
+      "args": {},
+      "block_height": 223861552,
+      "result": "1410000000000000000000"
+    }
+  }
+}

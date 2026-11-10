@@ -1,0 +1,45 @@
+{
+  "note": "Hub verify_receipt for receipt 2 of leaves_5.",
+  "request": {
+    "method": "query",
+    "params": {
+      "request_type": "call_function",
+      "finality": "final",
+      "account_id": "hub.payminto.testnet",
+      "method_name": "verify_receipt",
+      "args": {
+        "batch_id": "54193345102d846d0611149ffd48ea3e3454643c77b0c5ea44b407d9840d185c",
+        "fields": {
+          "call_id": "bfda4a41f1b0efa0f29360da3efa68e0264ea7db236f1ff9be3b6106e6aadabb",
+          "budget_id": "d4ec41789fa3d2866f601860d60be41e753bb1e1f559ac4614a7efbb7b3ed60d",
+          "payee": "api.seller.testnet",
+          "amount": "1004",
+          "cumulative": "5020",
+          "request_hash": "69fc5390e0cac26ca7070fec55ca9ada0657e670dc88ab0df01a42bfe1e36f30",
+          "timestamp_ms": "1800000000004",
+          "voucher_sig": "fd7b32103842657376522bb319f83dde4f4994f102ba195c4f5ea6c6f269d8201497fed751cc46d450721de3fd51d5f649fcd08a2aa70c47f395ef3305cb5bab"
+        },
+        "proof": [
+          "f2235fd88e68685dfa34ad6ca0ba194ac81265b87517c1839fdd1248c0b83e37",
+          "5031b2de4cd646aabfcfb0714f965ce3401d72c5e460d2d9f7dee3ec15f1756f",
+          "d5545b339975f68e5e8bb64ef69271ef3e577ed15bd540cdab46d8b25b6feb5a"
+        ]
+      }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "payminto-1",
+    "result": {
+      "block_hash": "8sPRLUk5FXH3vdTdXV3tWrw7WkoFJEn5RFGtXNhrqgwN",
+      "block_height": 219402871,
+      "logs": [],
+      "result": [
+        116,
+        114,
+        117,
+        101
+      ]
+    }
+  }
+}

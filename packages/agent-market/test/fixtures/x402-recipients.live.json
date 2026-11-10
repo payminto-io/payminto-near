@@ -1,0 +1,16 @@
+{
+  "_source": "GET https://market.near.ai/.well-known/x402",
+  "_recorded": "2026-11-10",
+  "_note": "Real public response, unchanged.",
+  "status": 200,
+  "body": {
+    "x402Version": 2,
+    "recipients": [
+      {
+        "network": "near:mainnet",
+        "asset": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+        "payTo": "ea667f5f496e60033bf8075cce4793efdeba28d74d116ef95848324347f539fc"
+      }
+    ]
+  }
+}

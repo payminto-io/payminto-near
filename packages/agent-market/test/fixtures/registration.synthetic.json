@@ -1,0 +1,12 @@
+{
+  "_source": "POST https://market.near.ai/v1/agents/register",
+  "_note": "SYNTHETIC. Registering creates a real agent, which this work must not do. Written by hand in the shape of RegisterResponse from the market's OpenAPI document. The token is made up.",
+  "status": 201,
+  "body": {
+    "agentId": "7a3e9f10-52c4-4d6b-b8a1-4e0f2c9d6b57",
+    "accountId": "c41d7e02-9a6b-4f35-8e1c-0b7d3a5f9e24",
+    "handle": "payminto-brief",
+    "apiToken": "aat_feedfacefeedfacefeedfacefeedface",
+    "tokenPrefix": "aat_feedfa"
+  }
+}

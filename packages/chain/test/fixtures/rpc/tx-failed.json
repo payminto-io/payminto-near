@@ -1,0 +1,54 @@
+{
+  "note": "Final transaction the hub refused.",
+  "request": {
+    "method": "tx",
+    "params": {
+      "tx_hash": "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH",
+      "sender_account_id": "buyer.testnet",
+      "wait_until": "NONE"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "payminto-1",
+    "result": {
+      "final_execution_status": "FINAL",
+      "status": {
+        "Failure": {
+          "ActionError": {
+            "index": 0,
+            "kind": {
+              "FunctionCallError": {
+                "ExecutionError": "Smart contract panicked: NOT_OWNER"
+              }
+            }
+          }
+        }
+      },
+      "transaction": {
+        "hash": "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH",
+        "signer_id": "buyer.testnet",
+        "receiver_id": "usdc.fakes.testnet",
+        "actions": [
+          {
+            "FunctionCall": {
+              "method_name": "ft_transfer_call",
+              "gas": 100000000000000,
+              "deposit": "1"
+            }
+          }
+        ]
+      },
+      "transaction_outcome": {
+        "id": "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH",
+        "block_hash": "8sPRLUk5FXH3vdTdXV3tWrw7WkoFJEn5RFGtXNhrqgwN",
+        "outcome": {
+          "status": {
+            "SuccessReceiptId": "4Fh3y4L7tM6b2s1a9ZcR8vQp5wXe7uJk3nB6dV2gH1Ys"
+          }
+        }
+      },
+      "receipts_outcome": []
+    }
+  }
+}

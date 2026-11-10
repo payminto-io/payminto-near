@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "source": "https://rpc.testnet.near.org query view_access_key_list near-examples.testnet",
+    "recorded": "2026-11-10",
+    "live": true,
+    "block_height": 277013593,
+    "note": "One function-call key, verbatim, as a shape reference for auditAgentKey."
+  },
+  "account_id": "near-examples.testnet",
+  "key": {
+    "access_key": {
+      "nonce": 183972111000025,
+      "permission": {
+        "FunctionCall": {
+          "allowance": "245341872695225600000000",
+          "method_names": [],
+          "receiver_id": "counter.near-examples.testnet"
+        }
+      }
+    },
+    "public_key": "ed25519:EUgHBXjx3mtNs5abYS3qhVL4ioXkoFZ9Ga6pNCUKqLv"
+  }
+}

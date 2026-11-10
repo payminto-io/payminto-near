@@ -1,0 +1,14 @@
+{
+  "_meta": {
+    "source": "https://rpc.mainnet.near.org query call_function 17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1.storage_balance_of",
+    "recorded": "2026-11-10",
+    "live": true,
+    "block_height": 223857852
+  },
+  "contract": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  "method": "storage_balance_of",
+  "args": {
+    "account_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+  },
+  "result": null
+}

@@ -21,13 +21,13 @@ export type OpenAIAdapterOptions = ClientOptions & {
 
 type WireToolCall = { id?: unknown; type?: unknown; function?: { name?: unknown; arguments?: unknown } };
 type WireMessage = { role: string; content?: unknown; tool_calls?: WireToolCall[]; refusal?: unknown };
-type WireCompletion = {
+export type WireCompletion = {
   model?: unknown;
   choices?: Array<{ message?: WireMessage; finish_reason?: unknown }>;
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } | null } | null;
 };
 
-function toolsOf(tools: ToolSpec[]) {
+export function toolsOf(tools: ToolSpec[]) {
   return tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
 }
 

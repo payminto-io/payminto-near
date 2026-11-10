@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "source": "https://rpc.mainnet.near.org query call_function 17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1.storage_balance_bounds",
+    "recorded": "2026-11-10",
+    "live": true,
+    "block_height": 223857828
+  },
+  "contract": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  "method": "storage_balance_bounds",
+  "args": {},
+  "result": {
+    "min": "1250000000000000000000",
+    "max": "1250000000000000000000"
+  }
+}

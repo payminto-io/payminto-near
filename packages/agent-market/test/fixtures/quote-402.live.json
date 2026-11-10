@@ -1,0 +1,20 @@
+{
+  "_source": "POST https://example-research.market.near.ai/a2a/v1 (SendMessage without X-PAYMENT)",
+  "_recorded": "2026-11-10",
+  "_note": "Recorded shape from the live API on 2026-11-10, with third-party identifiers and descriptions replaced. A 402 answer to an unpaid quote request. No account, no key, no payment.",
+  "status": 402,
+  "body": {
+    "accepts": [
+      {
+        "amount": "250000",
+        "asset": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+        "maxTimeoutSeconds": 4200,
+        "network": "near:mainnet",
+        "payTo": "ea667f5f496e60033bf8075cce4793efdeba28d74d116ef95848324347f539fc",
+        "scheme": "exact"
+      }
+    ],
+    "error": "x-payment header is required",
+    "x402Version": 2
+  }
+}

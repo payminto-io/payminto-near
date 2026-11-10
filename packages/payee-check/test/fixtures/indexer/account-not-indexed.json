@@ -1,0 +1,8 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://api-testnet.nearblocks.io/v3/accounts/this-account-does-not-exist-zz9.testnet",
+  "status": 200,
+  "body": {
+    "data": null
+  }
+}

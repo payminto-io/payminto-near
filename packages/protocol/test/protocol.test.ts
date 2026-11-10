@@ -1,183 +1,21 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  createPublicClient,
-  createWalletClient,
-  http,
-  keccak256,
-  maxUint256,
-  toBytes,
-  type Address,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import {
-  clearingHubAbi,
-  clearingHubBytecode,
-  mockStablecoinAbi,
-  mockStablecoinBytecode,
-  localAnvil,
-  mandateId,
-  mandateTypedData,
-  voucherDigest,
-  voucherTypedData,
-  isVoucherSignedBy,
-  payeesRoot,
-  payeeProof,
-  receiptsTree,
-  receiptLeaf,
-  receiptProof,
-  verifyReceiptProof,
-  policyHash,
-  canonicalPolicy,
-  MANDATE_TYPEHASH_PREIMAGE,
-  hspTypes,
-  hspVerify,
-  buildNetTransferMandate,
-  hspTypedData,
-  hspPaymentId,
-  isHspMandateSignedBy,
-  requiredCapabilitiesHash,
-  ZERO_BYTES32,
-  formatAmount,
-  encodeHeader,
-  decodeHeader,
-  type Mandate,
-  type CallReceipt,
-} from "../src/index.ts";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { acceptanceDigest, budgetTermsFromJson, budgetTermsToJson, canonicalPolicy, decodeHeader, encodeHeader, formatAmount, keypairFromSeed, networkFor, nodeDigest, policyHash, sha256Text, toAtomic, voucherCallId } from "../src/index.ts";
 
-// Anvil default dev keys (public, local only).
-const DEPLOYER = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
-const OWNER = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
-const AGENT = privateKeyToAccount("0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a");
-const PROVIDER_A = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as Address;
-const PROVIDER_B = "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65" as Address;
-const PORT = 18545 + Math.floor(Math.random() * 1000);
-
-let anvil: ChildProcess;
-const transport = http(`http://127.0.0.1:${PORT}`);
-const chain = { ...localAnvil, rpcUrls: { default: { http: [`http://127.0.0.1:${PORT}`] } } };
-const pub = createPublicClient({ chain, transport });
-const deployer = createWalletClient({ account: DEPLOYER, chain, transport });
-let hub: Address;
-let token: Address;
-
-async function waitForRpc() {
-  for (let i = 0; i < 100; i++) {
-    try {
-      await pub.getChainId();
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  throw new Error("anvil did not start");
-}
-
-async function deploy(abi: any, bytecode: Hex): Promise<Address> {
-  const hash = await deployer.deployContract({ abi, bytecode });
-  const rcpt = await pub.waitForTransactionReceipt({ hash });
-  return rcpt.contractAddress!;
-}
-
-beforeAll(async () => {
-  anvil = spawn("anvil", ["--port", String(PORT), "--silent"], { stdio: "ignore" });
-  await waitForRpc();
-  hub = await deploy(clearingHubAbi, clearingHubBytecode);
-  token = await deploy(mockStablecoinAbi, mockStablecoinBytecode);
-}, 30_000);
-
-afterAll(() => {
-  anvil?.kill();
-});
-
-async function sampleMandate(payees: Address[]): Promise<Mandate> {
-  const now = BigInt((await pub.getBlock()).timestamp);
-  return {
-    owner: OWNER.address,
-    agent: AGENT.address,
-    token,
-    totalCap: 50_000_000n,
-    validAfter: now - 10n,
-    validUntil: now + 86_400n,
-    payeesRoot: payeesRoot(payees),
-    policyHash: policyHash({ perCallCap: "50000", dailyCap: "20000000", maxCallsPerMinute: 600, purpose: "test" }),
-    salt: keccak256(toBytes("salt-1")),
-  };
-}
-
-describe("ClearingHub parity", () => {
-  it("TypeScript mandate id equals the on-chain digest", async () => {
-    const m = await sampleMandate([PROVIDER_A, PROVIDER_B]);
-    const onchain = await pub.readContract({ address: hub, abi: clearingHubAbi, functionName: "mandateDigest", args: [m] });
-    expect(mandateId(localAnvil.id, hub, m)).toBe(onchain);
-  });
-
-  it("TypeScript voucher digest equals the on-chain digest", async () => {
-    const v = { mandateId: keccak256(toBytes("m")), payee: PROVIDER_A, cumulative: 12_345n };
-    const onchain = await pub.readContract({ address: hub, abi: clearingHubAbi, functionName: "voucherDigest", args: [v] });
-    expect(voucherDigest(localAnvil.id, hub, v)).toBe(onchain);
-  });
-
-  it("opens a mandate and settles vouchers with an allowlist proof and a receipts root", async () => {
-    const payees = [PROVIDER_A, PROVIDER_B];
-    const m = await sampleMandate(payees);
-    const ownerSig = await OWNER.signTypedData(mandateTypedData(localAnvil.id, hub, m));
-    const id = mandateId(localAnvil.id, hub, m);
-
-    const ownerWallet = createWalletClient({ account: OWNER, chain, transport });
-    await pub.waitForTransactionReceipt({
-      hash: await ownerWallet.writeContract({ address: hub, abi: clearingHubAbi, functionName: "openMandate", args: [m, ownerSig] }),
-    });
-
-    const agentWallet = createWalletClient({ account: AGENT, chain, transport });
-    await pub.waitForTransactionReceipt({
-      hash: await deployer.writeContract({ address: token, abi: mockStablecoinAbi, functionName: "mint", args: [AGENT.address, 100_000_000n] }),
-    });
-    await pub.waitForTransactionReceipt({
-      hash: await agentWallet.writeContract({ address: token, abi: mockStablecoinAbi, functionName: "approve", args: [hub, maxUint256] }),
-    });
-
-    const voucher = { mandateId: id, payee: PROVIDER_A, cumulative: 30_000n };
-    const agentSig = await AGENT.signTypedData(voucherTypedData(localAnvil.id, hub, voucher));
-    expect(await isVoucherSignedBy(localAnvil.id, hub, voucher, agentSig, AGENT.address)).toBe(true);
-
-    const receipts: CallReceipt[] = [10_000n, 20_000n, 30_000n].map((cumulative, i) => ({
-      callId: keccak256(toBytes(`call-${i}`)),
-      mandateId: id,
-      payee: PROVIDER_A,
-      amount: 10_000n,
-      cumulative,
-      requestHash: keccak256(toBytes(`GET /quote ${i}`)),
-      timestamp: 1_800_000_000n + BigInt(i),
-    }));
-    const tree = receiptsTree(receipts);
-    const batchId = keccak256(toBytes("batch-1"));
-
-    const claims = [{ voucher, agentSig, payeeProof: payeeProof(payees, PROVIDER_A) }];
-    await pub.waitForTransactionReceipt({
-      hash: await deployer.writeContract({
-        address: hub,
-        abi: clearingHubAbi,
-        functionName: "settleBatch",
-        args: [batchId, tree.root as Hex, token, claims],
-      }),
-    });
-
-    const bal = await pub.readContract({ address: token, abi: mockStablecoinAbi, functionName: "balanceOf", args: [PROVIDER_A] });
-    expect(bal).toBe(30_000n);
-
-    const r1 = receipts[1]!;
-    const proof = receiptProof(tree, r1);
-    expect(verifyReceiptProof(tree.root as Hex, r1, proof)).toBe(true);
-    const onchainOk = await pub.readContract({
-      address: hub,
-      abi: clearingHubAbi,
-      functionName: "verifyReceipt",
-      args: [batchId, receiptLeaf(r1), proof],
-    });
-    expect(onchainOk).toBe(true);
-  });
+type AcceptanceCase = { name: string; input: { budget_id: string; payee: string; amount: string; cumulative: string; request_hash: string; timestamp_s: string; voucher_sig: string }; call_id: string; text: string; digest_hex: string };
+/** The vectors the hub contract, the chain package and every digest test share. */
+const acceptanceCases = (JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "chain", "vectors", "acceptance.json"), "utf8")) as { cases: AcceptanceCase[] }).cases;
+const attestationOf = (c: AcceptanceCase) => ({
+  callId: c.call_id,
+  budgetId: c.input.budget_id,
+  payee: c.input.payee,
+  amount: BigInt(c.input.amount),
+  cumulative: BigInt(c.input.cumulative),
+  requestHash: c.input.request_hash,
+  timestamp: BigInt(c.input.timestamp_s),
+  voucherSig: c.input.voucher_sig,
 });
 
 describe("policy", () => {
@@ -186,56 +24,72 @@ describe("policy", () => {
     const b = { dailyCap: "3", maxCallsPerMinute: 2, perCallCap: "1", purpose: "x" };
     expect(canonicalPolicy(a)).toBe(canonicalPolicy(b));
     expect(policyHash(a)).toBe(policyHash(b));
-  });
-});
-
-describe("HSP wire v1", () => {
-  it("derives exactly the published MANDATE_TYPEHASH preimage from the typed-data definition", () => {
-    // EIP-712 encodeType: primary type first, then referenced structs sorted by name.
-    const fmt = (name: keyof typeof hspTypes) =>
-      `${name}(${hspTypes[name].map((f) => `${f.type} ${f.name}`).join(",")})`;
-    expect(fmt("Mandate") + fmt("Recipient") + fmt("Signer")).toBe(MANDATE_TYPEHASH_PREIMAGE);
-  });
-
-  it("signs and verifies a net-transfer mandate bound to a batch", async () => {
-    const body = buildNetTransferMandate({
-      payer: AGENT.address,
-      recipient: PROVIDER_A,
-      token: "0x8FE3cB719Ee4410E236Cd6b72ab1fCDC06eF53c6",
-      amount: 30_000n,
-      chainId: 133,
-      batchId: keccak256(toBytes("batch-1")),
-      deadline: 1_900_000_000n,
-    });
-    expect(body.settlementBinding).toBe(keccak256(toBytes("batch-1")));
-    const vc = "0x1111111111111111111111111111111111111111" as Address;
-    const sig = await AGENT.signTypedData(hspTypedData(133, vc, body));
-    expect(await isHspMandateSignedBy(133, vc, body, sig, AGENT.address)).toBe(true);
-    expect(await isHspMandateSignedBy(133, vc, body, sig, OWNER.address)).toBe(false);
-    expect(hspPaymentId(133, vc, body)).toMatch(/^0x[0-9a-f]{64}$/);
-  });
-
-  it("hashes capability sets order- and case-insensitively, empty set to zero", () => {
-    expect(requiredCapabilitiesHash([])).toBe(ZERO_BYTES32);
-    expect(requiredCapabilitiesHash(["B:x:v1", "a:y:v1"])).toBe(requiredCapabilitiesHash(["a:y:v1", "b:x:v1", "b:x:v1"]));
-  });
-
-  it("accepts iff required capabilities are a subset of satisfied ones", () => {
-    expect(hspVerify(["proves:a"], ["proves:a", "proves:b"])).toBe("ACCEPT");
-    expect(hspVerify(["proves:a", "attests:kyc"], ["proves:a"])).toBe("REJECT");
-    expect(hspVerify([], [])).toBe("ACCEPT");
+    expect(policyHash(a)).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
 describe("helpers", () => {
-  it("formats atomic amounts", () => {
+  it("formats and parses atomic amounts without floats", () => {
     expect(formatAmount(1_500_000n)).toBe("1.50");
     expect(formatAmount(10_000n)).toBe("0.01");
     expect(formatAmount(1_234n)).toBe("0.001234");
+    expect(formatAmount(0n)).toBe("0.00");
+    expect(toAtomic("1.5")).toBe(1_500_000n);
+    expect(toAtomic("0.000001")).toBe(1n);
+    expect(() => toAtomic("0.0000001")).toThrow(/decimals/);
+    expect(() => toAtomic("1e3")).toThrow();
   });
 
   it("round-trips x402 headers", () => {
-    expect(decodeHeader(encodeHeader({ a: 1 }))).toEqual({ a: 1 });
+    expect(decodeHeader(encodeHeader({ a: 1, s: "é" }))).toEqual({ a: 1, s: "é" });
     expect(decodeHeader("not-base64-json")).toBeNull();
+  });
+
+  it("round-trips Budget terms through JSON", () => {
+    const t = { owner: "a.testnet", agentPk: keypairFromSeed(new Uint8Array(32).fill(1)).publicKey, settler: "n.testnet", cap: 2n ** 100n, validUntil: 1n, payees: ["s.testnet"], policyHash: "aa".repeat(32), salt: "bb".repeat(32) };
+    const j = budgetTermsToJson(t);
+    expect(j.cap).toBe((2n ** 100n).toString());
+    expect(budgetTermsFromJson(JSON.parse(JSON.stringify(j)))).toEqual(t);
+  });
+
+  it("binds every attested field into the node digest", () => {
+    const a = { callId: "01".repeat(32), budgetId: "02".repeat(32), payee: "s.testnet", amount: 1n, cumulative: 2n, requestHash: "03".repeat(32), timestamp: 4n, voucherSig: "05".repeat(64) };
+    expect(nodeDigest({ ...a, timestamp: 5n })).not.toBe(nodeDigest(a));
+    expect(nodeDigest({ ...a, amount: 2n })).not.toBe(nodeDigest(a));
+  });
+
+  it("the node digest is the chain package's acceptance digest, byte for byte, on every shared vector", () => {
+    expect(acceptanceCases.length).toBeGreaterThanOrEqual(4);
+    for (const c of acceptanceCases) {
+      const a = attestationOf(c);
+      expect(nodeDigest(a), c.name).toBe(c.digest_hex);
+      expect(nodeDigest(a), c.name).toBe(acceptanceDigest({ budgetId: a.budgetId, payee: a.payee, amount: a.amount, cumulative: a.cumulative, requestHash: a.requestHash, signature: a.voucherSig }, a.timestamp));
+    }
+  });
+
+  it("the node digest has no text layout of its own: an attestation of a real call goes through acceptanceDigest", () => {
+    // The text layout lives in @payminto/chain. A second copy here could drift from what the hub rebuilds in settle_own.
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "hub.ts"), "utf8");
+    expect(source).not.toContain("payminto.accepted.v1");
+    expect(source).toMatch(/acceptanceDigest\(/);
+  });
+
+  it("the node digest still names its call id: a receipt whose call id was changed gets another digest", () => {
+    for (const c of acceptanceCases) {
+      const a = attestationOf(c);
+      const other = sha256Text(`not the call id of ${c.name}`);
+      const fields = c.text.split("|");
+      expect(fields[1]).toBe(voucherCallId(a));
+      fields[1] = other;
+      // The same nine fields in the same order, with the id the attestation names in the second place.
+      expect(nodeDigest({ ...a, callId: other })).toBe(sha256Text(fields.join("|")));
+      expect(nodeDigest({ ...a, callId: other })).not.toBe(c.digest_hex);
+    }
+    expect(() => nodeDigest({ ...attestationOf(acceptanceCases[0]!), callId: "not-an-id|x" })).toThrow(/callId/);
+  });
+
+  it("knows testnet and sandbox, and has no mainnet node mode", () => {
+    expect(networkFor("near:testnet").token.address).toBe("3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af");
+    expect(() => networkFor("near:mainnet")).toThrow(/Unsupported/);
   });
 });

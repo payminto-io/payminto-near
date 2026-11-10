@@ -1,0 +1,180 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "view_access_key_list",
+    "account_id": "near-examples.testnet"
+  },
+  "status": 200,
+  "note": "Function-call permissions are trimmed to receiver_id and method_names. Everything else is as answered.",
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "block_hash": "3UwTP6iTKc8mge3e5KRZNCf87rhRFzj2YW4VY8d172Y7",
+      "block_height": 277021758,
+      "keys": [
+        {
+          "access_key": {
+            "nonce": 124473011000000,
+            "permission": "FullAccess"
+          },
+          "public_key": "ed25519:AxjaYda4EXk8F7Sc8tfh9DED2nXDdWmu3iJ3dfyhfYR"
+        },
+        {
+          "access_key": {
+            "nonce": 183972111000025,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "counter.near-examples.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:EUgHBXjx3mtNs5abYS3qhVL4ioXkoFZ9Ga6pNCUKqLv"
+        },
+        {
+          "access_key": {
+            "nonce": 131705012000018,
+            "permission": "FullAccess"
+          },
+          "public_key": "ed25519:bjNnPCjz8ovmtTGZkWebXZV5mDnbF9U5ErmCMcuaFto"
+        },
+        {
+          "access_key": {
+            "nonce": 183971168000000,
+            "permission": "FullAccess"
+          },
+          "public_key": "ed25519:4ogVoz4LLCxaLrqXYdvavTdWvjPnWivMe7bdbEXVFEFS"
+        },
+        {
+          "access_key": {
+            "nonce": 131713232000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:62uupij4pTwmL1rLXx7FVVpePkde8EpZUKbgtMZV8eLa"
+        },
+        {
+          "access_key": {
+            "nonce": 131711372000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:8z4zGes92Xc6rPWiUfv58AsDgAdDY9xv6FEQCYhup6NN"
+        },
+        {
+          "access_key": {
+            "nonce": 131715503000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:AAfR9FmDmYqDs16dad1SeWxEx2U3tRdBZ355YnutMpnw"
+        },
+        {
+          "access_key": {
+            "nonce": 131705022000001,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:B4HAirVykUhbLkeZv5zV3HKndL5AQwYDq5sRnRXwRQiy"
+        },
+        {
+          "access_key": {
+            "nonce": 131710354000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:CFFy2hD2t3MUgntW1XLdWnrMt81EWM1fACFBQKFwy9pX"
+        },
+        {
+          "access_key": {
+            "nonce": 183979169000003,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "coinflip.near-examples.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:CrkqH75JKmRKvLPVPdUyh71YqbuwKbYFcUnNBhAEadE8"
+        },
+        {
+          "access_key": {
+            "nonce": 131715324000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:DMVWuAKj3EdqUKEssUs9o5hkEB1rWDzNx4HNAB6XG5iU"
+        },
+        {
+          "access_key": {
+            "nonce": 131714805000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:E38Jhwcrsch7ZMkV5SZqzQDeYZA1wyPxfQAGKRzK8D5M"
+        },
+        {
+          "access_key": {
+            "nonce": 131762806000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:GzGXaCzbEz1JMa5hdWUrGYmPfXQEVdncTWthWu8FcSpH"
+        },
+        {
+          "access_key": {
+            "nonce": 124472882000014,
+            "permission": "FullAccess"
+          },
+          "public_key": "ed25519:HBAM36XNp99x8DTECScHDH73gA64WzrMhARgXFHnHiom"
+        },
+        {
+          "access_key": {
+            "nonce": 131761798000000,
+            "permission": {
+              "FunctionCall": {
+                "receiver_id": "v1.social08.testnet",
+                "method_names": []
+              }
+            }
+          },
+          "public_key": "ed25519:HkYzrpznssLcTynbkcbaiK7HZoYR1xoYFrxLpJoo2gLe"
+        }
+      ]
+    },
+    "id": "payminto"
+  }
+}

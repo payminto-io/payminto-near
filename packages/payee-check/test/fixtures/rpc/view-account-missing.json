@@ -1,0 +1,27 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "view_account",
+    "account_id": "this-account-does-not-exist-zz9.testnet"
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "error": {
+      "name": "HANDLER_ERROR",
+      "cause": {
+        "info": {
+          "block_hash": "7fFK4yYJ8HPMqQNYSFRDT2agjkXg3bZYwP4fRoWJiT3H",
+          "block_height": 277021747,
+          "requested_account_id": "this-account-does-not-exist-zz9.testnet"
+        },
+        "name": "UNKNOWN_ACCOUNT"
+      },
+      "code": -32000,
+      "message": "Server error",
+      "data": "account this-account-does-not-exist-zz9.testnet does not exist while viewing"
+    },
+    "id": "payminto"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "_meta": {
+    "source": "GET https://mainnet.api.bridge.nearone.org/api/v4/transfers/transfer?origin_chain=Near&origin_nonce=57628",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "status": 200,
+  "body": {
+    "transfers": [
+      {
+        "transfer_id": {
+          "type": "nonce",
+          "chain": "Near",
+          "nonce": 57628
+        },
+        "origin_chain": "Near",
+        "destination_chain": "Sol",
+        "sender": "near:intents.near",
+        "recipient": "sol:Eoxmf8M5nXCU9hDvz5qkjKasjqeSgUx16kv9VQko1Fs5",
+        "token_id": "near:sol.omft.near",
+        "amount": "384642580",
+        "fee": "0",
+        "native_fee": "5522348550882212970496",
+        "destination_nonce": 20540,
+        "status": "Settled",
+        "initialised": {
+          "transaction_hash": "ANNiXdHQYd72kZQxdCJ8ASEpCHghPco285yeVU7x2Mib",
+          "chain": "Near",
+          "timestamp_seconds": 1782395865,
+          "details": {
+            "type": "near",
+            "block_height": 204242413,
+            "receipt_id": "7kftWH5MufLMesNVNfHZGjPMNCANBVFE28rU2FtJemeu"
+          }
+        },
+        "signed": [
+          {
+            "transaction_hash": "KePSznphtSRc95Y1W7YA9hfdg8pZ8tEzPmZiZmrNoTd",
+            "chain": "Near",
+            "timestamp_seconds": 1782395875,
+            "details": {
+              "type": "near",
+              "block_height": 204242431,
+              "receipt_id": "EBeMnyzRxbxkoG9K7BtoF57T56hsvuUTbTn4KH5ZpHah"
+            }
+          }
+        ],
+        "finalised": {
+          "transaction_hash": "3Pho1AA4FCiM6ShMaPtqoMmJmDPvLpVFviuMnKHpgEn2cvpP4ty5DEumkhkmF1vsTiTrXPAanYjQJp585Pj9297X",
+          "chain": "Sol",
+          "timestamp_seconds": 1782395895,
+          "details": {
+            "type": "solana",
+            "slot": 428819632,
+            "instruction_index": 0
+          }
+        },
+        "claimed": {
+          "transaction_hash": "7wRqH3RsezjxRagMPxownGDdnEF2gtVpB3YGyj1RyCHH",
+          "chain": "Near",
+          "timestamp_seconds": 1782395915,
+          "details": {
+            "type": "near",
+            "block_height": 204242497,
+            "receipt_id": "D6kohDDBuiMj51tV58svdMvdBGc55tob2xi9jnqb7J1q"
+          }
+        },
+        "fee_updates": [],
+        "utxo_signs": [],
+        "related_txs": [],
+        "tx_ids": [
+          "7wRqH3RsezjxRagMPxownGDdnEF2gtVpB3YGyj1RyCHH",
+          "ANNiXdHQYd72kZQxdCJ8ASEpCHghPco285yeVU7x2Mib",
+          "KePSznphtSRc95Y1W7YA9hfdg8pZ8tEzPmZiZmrNoTd",
+          "3Pho1AA4FCiM6ShMaPtqoMmJmDPvLpVFviuMnKHpgEn2cvpP4ty5DEumkhkmF1vsTiTrXPAanYjQJp585Pj9297X"
+        ]
+      }
+    ]
+  }
+}

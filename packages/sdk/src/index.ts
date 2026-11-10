@@ -1,16 +1,53 @@
-export { AgentClient, type AgentClientOptions, type ReceiptEvent, type DeniedEvent, type CosignedEvent, type CosignRefusedEvent } from "./agent.ts";
+export {
+  AgentClient,
+  PayFailed,
+  type AgentClientOptions,
+  type BeforeSign,
+  type BeforeSignRefusal,
+  type BeforeSignRequest,
+  type ReceiptEvent,
+  type DeniedEvent,
+  type PaidResponse,
+  type PaymentOutcome,
+  type PaymentRefusal,
+  type RefusalSource,
+  type VoucherOutcome,
+  type VoucherState,
+} from "./agent.ts";
 export { MemoryReceiptStore, SqliteReceiptStore, type ReceiptStore } from "./receipt-store.ts";
+export { AGENT_KEY_FORMAT, AgentKeyFileError, defaultAgentKeyPath, readAgentKeyFile, writeAgentKeyFile } from "./agent-key.ts";
 export { verifyReceiptOnchain, type ReceiptProofCheck } from "./proof.ts";
-export { OwnerClient, type OwnerClientOptions, type CreateMandateArgs } from "./owner.ts";
+export {
+  MemoryVoucherStore,
+  FileVoucherStore,
+  acceptanceCovers,
+  acceptanceOf,
+  exportVouchers,
+  parseVoucherExport,
+  settleOwnClaims,
+  settleOwnTxs,
+  NO_ACCEPTANCE,
+  VOUCHER_EXPORT_FORMAT,
+  type FileVoucherStoreOptions,
+  type ParsedVoucherExport,
+  type SettleOwnClaim,
+  type SettleOwnPlan,
+  type StoredAcceptance,
+  type StoredVoucher,
+  type Unsettleable,
+  type VoucherStore,
+  type VoucherExport,
+} from "./voucher-store.ts";
+export { OwnerClient, type OwnerClientOptions, type CreateBudgetArgs } from "./owner.ts";
 export { paywall, parseDenial, type Paywall, type PaywallOptions, type PaidContext, type PaywallCheck } from "./paywall.ts";
-export { NodeApiError, NodeHttp, type CosignItem, type NodeInfo, type Position } from "./node-api.ts";
-export { computeRequestHash, revokeMessage, KeyedMutex } from "./util.ts";
+export { NodeApiError, NodeHttp, type NodeInfo, type Position } from "./node-api.ts";
+export { callIdOf, cleanText, computeRequestHash, revokeDigest, revokeMessage, KeyedMutex } from "./util.ts";
 export {
   checkBeforeSigning,
   checkSplitBeforeSigning,
-  verifyMandatePolicy,
+  verifyBudgetPolicy,
   PolicyMismatchError,
-  type MandatePolicy,
+  type BudgetPolicy,
   type VerifiedPolicy,
   type PreSignDenial,
 } from "./policy-guard.ts";
@@ -19,8 +56,12 @@ export {
   constructEvent,
   verifyWebhook,
   payoutChangeMessage,
+  payoutProofRequest,
+  payoutSignerFromKey,
   signPayoutProof,
   type PayoutProofScope,
+  type PayoutSigner,
+  type PayoutSignRequest,
   WebhookSignatureError,
   WEBHOOK_SIGNATURE_HEADER,
   type GatewayClientOptions,
@@ -28,9 +69,11 @@ export {
   type PaymentDetail,
   type PaymentList,
   type PaymentTimelineEvent,
-  type RefundAuthorization,
-  type RefundWithAuthorization,
+  type GatewayRefund,
+  type RefundWithTransfer,
   type MerchantDetail,
+  type MerchantOverview,
+  type PayoutChange,
   type PlatformEarnings,
   type ScreeningDecision,
   type Directory,
@@ -54,8 +97,6 @@ export {
   type PayoutProof,
   type RequestOptions,
 } from "./gateway.ts";
-export { payExact, ExactPaymentError, type PayExactOptions, type ExactPayment, type ExactRequirement, type ExactSettlement } from "./exact.ts";
-export { payHsp, HspPaymentError, type PayHspOptions, type HspPayment, type HspPaymentState, type HspRequirement } from "./hsp.ts";
 export {
   MerchantDesk,
   MERCHANT_TOOLS,

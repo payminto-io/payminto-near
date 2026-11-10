@@ -1,76 +1,54 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Address, Hex } from "viem";
-import type { ClearingReceipt } from "@payminto/protocol";
+import type { AccountId, ClearingReceipt, Id32 } from "@payminto/protocol";
 
 /**
  * What an agent must remember to stay safe across calls, restarts and processes:
- * - the receipts it was given (they justify, or refuse, HSP co-sign requests),
- * - the highest cumulative it has signed per (mandate, payee), so it never trusts a position it did not sign,
- * - how much of each settlement batch it has already co-signed, so a receipt never justifies two batches.
+ * - the receipts it was given, which it can later prove against a batch root,
+ * - the highest cumulative it has signed per (budget, payee), so it never trusts a position it did not sign.
  *
  * Two processes that share one agent key must share one store (the SQLite store supports that through WAL);
  * otherwise each sees the other's vouchers as an unverified position and refuses to sign (POSITION_UNVERIFIED).
  */
 export interface ReceiptStore {
   add(receipt: ClearingReceipt): void;
-  get(callId: Hex): ClearingReceipt | undefined;
+  get(callId: Id32): ClearingReceipt | undefined;
   all(): ClearingReceipt[];
-  /** Highest cumulative this agent has signed for (mandate, payee); 0n when it never signed one. */
-  signedPosition(mandateId: Hex, payee: Address): bigint;
-  /** Every signed high-water mark of a mandate, keyed by lowercase payee address. */
-  signedPositions(mandateId: Hex): Map<string, bigint>;
+  /** Highest cumulative this agent has signed for (budget, payee); 0n when it never signed one. */
+  signedPosition(budgetId: Id32, payee: AccountId): bigint;
+  /** Every signed high-water mark of a budget, keyed by payee account. */
+  signedPositions(budgetId: Id32): Map<string, bigint>;
   /**
-   * Raises the (mandate, payee) high-water mark to `cumulative`; never lowers it.
+   * Raises the (budget, payee) high-water mark to `cumulative`; never lowers it.
    * Called before the voucher is signed, so it must be durable when it returns.
    */
-  recordSigned(mandateId: Hex, payee: Address, cumulative: bigint): void;
-  /** Settlement batch a receipt was already used to justify a co-signature for. */
-  batchOf(callId: Hex): string | undefined;
-  /** Total HSP amount this agent co-signed for a batch. */
-  cosignedInBatch(batchId: Hex): bigint;
-  /** Records a co-signature: adds `amount` to the batch total and binds the receipts to the batch. */
-  recordCosign(batchId: Hex, amount: bigint, callIds: readonly Hex[]): void;
+  recordSigned(budgetId: Id32, payee: AccountId, cumulative: bigint): void;
   close?(): void;
 }
-
-const k = (v: string) => v.toLowerCase();
 
 /** In-process store. Everything is lost on restart: use SqliteReceiptStore (AgentClient `storePath`) in production. */
 export class MemoryReceiptStore implements ReceiptStore {
   readonly #receipts = new Map<string, ClearingReceipt>();
   readonly #signed = new Map<string, Map<string, bigint>>();
-  readonly #callBatch = new Map<string, string>();
-  readonly #cosigned = new Map<string, bigint>();
 
   add(r: ClearingReceipt) {
-    this.#receipts.set(k(r.callId), r);
+    this.#receipts.set(r.callId, r);
   }
-  get(id: Hex) {
-    return this.#receipts.get(k(id));
+  get(id: Id32) {
+    return this.#receipts.get(id);
   }
   all() {
     return [...this.#receipts.values()];
   }
-  signedPosition(mandateId: Hex, payee: Address): bigint {
-    return this.#signed.get(k(mandateId))?.get(k(payee)) ?? 0n;
+  signedPosition(budgetId: Id32, payee: AccountId): bigint {
+    return this.#signed.get(budgetId)?.get(payee) ?? 0n;
   }
-  signedPositions(mandateId: Hex): Map<string, bigint> {
-    return new Map(this.#signed.get(k(mandateId)) ?? []);
+  signedPositions(budgetId: Id32): Map<string, bigint> {
+    return new Map(this.#signed.get(budgetId) ?? []);
   }
-  recordSigned(mandateId: Hex, payee: Address, cumulative: bigint): void {
-    let m = this.#signed.get(k(mandateId));
-    if (!m) this.#signed.set(k(mandateId), (m = new Map()));
-    if (cumulative > (m.get(k(payee)) ?? 0n)) m.set(k(payee), cumulative);
-  }
-  batchOf(callId: Hex) {
-    return this.#callBatch.get(k(callId));
-  }
-  cosignedInBatch(batchId: Hex): bigint {
-    return this.#cosigned.get(k(batchId)) ?? 0n;
-  }
-  recordCosign(batchId: Hex, amount: bigint, callIds: readonly Hex[]): void {
-    this.#cosigned.set(k(batchId), this.cosignedInBatch(batchId) + amount);
-    for (const c of callIds) this.#callBatch.set(k(c), k(batchId));
+  recordSigned(budgetId: Id32, payee: AccountId, cumulative: bigint): void {
+    let m = this.#signed.get(budgetId);
+    if (!m) this.#signed.set(budgetId, (m = new Map()));
+    if (cumulative > (m.get(payee) ?? 0n)) m.set(payee, cumulative);
   }
 }
 
@@ -106,18 +84,16 @@ export class SqliteReceiptStore implements ReceiptStore {
           CREATE TABLE IF NOT EXISTS receipts (
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
             call_id TEXT NOT NULL UNIQUE,
-            mandate_id TEXT NOT NULL,
+            budget_id TEXT NOT NULL,
             receipt TEXT NOT NULL
           );
           CREATE TABLE IF NOT EXISTS signed_positions (
-            mandate_id TEXT NOT NULL,
+            budget_id TEXT NOT NULL,
             payee TEXT NOT NULL,
             cumulative TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            PRIMARY KEY (mandate_id, payee)
+            PRIMARY KEY (budget_id, payee)
           );
-          CREATE TABLE IF NOT EXISTS cosigned_batches (batch_id TEXT PRIMARY KEY, amount TEXT NOT NULL);
-          CREATE TABLE IF NOT EXISTS call_batches (call_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL);
           PRAGMA user_version = ${SCHEMA_VERSION};
         `);
       });
@@ -138,12 +114,12 @@ export class SqliteReceiptStore implements ReceiptStore {
 
   add(r: ClearingReceipt): void {
     this.#db
-      .prepare("INSERT INTO receipts (call_id, mandate_id, receipt) VALUES (?, ?, ?) ON CONFLICT(call_id) DO NOTHING")
-      .run(k(r.callId), k(r.mandateId), JSON.stringify(r));
+      .prepare("INSERT INTO receipts (call_id, budget_id, receipt) VALUES (?, ?, ?) ON CONFLICT(call_id) DO NOTHING")
+      .run(r.callId, r.budgetId, JSON.stringify(r));
   }
 
-  get(callId: Hex): ClearingReceipt | undefined {
-    const row = this.#db.prepare("SELECT receipt FROM receipts WHERE call_id = ?").get(k(callId)) as { receipt: string } | undefined;
+  get(callId: Id32): ClearingReceipt | undefined {
+    const row = this.#db.prepare("SELECT receipt FROM receipts WHERE call_id = ?").get(callId) as { receipt: string } | undefined;
     return row ? (JSON.parse(row.receipt) as ClearingReceipt) : undefined;
   }
 
@@ -153,52 +129,31 @@ export class SqliteReceiptStore implements ReceiptStore {
     );
   }
 
-  signedPosition(mandateId: Hex, payee: Address): bigint {
+  signedPosition(budgetId: Id32, payee: AccountId): bigint {
     const row = this.#db
-      .prepare("SELECT cumulative FROM signed_positions WHERE mandate_id = ? AND payee = ?")
-      .get(k(mandateId), k(payee)) as { cumulative: string } | undefined;
+      .prepare("SELECT cumulative FROM signed_positions WHERE budget_id = ? AND payee = ?")
+      .get(budgetId, payee) as { cumulative: string } | undefined;
     return row ? BigInt(row.cumulative) : 0n;
   }
 
-  signedPositions(mandateId: Hex): Map<string, bigint> {
-    const rows = this.#db.prepare("SELECT payee, cumulative FROM signed_positions WHERE mandate_id = ?").all(k(mandateId)) as Array<{
+  signedPositions(budgetId: Id32): Map<string, bigint> {
+    const rows = this.#db.prepare("SELECT payee, cumulative FROM signed_positions WHERE budget_id = ?").all(budgetId) as Array<{
       payee: string;
       cumulative: string;
     }>;
     return new Map(rows.map((r) => [r.payee, BigInt(r.cumulative)]));
   }
 
-  recordSigned(mandateId: Hex, payee: Address, cumulative: bigint): void {
+  recordSigned(budgetId: Id32, payee: AccountId, cumulative: bigint): void {
     this.#tx(() => {
       // Decimal text compared as bigint in JS: SQLite integers stop at int64.
-      if (cumulative <= this.signedPosition(mandateId, payee)) return;
+      if (cumulative <= this.signedPosition(budgetId, payee)) return;
       this.#db
         .prepare(
-          `INSERT INTO signed_positions (mandate_id, payee, cumulative, updated_at) VALUES (?, ?, ?, ?)
-           ON CONFLICT(mandate_id, payee) DO UPDATE SET cumulative = excluded.cumulative, updated_at = excluded.updated_at`,
+          `INSERT INTO signed_positions (budget_id, payee, cumulative, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(budget_id, payee) DO UPDATE SET cumulative = excluded.cumulative, updated_at = excluded.updated_at`,
         )
-        .run(k(mandateId), k(payee), cumulative.toString(), new Date().toISOString());
-    });
-  }
-
-  batchOf(callId: Hex): string | undefined {
-    const row = this.#db.prepare("SELECT batch_id FROM call_batches WHERE call_id = ?").get(k(callId)) as { batch_id: string } | undefined;
-    return row?.batch_id;
-  }
-
-  cosignedInBatch(batchId: Hex): bigint {
-    const row = this.#db.prepare("SELECT amount FROM cosigned_batches WHERE batch_id = ?").get(k(batchId)) as { amount: string } | undefined;
-    return row ? BigInt(row.amount) : 0n;
-  }
-
-  recordCosign(batchId: Hex, amount: bigint, callIds: readonly Hex[]): void {
-    this.#tx(() => {
-      const total = this.cosignedInBatch(batchId) + amount;
-      this.#db
-        .prepare("INSERT INTO cosigned_batches (batch_id, amount) VALUES (?, ?) ON CONFLICT(batch_id) DO UPDATE SET amount = excluded.amount")
-        .run(k(batchId), total.toString());
-      const bind = this.#db.prepare("INSERT INTO call_batches (call_id, batch_id) VALUES (?, ?) ON CONFLICT(call_id) DO NOTHING");
-      for (const c of callIds) bind.run(k(c), k(batchId));
+        .run(budgetId, payee, cumulative.toString(), new Date().toISOString());
     });
   }
 

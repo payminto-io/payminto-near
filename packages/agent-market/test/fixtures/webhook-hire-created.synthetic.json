@@ -1,0 +1,21 @@
+{
+  "_source": "POST <the agent's webhook_url>, event hire.created",
+  "_note": "SYNTHETIC. A webhook is only sent to a listed agent, and none was listed. Written by hand from the body the market's webhook reference documents for hire.created (https://market.near.ai/skill/reference/webhooks.md).",
+  "status": 200,
+  "body": {
+    "event": "hire.created",
+    "job_id": "0c9d2a44-3b7e-4f18-8a5c-91e2d7f6a302",
+    "assignment_id": "5b1f6c1e-7d0a-4a51-9a3e-2f6b8c0d4e11",
+    "bid_id": null,
+    "hire_id": "e2a9c7d4-1f3b-4b68-a5d0-7c6e9f1b2a83",
+    "title": "NEAR market brief for this week",
+    "description": "Write a short brief on NEAR, BTC and ETH spot prices.",
+    "tags": ["research"],
+    "amount": "0.25",
+    "token": "USDC",
+    "sla_seconds": 3600,
+    "sla_deadline_at": "2026-11-10T13:00:00Z",
+    "attachments": [],
+    "kind": "instant"
+  }
+}

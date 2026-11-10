@@ -1,28 +1,36 @@
-import type { Address, Hex, LocalAccount } from "viem";
 import {
+  nep413Digest,
   payoutChangeMessage,
-  type PayoutProofScope,
+  payoutProofRequest,
+  signDigest,
   verifyWebhook,
   WEBHOOK_SIGNATURE_HEADER,
+  type AccountId,
   type ApiKey,
   type ApiKeyWithSecret,
+  type CheckoutView,
   type Credit,
   type FeeBearer,
   type FeePlan,
+  type Keypair,
   type LineItem,
   type Merchant,
   type MerchantMethod,
   type MerchantProfile,
   type MerchantStatus,
+  type Network,
   type Payment,
   type PaymentLink,
   type PaymentMethod,
+  type PaymentProof,
   type PaymentStatus,
-  type PaymentTermsJson,
+  type PayoutProof,
+  type PayoutProofScope,
   type Platform,
+  type PublicKey,
   type ReconciliationReport,
   type Refund,
-  type TransferAuthorizationJson,
+  type WalletTx,
   type WebhookDelivery,
   type WebhookEndpoint,
   type WebhookEvent,
@@ -36,10 +44,13 @@ import { errorSchema, NodeApiError } from "./node-api.ts";
 /** Amounts are decimal strings of token base units; bigints are accepted on input and sent as strings. */
 type Units = string | bigint;
 
+/** The settlement token as the gateway describes it: a NEP-141 contract account. */
+type Token = { address: AccountId; symbol: string; decimals: number };
+
 export type List<T> = { items: T[]; next_cursor: string | null };
 
-/** A payment as the merchant API returns it: the public object plus the fee recipient its fee splits to. */
-export type GatewayPayment = Payment & { fee_recipient: Address | null };
+/** A payment as the merchant API returns it: the public object plus the account its platform fee is paid to. */
+export type GatewayPayment = Payment & { fee_recipient: AccountId | null };
 
 export type PaymentTimelineEvent = {
   id: string;
@@ -48,31 +59,57 @@ export type PaymentTimelineEvent = {
   data: { status: PaymentStatus | null; amount_paid: string | null; amount: string | null };
 };
 
+/** A refund as the merchant API returns it: the public object plus its approval state and who asked for it. */
+export type GatewayRefund = Refund & {
+  merchant_id: string;
+  note: string | null;
+  /** `requested`: waits for an Admin of the business. `approved` or `not_required`: the payout account can send it. */
+  approval: "not_required" | "requested" | "approved";
+  requested_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+};
+
+/**
+ * A refund with the transaction that pays it: an `ft_transfer` of the refund amount to the payer, for the merchant's
+ * payout account to send from its own wallet (the node never holds the money). Null while the refund waits for
+ * approval, and once it is no longer pending.
+ */
+export type RefundWithTransfer = GatewayRefund & { transfer: WalletTx | null };
+
 /** `GET /v1/payments/{id}`: the payment with every credit, refund and event. */
-export type PaymentDetail = GatewayPayment & { credits: Credit[]; refunds: Refund[]; events: PaymentTimelineEvent[] };
+export type PaymentDetail = GatewayPayment & { credits: Credit[]; refunds: GatewayRefund[]; events: PaymentTimelineEvent[] };
 
 export type PaymentList = List<GatewayPayment> & { counts: Record<string, number> };
 
-/** What the payout wallet signs as a ReceiveWithAuthorization to the router for a gasless refund. */
-export type RefundAuthorization = { router: Address; terms: PaymentTermsJson; to: Address; value: string; nonce: Hex };
+/** One change of a merchant's payout account. `proven` is false only for the account the node was seeded with. */
+export type PayoutChange = { old_payout: AccountId | null; new_payout: AccountId; proven: boolean; public_key: PublicKey | null; signed_at: number | null; changed_at: string };
 
-export type RefundWithAuthorization = Refund & { authorization: RefundAuthorization | null };
+export type MerchantDetail = MerchantProfile & { fee_plan: FeePlan; methods: MerchantMethod[]; volume_30d: string; payments_30d: number; payout_history: PayoutChange[] };
 
-export type MerchantDetail = MerchantProfile & { fee_plan: FeePlan; methods: MerchantMethod[] };
+/** The last 30 days of one business (`GET /v1/gateway/overview`). */
+export type MerchantOverview = { volume: string; payments: number; counts: Record<string, number>; conversion: number; days: Array<{ day: string; volume: string; count: number }> };
 
 export type PlatformEarnings = {
-  fee_recipient: Address | null;
+  fee_recipient: AccountId | null;
   totals: { platform_fee: string; method_fee: string; fee_total: string };
   items: Array<{ merchant_id: string; merchant_name: string; method: PaymentMethod | null; payments: number; volume: string; platform_fee: string; method_fee: string; fee_total: string }>;
+  /** The last 30 days by the day a payment was paid (UTC), each split by method. */
+  days: Array<{ day: string; fee_total: string; by_method: Record<string, string> }>;
 };
 
 export type ScreeningDecision = {
+  id: string;
   source: "gateway";
   rule: string;
+  message: string;
   stage: string;
-  payer: Address | null;
+  payer: AccountId | null;
+  payout: AccountId | null;
   payment_id: string | null;
+  link_id: string | null;
   merchant_id: string | null;
+  amount: string | null;
   created_at: string;
 } & Record<string, unknown>;
 
@@ -84,8 +121,9 @@ export type DirectoryService =
       title: string;
       description: string | null;
       price: { amount: string } | { min_amount: string | null; max_amount: string | null };
-      token: { address: Address; symbol: string; decimals: number; chain_id: number };
-      chain_id: number;
+      token: Token;
+      network: Network;
+      /** x402 schemes the link accepts. Empty when the business takes no voucher payments. */
       schemes: string[];
       pay_url: string;
     }
@@ -96,9 +134,9 @@ export type DirectoryService =
       description: string;
       category: string;
       price: { amount: string };
-      payee: Address;
-      token: { address: Address; symbol: string; decimals: number; chain_id: number };
-      chain_id: number;
+      payee: AccountId;
+      token: Token;
+      network: Network;
       schemes: string[];
       pay_url: string;
     };
@@ -106,7 +144,7 @@ export type DirectoryService =
 /** `GET /v1/directory` (and `/.well-known/payminto.json`), section 13.4. */
 export type Directory = {
   version: number;
-  node: { url: string; chain_id: number; network: string; hub: Address; checkout_base_url: string };
+  node: { url: string; network: Network; hub: AccountId; checkout_base_url: string };
   platform: { name: string };
   generated_at: string;
   services: DirectoryService[];
@@ -117,6 +155,7 @@ export type Directory = {
 
 export type CreatePaymentParams = {
   amount: Units;
+  /** `wallet`: a person pays from a NEAR wallet. `voucher`: an agent pays from its Budget over x402. */
   method?: PaymentMethod;
   description?: string | null;
   reference?: string | null;
@@ -151,15 +190,20 @@ export type CreateLinkParams = {
   max_payments?: number | null;
   /** Shown in the service directory (default true). */
   listed?: boolean;
+  /** ISO 8601 time with a zone after which the link takes no new payments. */
+  expires_at?: string | null;
 };
 
-export type UpdateLinkParams = Partial<Pick<PaymentLink, "title" | "description" | "active" | "success_url" | "max_payments" | "listed">>;
+export type UpdateLinkParams = Partial<Pick<PaymentLink, "title" | "description" | "active" | "success_url" | "max_payments" | "listed">> & { expires_at?: string | null };
 
 export type CreateRefundParams = {
   paymentId: string;
   amount: Units;
   reason?: string | null;
-  to?: Address;
+  /** The account to refund. Default: the account that paid. */
+  to?: AccountId;
+  /** A note for the business's own records. */
+  note?: string | null;
   /** Always ask an Admin of the business to approve it, even when this key could issue it. */
   requestApproval?: boolean;
 };
@@ -167,16 +211,13 @@ export type CreateRefundParams = {
 /** `from` and `to`: ISO 8601 times with a zone, or YYYY-MM-DD dates (UTC); a date `to` covers that whole day. */
 export type ReconciliationParams = { from: string | Date; to: string | Date };
 
-/** `{authorization}`: the payout's signed router authorization (gasless). `{txHash}`: a transfer the payout sent itself. */
-export type SubmitRefundParams = { authorization: TransferAuthorizationJson & { signature: Hex } } | { txHash: Hex };
+/** The hash of the transaction the payout account sent with the refund's `transfer`. */
+export type SubmitRefundParams = { txHash: string };
 
 export type CreateWebhookParams = { url: string; description?: string | null; events: Array<WebhookEventType | "*"> };
 export type UpdateWebhookParams = Partial<CreateWebhookParams & { active: boolean }>;
 
 export type MerchantProfileParams = { name?: string; support_email?: string | null; brand_color?: string | null; logo_url?: string | null };
-
-/** Proof that the payout wallet is controlled by whoever registers it (section 14.3), from `signPayoutProof`. */
-export type PayoutProof = { payout: Address; timestamp: number; signature: Hex };
 
 export type CreateMerchantParams = MerchantProfileParams & { name: string; slug?: string; fee_plan_id?: string; payout: PayoutProof };
 export type UpdateMerchantParams = MerchantProfileParams & { status?: MerchantStatus; fee_plan_id?: string };
@@ -200,18 +241,47 @@ export type RequestOptions = {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Payout proofs
+// Payout proofs (NEP-413)
 
-/** The EIP-191 message a payout wallet signs (section 14.3), re-exported from the protocol. */
-export { payoutChangeMessage, type PayoutProofScope };
+/** The message a payout account signs (section 14.3), and the proof the node takes, re-exported from the protocol. */
+export { payoutChangeMessage, payoutProofRequest, type PayoutProof, type PayoutProofScope };
+
+/** What a NEP-413 `signMessage` is asked to sign: the payout message, the hub as recipient, and a 32-byte nonce. */
+export type PayoutSignRequest = { message: string; recipient: string; nonce: Uint8Array };
 
 /**
- * Signs a payout proof with the payout wallet itself, for one node: `scope` is that node's `{chainId, hub}` (its
- * /v1/info `chainId` and `hub`). `merchantId` is "new" for a merchant being created. The node accepts proofs up to 600 s old.
+ * Whoever can sign for the payout account. It has the shape of a NEAR wallet's `signMessage` (NEAR Connect, wallet
+ * selector): given the request, it returns the base64 ed25519 signature and the key that made it. That key must be a
+ * full-access key of `accountId`; the node checks that on chain, so a function-call key is refused.
  */
-export async function signPayoutProof(account: LocalAccount, merchantId: string, scope: PayoutProofScope, timestamp = Math.floor(Date.now() / 1000)): Promise<PayoutProof> {
-  const signature = await account.signMessage({ message: payoutChangeMessage(merchantId, account.address, timestamp, scope) });
-  return { payout: account.address, timestamp, signature };
+export type PayoutSigner = {
+  accountId: AccountId;
+  signMessage(request: PayoutSignRequest): Promise<{ signature: string; publicKey: PublicKey }>;
+};
+
+function base64(hex: string): string {
+  let bin = "";
+  for (let i = 0; i < hex.length; i += 2) bin += String.fromCharCode(Number.parseInt(hex.slice(i, i + 2), 16));
+  return btoa(bin);
+}
+
+/**
+ * A PayoutSigner over a key held in this process, for a server or a script that controls the payout account's
+ * full-access key. A browser uses the account's wallet instead.
+ */
+export function payoutSignerFromKey(accountId: AccountId, key: Keypair): PayoutSigner {
+  return { accountId, signMessage: async (request) => ({ signature: base64(signDigest(key.secretKey, nep413Digest(request))), publicKey: key.publicKey }) };
+}
+
+/**
+ * Proves control of a payout account to one node: the account signs a NEP-413 message that names the merchant, the
+ * account, the time, and that node's network and hub (`scope`, from `GatewayClient.payoutScope()`), so the proof cannot
+ * be replayed on another node. `merchantId` is "new" for a merchant being created. The node accepts proofs up to 600 s
+ * old.
+ */
+export async function signPayoutProof(signer: PayoutSigner, merchantId: string, scope: PayoutProofScope, timestamp = Math.floor(Date.now() / 1000)): Promise<PayoutProof> {
+  const signed = await signer.signMessage(payoutProofRequest(merchantId, signer.accountId, timestamp, scope));
+  return { payout: signer.accountId, timestamp, public_key: signed.publicKey, signature: signed.signature };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -346,13 +416,20 @@ export class GatewayClient {
     update: (id: string, p: UpdateLinkParams) => this.request<PaymentLink>("PATCH", `/v1/links/${encodeURIComponent(id)}`, { body: p }),
   };
 
+  /**
+   * Refunds are non-custodial: the node never holds the money. `create` files a pending refund and returns `transfer`,
+   * the `ft_transfer` the merchant's payout account sends from its own wallet (null while the refund waits for an Admin
+   * to approve it). `submit` reports that transaction's hash, and the node checks it on chain before the refund succeeds.
+   */
   readonly refunds = {
-    /** Creates a pending refund; `authorization` is what the payout wallet signs to execute it gaslessly. */
-    create: (p: CreateRefundParams, o: RequestOptions = {}) => this.request<RefundWithAuthorization>("POST", "/v1/refunds", { body: p, idempotencyKey: o.idempotencyKey }),
-    list: (p: { payment_id?: string; limit?: number; cursor?: string } = {}) => this.request<List<Refund>>("GET", "/v1/refunds", { query: p }),
-    retrieve: (id: string) => this.request<RefundWithAuthorization>("GET", `/v1/refunds/${encodeURIComponent(id)}`),
-    submit: (id: string, p: SubmitRefundParams) => this.request<Refund>("POST", `/v1/refunds/${encodeURIComponent(id)}/submit`, { body: p }),
-    cancel: (id: string) => this.request<Refund>("POST", `/v1/refunds/${encodeURIComponent(id)}/cancel`, { body: {} }),
+    create: (p: CreateRefundParams, o: RequestOptions = {}) => this.request<RefundWithTransfer>("POST", "/v1/refunds", { body: p, idempotencyKey: o.idempotencyKey }),
+    list: (p: { payment_id?: string; limit?: number; cursor?: string } = {}) => this.request<List<GatewayRefund>>("GET", "/v1/refunds", { query: p }),
+    retrieve: (id: string) => this.request<RefundWithTransfer>("GET", `/v1/refunds/${encodeURIComponent(id)}`),
+    /** An Admin of the business approves a requested refund (a person or the operator; an API key cannot). */
+    approve: (id: string) => this.request<RefundWithTransfer>("POST", `/v1/refunds/${encodeURIComponent(id)}/approve`, { body: {} }),
+    /** Reports the transaction the payout account sent. Pending until it is final; failed if it does not pay the refund. */
+    submit: (id: string, p: SubmitRefundParams) => this.request<GatewayRefund>("POST", `/v1/refunds/${encodeURIComponent(id)}/submit`, { body: p }),
+    cancel: (id: string) => this.request<GatewayRefund>("POST", `/v1/refunds/${encodeURIComponent(id)}/cancel`, { body: {} }),
   };
 
   readonly webhooks = {
@@ -374,14 +451,15 @@ export class GatewayClient {
   readonly merchant = {
     retrieve: () => this.request<MerchantDetail>("GET", "/v1/merchant"),
     update: (p: MerchantProfileParams) => this.request<MerchantDetail>("PATCH", "/v1/merchant", { body: p }),
-    overview: () => this.request<{ volume: string; payments: number; counts: Record<string, number>; conversion: number; days: Array<{ day: string; volume: string; count: number }> }>("GET", "/v1/gateway/overview"),
+    overview: () => this.request<MerchantOverview>("GET", "/v1/gateway/overview"),
   };
 
   readonly screening = {
     decisions: (p: { limit?: number; cursor?: string } = {}) => this.request<List<ScreeningDecision>>("GET", "/v1/screening/decisions", { query: p }),
-    denyList: () => this.request<{ items: Array<{ address: Address; reason: string | null; created_at: string }> }>("GET", "/v1/screening/deny-list"),
-    deny: (address: Address, reason?: string) => this.request<{ address: Address; reason: string | null }>("POST", "/v1/screening/deny-list", { body: { address, reason: reason ?? null } }),
-    allow: (address: Address) => this.request<{ address: Address; deleted: true }>("DELETE", `/v1/screening/deny-list/${address}`),
+    denyList: () => this.request<{ items: Array<{ address: AccountId; reason: string | null; created_at: string }> }>("GET", "/v1/screening/deny-list"),
+    /** Blocks a NEAR account from paying this business. */
+    deny: (address: AccountId, reason?: string) => this.request<{ address: AccountId; reason: string | null }>("POST", "/v1/screening/deny-list", { body: { address, reason: reason ?? null } }),
+    allow: (address: AccountId) => this.request<{ address: AccountId; deleted: true }>("DELETE", `/v1/screening/deny-list/${encodeURIComponent(address)}`),
   };
 
   /**
@@ -396,12 +474,12 @@ export class GatewayClient {
   // ------------------------------------------------------------------ operator (admin token)
 
   readonly merchants = {
-    /** Creates a merchant; `payout` is a proof from `signPayoutProof(payoutAccount, "new", {chainId, hub})`. */
+    /** Creates a merchant; `payout` is a proof from `signPayoutProof(payoutSigner, "new", await client.payoutScope())`. */
     create: (p: CreateMerchantParams) => this.request<MerchantDetail>("POST", "/v1/merchants", { body: p }),
     list: () => this.request<{ items: Merchant[] }>("GET", "/v1/merchants"),
-    retrieve: (id: string) => this.request<MerchantDetail & { payout_history: unknown[]; stats: unknown }>("GET", `/v1/merchants/${encodeURIComponent(id)}`),
+    retrieve: (id: string) => this.request<MerchantDetail & { stats: MerchantOverview }>("GET", `/v1/merchants/${encodeURIComponent(id)}`),
     update: (id: string, p: UpdateMerchantParams) => this.request<MerchantDetail>("PATCH", `/v1/merchants/${encodeURIComponent(id)}`, { body: p }),
-    /** Changes the payout; `proof` from `signPayoutProof(newPayoutAccount, id, {chainId, hub})`. */
+    /** Changes the payout; `proof` from `signPayoutProof(newPayoutSigner, id, await client.payoutScope())`. */
     changePayout: (id: string, proof: PayoutProof) => this.request<MerchantDetail>("POST", `/v1/merchants/${encodeURIComponent(id)}/payout`, { body: proof }),
     // The methods routes also take a merchant key, so the admin token names the merchant with Merchant-Id as well.
     methods: (id: string) => this.request<{ items: MerchantMethod[] }>("GET", `/v1/merchants/${encodeURIComponent(id)}/methods`, { merchantId: this.#adminFor(id) }),
@@ -437,4 +515,17 @@ export class GatewayClient {
   directory(): Promise<Directory> {
     return this.request<Directory>("GET", "/v1/directory", { auth: false });
   }
+
+  /** The network and hub a payout proof for this node must name (from its public `/v1/info`). Needs no key. */
+  async payoutScope(): Promise<PayoutProofScope> {
+    const info = await this.request<{ network: { id: Network }; hub: AccountId }>("GET", "/v1/info", { auth: false });
+    return { network: info.network.id, hub: info.hub };
+  }
+
+  /** The public side of one payment: what the hosted checkout shows, and its proof once it is paid. Needs no key. */
+  readonly checkout = {
+    retrieve: (paymentId: string) => this.request<CheckoutView>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}`, { auth: false }),
+    /** Chain evidence for a paid payment: the hub's record of a wallet payment, or the settled batch of a voucher. */
+    proof: (paymentId: string) => this.request<PaymentProof>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}/proof`, { auth: false }),
+  };
 }

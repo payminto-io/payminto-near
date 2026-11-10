@@ -1,0 +1,66 @@
+{
+  "_meta": {
+    "source": "read-only call_function views public_key and derived_public_key on v1.signer-prod.testnet and v1.signer",
+    "recorded": "2026-11-10",
+    "live": true,
+    "contract_version": "3.18.0"
+  },
+  "views": [
+    {
+      "rpc": "https://rpc.testnet.near.org",
+      "contract": "v1.signer-prod.testnet",
+      "method": "public_key",
+      "args": {
+        "domain_id": 0
+      },
+      "block_height": 277014604,
+      "result": "secp256k1:4NfTiv3UsGahebgTaHyD9vF8KYKMBnfd6kh94mK6xv8fGBiJB8TBtFMP5WWXz6B89Ac1fbpzPwAvoyQebemHFwx3"
+    },
+    {
+      "rpc": "https://rpc.testnet.near.org",
+      "contract": "v1.signer-prod.testnet",
+      "method": "derived_public_key",
+      "args": {
+        "path": "ethereum-1",
+        "predecessor": "alice.testnet",
+        "domain_id": 0
+      },
+      "block_height": 277014609,
+      "result": "secp256k1:3hBMdabo82DyxjTr4LThx1MDpdx6GRaCaq6LgUPeeqQkpfywZ4xmKXf9ja68iSut7doEjTELYGbiCgJw5ms2HwFU"
+    },
+    {
+      "rpc": "https://rpc.testnet.near.org",
+      "contract": "v1.signer-prod.testnet",
+      "method": "derived_public_key",
+      "args": {
+        "path": "payminto-payout-1",
+        "predecessor": "merchant.payminto.testnet",
+        "domain_id": 0
+      },
+      "block_height": 277014616,
+      "result": "secp256k1:5XPxRjefoucZb5MAhPoj2rMdE1zcbdM3LingCNLfCW7no5tiLC3THzdLiSbHkoiBnDwVVJSJX7cSafwSYZdUEhQU"
+    },
+    {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "v1.signer",
+      "method": "public_key",
+      "args": {
+        "domain_id": 0
+      },
+      "block_height": 223862003,
+      "result": "secp256k1:3tFRbMqmoa6AAALMrEFAYCEoHcqKxeW38YptwowBVBtXK1vo36HDbUWuR6EZmoK4JcH6HDkNMGGqP1ouV7VZUWya"
+    },
+    {
+      "rpc": "https://rpc.mainnet.near.org",
+      "contract": "v1.signer",
+      "method": "derived_public_key",
+      "args": {
+        "path": "ethereum-1",
+        "predecessor": "alice.near",
+        "domain_id": 0
+      },
+      "block_height": 223862010,
+      "result": "secp256k1:DgDjtBvj99cpBDZg5C6gozLEX2qdbYZxdPGaWehvFo8fDCCu5A2k8EnZ1VQYBWkfb35LRHsvSgAkuhFk3raaGTb"
+    }
+  ]
+}

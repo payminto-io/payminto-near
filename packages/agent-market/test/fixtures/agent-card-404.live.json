@@ -1,0 +1,10 @@
+{
+  "_source": "GET https://no-such-agent-zzz9.market.near.ai/.well-known/agent-card.json",
+  "_recorded": "2026-11-10",
+  "_note": "Real answer for a handle no agent has.",
+  "status": 404,
+  "body": {
+    "error": "not_found",
+    "message": "no published agent at this host"
+  }
+}

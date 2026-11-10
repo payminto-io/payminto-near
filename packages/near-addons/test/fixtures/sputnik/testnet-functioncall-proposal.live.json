@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "source": "https://rpc.testnet.near.org query call_function clg-1.sputnik-v2.testnet get_proposals and get_policy",
+    "recorded": "2026-11-10",
+    "live": true,
+    "block_height": 277013148,
+    "note": "A third party proposal, used only as a shape reference: args are base64, deposit and gas are decimal strings."
+  },
+  "dao": "clg-1.sputnik-v2.testnet",
+  "version": "2.0.0",
+  "proposal": {
+    "id": 4,
+    "proposer": "charleslavon.testnet",
+    "description": "init socialDB",
+    "kind": {
+      "FunctionCall": {
+        "receiver_id": "v1.social08.testnet",
+        "actions": [
+          {
+            "method_name": "set",
+            "args": "eyJkYXRhIjp7ImNsZy0xLnNwdXRuaWstdjIudGVzdG5ldCI6eyJwcm9maWxlIjp7Im5hbWUiOiAiY2xnLTEgZ3JvdXAiLCJpbWFnZSI6eyJpcGZzX2NpZCI6ICIifSwiZGVzY3JpcHRpb24iOiAiSSBjb3VsZCBiZSBhIGdyb3VwIiwiYmFja2dyb3VuZEltYWdlIjp7ImlwZnNfY2lkIjogIiJ9LCJ0YWdzIjp7InBsYXRmb3JtIjogIiIsInByb2plY3QiOiAiIiwibmV0d29yayI6ICIiLCJwcm90b2NvbCI6ICIiLCJvcGVuLXNvdXJjZSI6ICIifX19fX0=",
+            "deposit": "10",
+            "gas": "10000000000000000000"
+          }
+        ]
+      }
+    },
+    "status": "InProgress",
+    "vote_counts": {},
+    "votes": {},
+    "submission_time": "1695326223891347842"
+  },
+  "proposal_bond": "1000000000000000000000000"
+}

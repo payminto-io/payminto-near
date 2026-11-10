@@ -1,0 +1,28 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "view_access_key_list",
+    "account_id": "641c8bb12ddfc8f0a1475ed00e84dade985d5f8e40c877f7958e1db0e96234a5"
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "error": {
+      "name": "HANDLER_ERROR",
+      "cause": {
+        "info": {
+          "block_hash": "73PsEMSLdY5wCkLJzEQp3iz1G3ud9ZtgGuSJ97gdqAi9",
+          "block_height": 277021769,
+          "limit": 100,
+          "requested_account_id": "641c8bb12ddfc8f0a1475ed00e84dade985d5f8e40c877f7958e1db0e96234a5"
+        },
+        "name": "TOO_MANY_ACCESS_KEYS"
+      },
+      "code": -32000,
+      "message": "Server error",
+      "data": "Account 641c8bb12ddfc8f0a1475ed00e84dade985d5f8e40c877f7958e1db0e96234a5 has more than 100 access keys; use a paginated view_access_key_list request"
+    },
+    "id": "payminto"
+  }
+}

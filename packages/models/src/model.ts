@@ -1,13 +1,13 @@
 /**
  * The neutral model layer (docs/AGENTS.md section 3), shared by the agent runtime (`@payminto/agent`) and the node's
  * merchant agents. An agent loop only ever sees these types; each provider (Anthropic, OpenAI, Google Gemini, any
- * OpenAI-compatible endpoint, Replicate) is an adapter in `src/providers/` that maps them to its own wire format and maps its
+ * OpenAI-compatible endpoint, Replicate, NEAR AI Cloud) is an adapter in `src/providers/` that maps them to its own wire format and maps its
  * failures to ModelError.
  */
 
-export type Provider = "anthropic" | "openai" | "google" | "openai_compatible" | "replicate";
+export type Provider = "anthropic" | "openai" | "google" | "openai_compatible" | "replicate" | "nearai";
 
-export const PROVIDER_IDS = ["anthropic", "openai", "google", "openai_compatible", "replicate"] as const satisfies readonly Provider[];
+export const PROVIDER_IDS = ["anthropic", "openai", "google", "openai_compatible", "replicate", "nearai"] as const satisfies readonly Provider[];
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -53,6 +53,38 @@ export function totalInputTokens(u: TurnUsage): number {
   return u.inputTokens + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0);
 }
 
+export type AttestationStatus = "verified" | "partially_verified" | "failed";
+
+/**
+ * One thing an attestation check looked at. `pass` and `fail` are checks that ran; `not_verified` is a check that
+ * did not run here (it needs a remote service, a policy nobody configured, or evidence that was unavailable).
+ * `trust` says whose word a `pass` rests on: `local` is cryptography done in this process, `remote` is the verdict of
+ * a service, `none` is nobody (the check did not run).
+ */
+export type AttestationCheck = {
+  id: string;
+  /** Which evidence the check is about, for example "gateway", "model:0" or "response". */
+  scope: string;
+  /** Plain words for the dashboard. */
+  title: string;
+  status: "pass" | "fail" | "not_verified";
+  trust: "local" | "remote" | "none";
+  detail: string;
+  evidence?: Record<string, string>;
+};
+
+/**
+ * What a provider that runs models in attested enclaves can say about one turn (NEAR AI Cloud). `verified` means
+ * every check passed; `partially_verified` means no check failed but some did not run here; `failed` means a check
+ * failed or the evidence was unavailable. The claim never goes beyond the checks listed.
+ */
+export type TurnAttestation = {
+  status: AttestationStatus;
+  /** One or two plain sentences: what was shown and what was not. */
+  summary: string;
+  checks: AttestationCheck[];
+};
+
 export type ModelTurn = {
   /** Text and tool_call parts, in order. */
   parts: Part[];
@@ -64,6 +96,8 @@ export type ModelTurn = {
   refusal?: { category: string | null; explanation: string | null };
   /** Replayed unchanged on the next turn to the same provider (see NativeContent). */
   native?: NativeContent;
+  /** Set by providers that verify enclave attestation for the turn (NEAR AI Cloud); absent everywhere else. */
+  attestation?: TurnAttestation;
 };
 
 /** One model turn: the frozen system prompt and tool list, plus the conversation so far (append-only). */
@@ -135,6 +169,12 @@ export type ClientOptions = {
   maxRetries?: number;
   /** Claude only: thinking depth and token spend (default high). */
   effort?: Effort;
+  /**
+   * NEAR AI Cloud only: `verify` (default) checks enclave attestation around every turn and reports it as
+   * `turn.attestation` without ever failing the turn; `require` also refuses to send a request when the attestation
+   * failed and fails a turn whose answer cannot be verified; `off` skips it.
+   */
+  attestation?: "off" | "verify" | "require";
 };
 
 /** Explains a model failure in one line. Never includes the key (adapters redact it before building the message). */

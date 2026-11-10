@@ -1,99 +1,47 @@
 import { z } from "zod";
-import { getAddress, isAddress, type Address, type Hex } from "viem";
+import {
+  clearingReceiptSchema,
+  positionSchema,
+  refusalSchema,
+  zAccountId,
+  zAtomic,
+  zId32 as zId32Protocol,
+  zNetwork as zNetworkProtocol,
+  zPublicKey as zPublicKeyProtocol,
+  zSig64,
+  type Refusal,
+} from "@payminto/protocol";
 
-// Schemas for everything the SDK reads from a clearing node or provider: both are trust boundaries.
+// Schemas for everything the SDK reads from a clearing node or provider: both are trust boundaries. The x402 and
+// receipt schemas live in @payminto/protocol (x402.ts); these names stay for the SDK's own modules.
 
-export const zAddress = z
-  .string()
-  .refine((v) => isAddress(v, { strict: false }), "address")
-  .transform((v) => getAddress(v) as Address);
-export const zHex = z.string().regex(/^0x([0-9a-fA-F]{2})*$/).transform((v) => v as Hex);
-export const zBytes32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((v) => v.toLowerCase() as Hex);
-export const zUint = z.string().regex(/^\d{1,78}$/);
+export const zAccount = zAccountId;
+export const zId32 = zId32Protocol;
+export const zSig = zSig64;
+export const zPublicKey = zPublicKeyProtocol;
+export const zNetwork = zNetworkProtocol;
+export const zUint = zAtomic;
 
-export const positionSchema = z.object({ mandateId: zBytes32, payee: zAddress, cumulative: zUint, settled: zUint });
+export { clearingReceiptSchema, positionSchema, refusalSchema };
 export type Position = z.infer<typeof positionSchema>;
 
-export const clearingReceiptSchema = z.object({
-  callId: zBytes32,
-  mandateId: zBytes32,
-  payee: zAddress,
-  amount: zUint,
-  cumulative: zUint,
-  requestHash: zBytes32,
-  timestamp: z.number().int().nonnegative(),
-  leaf: zBytes32,
-  nodeSignature: zHex,
-  node: zAddress,
-});
-
+/** What the node answers to `POST /v1/vouchers`. */
 export const paymentResponseSchema = z.object({ receipt: clearingReceiptSchema, position: positionSchema });
 
 export const errorSchema = z.object({
   error: z.object({ code: z.string(), message: z.string(), details: z.record(z.string(), z.unknown()).optional() }),
+  // A malformed refusal must not hide the error code next to it.
+  refusal: refusalSchema.optional().catch(undefined),
 });
-
-export const paymentRequirementSchema = z.object({
-  scheme: z.string(),
-  network: z.string(),
-  asset: zAddress,
-  payTo: zAddress,
-  amount: zUint,
-  resource: z.string(),
-  description: z.string(),
-  mimeType: z.string().optional(),
-  maxTimeoutSeconds: z.number(),
-  extra: z.object({
-    clearingNode: z.string(),
-    clearingHub: zAddress,
-    providerId: z.string(),
-    tokenSymbol: z.string(),
-    tokenDecimals: z.number(),
-  }),
-});
-export const paymentRequiredSchema = z.object({
-  x402Version: z.literal(2),
-  error: z.unknown().optional(),
-  accepts: z.array(z.unknown()),
-});
-
-export const cosignItemSchema = z.object({
-  hspPaymentId: zBytes32,
-  batchId: zBytes32,
-  payer: zAddress,
-  recipient: zAddress,
-  token: zAddress,
-  amount: zUint,
-  deadline: z.number(),
-  calls: z.array(z.object({ callId: zBytes32, mandateId: zBytes32, payee: zAddress, amount: zUint, cumulative: zUint })),
-  typedData: z.object({
-    domain: z.object({ name: z.literal("HSP"), version: z.literal("1"), chainId: z.number(), verifyingContract: zAddress }),
-    primaryType: z.literal("Mandate"),
-    types: z.unknown(),
-    message: z.object({
-      nonce: zBytes32,
-      signer: z.object({ profileId: zBytes32, payload: zHex }),
-      grantRef: zBytes32,
-      requirementRef: zBytes32,
-      recipient: z.object({ kind: z.number().int(), payload: zHex }),
-      token: zAddress,
-      amount: zUint,
-      chainId: zUint,
-      deadline: zUint,
-      settlementBinding: zBytes32,
-      requiredCapabilitiesHash: zBytes32,
-    }),
-  }),
-});
-export type CosignItem = z.infer<typeof cosignItemSchema>;
 
 export const infoSchema = z
   .object({
     version: z.string(),
-    network: z.object({ chainId: z.number(), caip2: z.string() }).loose(),
-    hub: zAddress,
-    token: z.object({ address: zAddress, symbol: z.string(), decimals: z.number() }),
-    operator: zAddress,
+    network: z.object({ id: zNetwork, name: z.string() }).loose(),
+    hub: zAccount,
+    token: z.object({ address: zAccount, symbol: z.string(), decimals: z.number() }),
+    operator: zAccount,
+    nodeKey: zPublicKey,
     publicUrl: z.string(),
   })
   .loose();
@@ -105,7 +53,7 @@ export const providerCatalogSchema = z.array(
       id: z.string(),
       name: z.string(),
       description: z.string(),
-      payee: zAddress,
+      payee: zAccount,
       priceAtomic: zUint,
       resource: z.string(),
       category: z.string(),
@@ -118,15 +66,18 @@ export class NodeApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly details: Record<string, unknown> | undefined;
+  /** The machine-readable refusal, when the node refused a voucher. */
+  readonly refusal: Refusal | undefined;
   /** The node's message without the code prefix. */
   readonly reason: string;
-  constructor(status: number, code: string, message: string, details?: Record<string, unknown>) {
+  constructor(status: number, code: string, message: string, details?: Record<string, unknown>, refusal?: Refusal) {
     super(`${code}: ${message}`);
     this.name = "NodeApiError";
     this.reason = message;
     this.status = status;
     this.code = code;
     this.details = details;
+    this.refusal = refusal;
   }
 }
 
@@ -161,7 +112,7 @@ export class NodeHttp {
     }
     if (!res.ok) {
       const e = errorSchema.safeParse(json);
-      if (e.success) throw new NodeApiError(res.status, e.data.error.code, e.data.error.message, e.data.error.details);
+      if (e.success) throw new NodeApiError(res.status, e.data.error.code, e.data.error.message, e.data.error.details, e.data.refusal as Refusal | undefined);
       throw new NodeApiError(res.status, "HTTP_ERROR", `HTTP ${res.status}`);
     }
     const parsed = schema.safeParse(json);

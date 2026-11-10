@@ -1,0 +1,72 @@
+{
+ "_fixture": {
+  "kind": "live recordings",
+  "recorded_at": "2026-11-10T04:42:49.000Z",
+  "note": "error bodies recorded from the live gateway with no API key, or with a made-up key that never existed (sk-payminto-invalid-key-for-error-shape)"
+ },
+ "alias_with_no_aliasing": {
+  "request": "model=glm-latest&provider=near with x-no-aliasing: true",
+  "status": 400,
+  "body": {
+   "error": {
+    "message": "Model 'glm-latest' is an alias of 'z-ai/glm-5.3-flash' and the request set x-no-aliasing. Use the canonical model name 'z-ai/glm-5.3-flash'.",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": null
+   }
+  }
+ },
+ "invalid_nonce": {
+  "request": "nonce=xyz",
+  "status": 400,
+  "body": {
+   "error": {
+    "message": "Invalid parameter: Invalid nonce format: Odd number of digits",
+    "type": "invalid_request_error",
+    "param": "nonce",
+    "code": null
+   }
+  }
+ },
+ "model_without_attestation": {
+  "request": "model=openai/gpt-5-nano&provider=near with x-no-aliasing: true",
+  "status": 503,
+  "body": {
+   "error": {
+    "message": "Provider error: No provider found that supports attestation reports for model: openai/gpt-5-nano",
+    "type": "provider_error",
+    "param": null,
+    "code": null
+   }
+  }
+ },
+ "invalid_key": {
+  "request": "POST /v1/check_api_key and GET /v1/signature/{id} with the made-up key",
+  "status": 401,
+  "body": {
+   "error": {
+    "message": "Invalid or expired API key",
+    "type": "invalid_api_key",
+    "param": null,
+    "code": null
+   }
+  }
+ },
+ "missing_key": {
+  "request": "POST /v1/check_api_key, POST /v1/chat/completions and GET /v1/signature/{id} with no Authorization header",
+  "status": 401,
+  "body": {
+   "error": {
+    "message": "Missing authorization header",
+    "type": "missing_auth_header",
+    "param": null,
+    "code": null
+   }
+  }
+ },
+ "models_ignore_the_key": {
+  "request": "GET /v1/models with the made-up key",
+  "status": 200,
+  "note": "the model list is public: it answers 200 with the full list for a key that does not exist"
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "source": "GET https://mainnet.api.bridge.nearone.org/api/v3/transfer-fee?sender=near:alice.near&recipient=base:0x000000000000000000000000000000000000dEaD&token=near:wrap.near&amount=1000000000000000000000000",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "status": 200,
+  "body": {
+    "native_token_fee": "2777777777888347621714",
+    "transferred_token_fee": "2785515320445139645043",
+    "gas_fee": null,
+    "protocol_fee": null,
+    "min_amount": null,
+    "usd_fee": 0.01,
+    "insufficient_utxo": false
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "note": "Older nodes answer a panicking view inside a successful envelope.",
+  "request": {
+    "method": "query",
+    "params": {
+      "request_type": "call_function",
+      "finality": "final",
+      "account_id": "hub.payminto.testnet",
+      "method_name": "batch",
+      "args": {
+        "batch_id": "54193345102d846d0611149ffd48ea3e3454643c77b0c5ea44b407d9840d185c"
+      }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "payminto-1",
+    "result": {
+      "block_hash": "8sPRLUk5FXH3vdTdXV3tWrw7WkoFJEn5RFGtXNhrqgwN",
+      "block_height": 219402871,
+      "logs": [],
+      "error": "wasm execution failed with error: FunctionCallError(HostError(GuestPanic { panic_msg: \"panicked at src/lib.rs: OVERFLOW\" }))"
+    }
+  }
+}

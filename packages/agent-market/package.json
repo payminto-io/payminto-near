@@ -1,0 +1,29 @@
+{
+  "name": "@payminto/agent-market",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Payminto's integration with the NEAR AI Agent Market: a typed client, a seller worker with verifiable input costs, and a buyer quote check that refuses before signing. The market settles its own jobs; this package never does.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "payminto-market": "./src/cli.ts"
+  },
+  "scripts": {
+    "market": "node src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@payminto/chain": "workspace:*",
+    "@payminto/protocol": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "near-kit": "0.20.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

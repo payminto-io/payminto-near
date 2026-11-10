@@ -1,0 +1,13 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://api-testnet.nearblocks.io/v3/accounts/testnet",
+  "status": 200,
+  "body": {
+    "data": {
+      "account_id": "testnet",
+      "created": {},
+      "deleted": {},
+      "locked": false
+    }
+  }
+}

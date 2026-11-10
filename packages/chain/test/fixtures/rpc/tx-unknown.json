@@ -1,0 +1,27 @@
+{
+  "note": "A hash this RPC has never seen.",
+  "request": {
+    "method": "tx",
+    "params": {
+      "tx_hash": "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH",
+      "sender_account_id": "buyer.testnet",
+      "wait_until": "NONE"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "payminto-1",
+    "error": {
+      "name": "HANDLER_ERROR",
+      "cause": {
+        "name": "UNKNOWN_TRANSACTION",
+        "info": {
+          "requested_transaction_hash": "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH"
+        }
+      },
+      "code": -32000,
+      "message": "Server error",
+      "data": "Transaction 9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH doesn't exist"
+    }
+  }
+}

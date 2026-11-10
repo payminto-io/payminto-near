@@ -1,0 +1,31 @@
+{
+  "name": "@payminto/chain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The NEAR seam: pure digests and wallet builders, an RPC client, and an in-memory hub for tests",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./fake": "./src/fake.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:sandbox": "PAYMINTO_SANDBOX=1 vitest run test/sandbox.test.ts",
+    "deploy:hub": "node scripts/deploy-hub.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "vectors": "node scripts/gen-vectors.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@scure/base": "2.4.0",
+    "borsh": "2.0.0",
+    "near-kit": "0.20.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

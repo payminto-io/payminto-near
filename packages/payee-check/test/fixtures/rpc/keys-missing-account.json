@@ -1,0 +1,18 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "view_access_key_list",
+    "account_id": "this-account-does-not-exist-zz9.testnet"
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "block_hash": "DYarR6LeNHQMsusm7ZKs7REZZbUi2H2MQexMp7bQBXVM",
+      "block_height": 277021763,
+      "keys": []
+    },
+    "id": "payminto"
+  }
+}

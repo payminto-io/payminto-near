@@ -1,0 +1,26 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "call_function",
+    "account_id": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "method_name": "storage_balance_of",
+    "args_base64": "eyJhY2NvdW50X2lkIjoibmVhci1leGFtcGxlcy50ZXN0bmV0In0="
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "block_hash": "2W3UjfaWLdiYuH6ZCz7dw7V99L7jsjk23wrFh2q58Wgk",
+      "block_height": 277021785,
+      "logs": [],
+      "result": [
+        110,
+        117,
+        108,
+        108
+      ]
+    },
+    "id": "payminto"
+  }
+}

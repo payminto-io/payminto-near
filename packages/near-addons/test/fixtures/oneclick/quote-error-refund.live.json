@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "source": "POST /v0/quote, dry, refundTo a named account that does not exist",
+    "recorded": "2026-11-10",
+    "live": true,
+    "note": "The service answered 400 Internal server error; a valid implicit refund account succeeded."
+  },
+  "request": {
+    "dry": true,
+    "swapType": "EXACT_INPUT",
+    "slippageTolerance": 100,
+    "originAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+    "amount": "10000000",
+    "refundTo": "payminto-merchant.near",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "0x2527d02599ba641c19fea793cd0f167589a0f10d",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-10T03:40:26.600Z"
+  },
+  "status": 400,
+  "body": {
+    "message": "Internal server error",
+    "correlationId": "682c5435-05bd-4b06-a3f1-881047ea484f",
+    "timestamp": "2026-11-10T03:10:27.199Z",
+    "path": "/v0/quote"
+  }
+}

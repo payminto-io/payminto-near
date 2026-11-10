@@ -1,118 +1,50 @@
-import {
-  hashTypedData,
-  recoverTypedDataAddress,
-  isAddressEqual,
-  type Address,
-  type Hex,
-  type TypedDataDomain,
-} from "viem";
+import { acceptanceDigest, acceptancePreimage, assertId32, sha256Text, voucherCallId, type AccountId, type BudgetTerms, type Claim, type Id32, type PublicKey, type Sig64 } from "@payminto/chain";
 
-/** On-chain mandate, signed by the owner. Field order and names must match ClearingHub.MANDATE_TYPEHASH. */
-export type Mandate = {
-  owner: Address;
-  agent: Address;
-  token: Address;
-  totalCap: bigint;
-  validAfter: bigint;
-  validUntil: bigint;
-  payeesRoot: Hex;
-  policyHash: Hex;
-  salt: Hex;
-};
+/** JSON-safe Budget terms: bigints as decimal strings. `validUntil` is Unix milliseconds. */
+export type BudgetTermsJson = Omit<BudgetTerms, "cap" | "validUntil"> & { cap: string; validUntil: string };
 
-/** Cumulative per-payee voucher, signed by the agent. Each call raises `cumulative` by exactly the call price. */
-export type Voucher = {
-  mandateId: Hex;
-  payee: Address;
+export function budgetTermsToJson(t: BudgetTerms): BudgetTermsJson {
+  return { ...t, cap: t.cap.toString(), validUntil: t.validUntil.toString() };
+}
+
+export function budgetTermsFromJson(j: BudgetTermsJson): BudgetTerms {
+  return { ...j, cap: BigInt(j.cap), validUntil: BigInt(j.validUntil) };
+}
+
+/** One accepted call, as the node attests it before any batch exists. `nodeDigest` is what the node signs. */
+export type NodeAttestation = {
+  callId: Id32;
+  budgetId: Id32;
+  payee: AccountId;
+  amount: bigint;
   cumulative: bigint;
+  requestHash: Id32;
+  timestamp: bigint;
+  voucherSig: Sig64;
 };
 
-export const ZERO_BYTES32: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
-
-export const mandateTypes = {
-  Mandate: [
-    { name: "owner", type: "address" },
-    { name: "agent", type: "address" },
-    { name: "token", type: "address" },
-    { name: "totalCap", type: "uint256" },
-    { name: "validAfter", type: "uint64" },
-    { name: "validUntil", type: "uint64" },
-    { name: "payeesRoot", type: "bytes32" },
-    { name: "policyHash", type: "bytes32" },
-    { name: "salt", type: "bytes32" },
-  ],
-} as const;
-
-export const voucherTypes = {
-  Voucher: [
-    { name: "mandateId", type: "bytes32" },
-    { name: "payee", type: "address" },
-    { name: "cumulative", type: "uint256" },
-  ],
-} as const;
-
-export function hubDomain(chainId: number, hub: Address): TypedDataDomain {
-  return { name: "Payminto Clearing", version: "1", chainId, verifyingContract: hub };
+/**
+ * The digest the node signs when it accepts a call. Not a Merkle leaf: the leaf needs the batch id.
+ *
+ * It is `acceptanceDigest` of @payminto/chain, which is also what the hub rebuilds in `settle_own`: the text layout is
+ * defined there and nowhere else. The chain package derives the call id from the voucher's own fields, and every
+ * attestation a node signs carries exactly that id.
+ *
+ * A receipt that reaches a client is untrusted, and its call id is one of the fields the digest must cover. So an
+ * attestation that names another id still gets a digest, over the chain package's own text with the named id in the
+ * call id's place. No node signs that digest, so a receipt whose call id was changed never verifies.
+ */
+export function nodeDigest(a: NodeAttestation): Id32 {
+  const claim: Claim = { budgetId: a.budgetId, payee: a.payee, amount: a.amount, cumulative: a.cumulative, requestHash: a.requestHash, signature: a.voucherSig };
+  if (a.callId === voucherCallId(claim)) return acceptanceDigest(claim, a.timestamp);
+  assertId32(a.callId, "callId");
+  // Nine fields, none of which can contain the separator (see `acceptancePreimage`); the call id is the second.
+  const fields = acceptancePreimage(claim, a.timestamp).split("|");
+  fields[1] = a.callId;
+  return sha256Text(fields.join("|"));
 }
 
-/** The mandate id is its EIP-712 digest, exactly as ClearingHub.mandateDigest computes it. */
-export function mandateId(chainId: number, hub: Address, m: Mandate): Hex {
-  return hashTypedData({ domain: hubDomain(chainId, hub), types: mandateTypes, primaryType: "Mandate", message: m });
-}
+/** The text an agent or owner signs to revoke through the node. Replays are harmless: revoke is idempotent. */
+export const revokeMessage = (budgetId: Id32): string => `Payminto Clearing: revoke budget ${budgetId}`;
 
-export function voucherDigest(chainId: number, hub: Address, v: Voucher): Hex {
-  return hashTypedData({ domain: hubDomain(chainId, hub), types: voucherTypes, primaryType: "Voucher", message: v });
-}
-
-export function mandateTypedData(chainId: number, hub: Address, m: Mandate) {
-  return { domain: hubDomain(chainId, hub), types: mandateTypes, primaryType: "Mandate" as const, message: m };
-}
-
-export function voucherTypedData(chainId: number, hub: Address, v: Voucher) {
-  return { domain: hubDomain(chainId, hub), types: voucherTypes, primaryType: "Voucher" as const, message: v };
-}
-
-/** EOA check only. Smart-wallet owners are verified on chain by ClearingHub via ERC-1271. */
-export async function isVoucherSignedBy(
-  chainId: number,
-  hub: Address,
-  v: Voucher,
-  signature: Hex,
-  agent: Address,
-): Promise<boolean> {
-  try {
-    const signer = await recoverTypedDataAddress({ ...voucherTypedData(chainId, hub, v), signature });
-    return isAddressEqual(signer, agent);
-  } catch {
-    return false;
-  }
-}
-
-export async function isMandateSignedBy(
-  chainId: number,
-  hub: Address,
-  m: Mandate,
-  signature: Hex,
-): Promise<boolean> {
-  try {
-    const signer = await recoverTypedDataAddress({ ...mandateTypedData(chainId, hub, m), signature });
-    return isAddressEqual(signer, m.owner);
-  } catch {
-    return false;
-  }
-}
-
-/** JSON-safe mandate: bigints as decimal strings. */
-export type MandateJson = Omit<Mandate, "totalCap" | "validAfter" | "validUntil"> & {
-  totalCap: string;
-  validAfter: string;
-  validUntil: string;
-};
-
-export function mandateToJson(m: Mandate): MandateJson {
-  return { ...m, totalCap: m.totalCap.toString(), validAfter: m.validAfter.toString(), validUntil: m.validUntil.toString() };
-}
-
-export function mandateFromJson(j: MandateJson): Mandate {
-  return { ...j, totalCap: BigInt(j.totalCap), validAfter: BigInt(j.validAfter), validUntil: BigInt(j.validUntil) };
-}
+export type { PublicKey };

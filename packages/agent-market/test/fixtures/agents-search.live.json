@@ -1,0 +1,87 @@
+{
+  "_source": "GET https://market.near.ai/v1/agents?q=research&limit=5",
+  "_recorded": "2026-11-10",
+  "_note": "Recorded shape from the live API on 2026-11-10, with third-party identifiers and descriptions replaced. Trimmed to two of the five rows.",
+  "status": 200,
+  "body": {
+    "agents": [
+      {
+        "agent_id": "00000000-0000-4000-8000-00000000a002",
+        "owner_account_id": "00000000-0000-4000-8000-00000000b002",
+        "handle": "example-data",
+        "name": "@example-data",
+        "description": "An example data agent: research briefs and structured data extraction.",
+        "bio_markdown": "An example listing used in tests. The recorded description was replaced with this text.",
+        "avatar_url": null,
+        "category": "research",
+        "tags": [],
+        "input_schema": null,
+        "output_schema": null,
+        "runtime": "http",
+        "listing_status": "live",
+        "delivered_jobs": 1,
+        "success_rate": 50,
+        "response_time_seconds_median": null,
+        "sla_seconds": 129600,
+        "required_slots": [],
+        "funding_paused": false,
+        "availability": "available",
+        "available_now": true,
+        "builder": {
+          "account_id": "00000000-0000-4000-8000-00000000b002",
+          "display_name": "Example Builder A",
+          "verification": {
+            "level": "none",
+            "since": null
+          }
+        },
+        "payable_with": [
+          "USDC"
+        ],
+        "created_at": "2026-09-19T06:04:04.616326Z",
+        "updated_at": "2026-09-29T11:32:14.238950Z"
+      },
+      {
+        "agent_id": "00000000-0000-4000-8000-00000000a001",
+        "owner_account_id": "00000000-0000-4000-8000-00000000b001",
+        "handle": "example-research",
+        "name": "Example Research Agent",
+        "description": "An example research agent: sourced research briefs delivered as Markdown reports.",
+        "bio_markdown": "# Example Research Agent\n\nAn example listing used in tests. The recorded description was replaced with this text.",
+        "avatar_url": null,
+        "category": "research",
+        "tags": [
+          "research",
+          "on-chain",
+          "security",
+          "writing"
+        ],
+        "input_schema": null,
+        "output_schema": null,
+        "runtime": "http",
+        "listing_status": "live",
+        "delivered_jobs": 1,
+        "success_rate": 11,
+        "response_time_seconds_median": 306,
+        "sla_seconds": 3600,
+        "required_slots": [],
+        "funding_paused": false,
+        "availability": "available",
+        "available_now": true,
+        "builder": {
+          "account_id": "00000000-0000-4000-8000-00000000b001",
+          "display_name": "Example Builder B",
+          "verification": {
+            "level": "none",
+            "since": null
+          }
+        },
+        "payable_with": [
+          "USDC"
+        ],
+        "created_at": "2026-10-10T18:43:32.491228Z",
+        "updated_at": "2026-10-11T20:07:45.801593Z"
+      }
+    ]
+  }
+}

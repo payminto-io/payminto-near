@@ -1,0 +1,30 @@
+{
+  "name": "@payminto/payee-check",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Counterparty check for agents that pay on NEAR: allow, warn or block a payee, with reasons, before anything is signed",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./fake": "./src/fake.ts"
+  },
+  "bin": {
+    "payminto-payee-check": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "check": "node src/cli.ts check",
+    "report": "node src/cli.ts report",
+    "demo": "node src/demo.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

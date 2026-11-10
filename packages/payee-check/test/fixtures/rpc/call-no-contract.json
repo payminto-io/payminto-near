@@ -1,0 +1,21 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "call_function",
+    "account_id": "near-examples.testnet",
+    "method_name": "storage_balance_of",
+    "args_base64": "eyJhY2NvdW50X2lkIjoibmVhci1leGFtcGxlcy50ZXN0bmV0In0="
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "block_hash": "8qWRqrHL2BZa4nT5z9iUqtUmAuXU7DVesCWcAusVwUfo",
+      "block_height": 277021791,
+      "error": "wasm execution failed with error: CompilationError(CodeDoesNotExist { account_id: \"near-examples.testnet\" })",
+      "logs": []
+    },
+    "id": "payminto"
+  }
+}

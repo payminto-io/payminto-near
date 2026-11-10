@@ -1,0 +1,64 @@
+{
+  "_meta": {
+    "source": "POST https://1click.chaindefuser.com/v0/quote with dry: true",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "request": {
+    "dry": true,
+    "swapType": "EXACT_INPUT",
+    "slippageTolerance": 100,
+    "originAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+    "amount": "10000000",
+    "refundTo": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "0x2527d02599ba641c19fea793cd0f167589a0f10d",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-10T03:40:25.679Z"
+  },
+  "status": 201,
+  "body": {
+    "quote": {
+      "amountIn": "10000000",
+      "amountInFormatted": "10.0",
+      "amountInUsd": "9.994690000000",
+      "minAmountIn": "10000000",
+      "amountOut": "9996226",
+      "amountOutFormatted": "9.996226",
+      "amountOutUsd": "9.990918003994",
+      "minAmountOut": "9896263",
+      "timeEstimate": 22,
+      "refundFee": "4490",
+      "withdrawFee": "2400"
+    },
+    "quoteRequest": {
+      "dry": true,
+      "depositMode": "SIMPLE",
+      "swapType": "EXACT_INPUT",
+      "slippageTolerance": 100,
+      "originAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+      "depositType": "ORIGIN_CHAIN",
+      "destinationAsset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+      "amount": "10000000",
+      "refundTo": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "refundType": "ORIGIN_CHAIN",
+      "recipient": "0x2527d02599ba641c19fea793cd0f167589a0f10d",
+      "recipientType": "DESTINATION_CHAIN",
+      "deadline": "2026-11-10T03:40:25.679Z",
+      "confidentiality": "public",
+      "quoteWaitingTimeMs": 0,
+      "insured": false,
+      "appFees": [
+        {
+          "recipient": "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+          "fee": 1
+        }
+      ]
+    },
+    "signature": "ed25519:3RvbdDhHv2M21kxyMwxBvXSukFpzEuMxDQLZviH3SECVfBfeFaMiMyqfrsHy2jCGKhNVB2FhpPxaaQ3HD3wXsL2r",
+    "timestamp": "2026-11-10T03:10:26.163Z",
+    "correlationId": "5aebbab5-a608-4dbf-8d89-b4d4a28ae9d3"
+  }
+}

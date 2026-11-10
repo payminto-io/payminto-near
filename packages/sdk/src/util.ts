@@ -1,4 +1,4 @@
-import { encodeAbiParameters, keccak256, toBytes, type Hex } from "viem";
+import { revokeMessage, sha256Hex, sha256Text, voucherCallId, type Id32 } from "@payminto/protocol";
 
 /** Minimal typed event emitter that works in Node, browsers and edge runtimes. */
 export class Emitter<Events extends Record<string, unknown>> {
@@ -44,25 +44,35 @@ export class KeyedMutex {
 
 /**
  * Binds a voucher to what it bought: method, path with query, and the body digest.
- * Agent and provider compute it independently; the node records it in the receipt leaf.
+ * Agent and provider compute it independently; the voucher signature and the receipt leaf both commit to it.
  */
-export function computeRequestHash(method: string, url: string, body?: Uint8Array | null): Hex {
+export function computeRequestHash(method: string, url: string, body?: Uint8Array | null): Id32 {
   const u = new URL(url, "http://localhost");
-  return keccak256(
-    encodeAbiParameters(
-      [{ type: "string" }, { type: "string" }, { type: "bytes32" }],
-      [method.toUpperCase(), `${u.pathname}${u.search}`, keccak256(body ?? new Uint8Array())],
-    ),
-  );
+  return sha256Text(["payminto.request.v1", method.toUpperCase(), `${u.pathname}${u.search}`, sha256Hex(body ?? new Uint8Array())].join("\n"));
+}
+
+/**
+ * The id a clearing node gives the call a voucher pays for. It is a hash of the voucher's own fields, so an agent can
+ * ask its node about a voucher it signed without trusting anything a seller returned.
+ * This is `voucherCallId` of @payminto/chain under the name the SDK has always exported: the node uses the same
+ * function, and the hub contract rebuilds the same id in `settle_own`.
+ */
+export const callIdOf = voucherCallId;
+
+/**
+ * Text written by a party this client does not trust (a seller, a directory entry), made safe to show next to this
+ * client's own words: control and invisible format characters removed, whitespace collapsed, length capped.
+ * It is still untrusted data. Cleaning it does not make it an instruction.
+ */
+export function cleanText(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, Math.max(0, max - 3))}...` : flat;
 }
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Message an agent or owner signs (EIP-191) to revoke a mandate through the node without the admin token. */
-export function revokeMessage(mandateId: Hex): string {
-  return `Payminto Clearing: revoke mandate ${mandateId.toLowerCase()}`;
-}
+export { revokeMessage };
 
-export function utf8(s: string): Uint8Array {
-  return toBytes(s);
-}
+/** What an agent signs with its Budget key to ask the node to stop accepting its vouchers. */
+export const revokeDigest = (budgetId: Id32): Id32 => sha256Text(revokeMessage(budgetId));

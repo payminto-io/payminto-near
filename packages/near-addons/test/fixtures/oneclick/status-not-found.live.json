@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "source": "GET /v0/status?depositAddress=<64 zeros>",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "status": 404,
+  "body": {
+    "message": "Deposit address 0000000000000000000000000000000000000000000000000000000000000000 not found",
+    "error": "Not Found",
+    "statusCode": 404,
+    "timestamp": "2026-11-10T03:09:31.253Z",
+    "path": "/v0/status?depositAddress=0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

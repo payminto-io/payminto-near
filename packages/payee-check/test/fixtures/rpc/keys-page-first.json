@@ -1,0 +1,35 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://rpc.testnet.near.org",
+  "query": {
+    "request_type": "view_access_key_list",
+    "account_id": "641c8bb12ddfc8f0a1475ed00e84dade985d5f8e40c877f7958e1db0e96234a5",
+    "limit": 2
+  },
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "result": {
+      "block_hash": "2PBrAHJNCq88R1aYf6fUx5LNAvzwrs5zwyo2jA6PAfev",
+      "block_height": 277021774,
+      "keys": [
+        {
+          "access_key": {
+            "nonce": 134898291000054,
+            "permission": "FullAccess"
+          },
+          "public_key": "ed25519:DBQ2ZXrjmWPeqFTMKRznm3rn3k19LoZgeG247ybK77G"
+        },
+        {
+          "access_key": {
+            "nonce": 134898242000054,
+            "permission": "FullAccess"
+          },
+          "public_key": "ed25519:XP769Sg6tRhZnh3EXcqqfK7Xkx3RbwanZvMyZ6NcEuq"
+        }
+      ],
+      "last_key": "ed25519:XP769Sg6tRhZnh3EXcqqfK7Xkx3RbwanZvMyZ6NcEuq"
+    },
+    "id": "payminto"
+  }
+}

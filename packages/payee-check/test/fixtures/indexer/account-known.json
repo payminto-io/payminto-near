@@ -1,0 +1,16 @@
+{
+  "recorded": "2026-11-10",
+  "url": "https://api-testnet.nearblocks.io/v3/accounts/near-examples.testnet",
+  "status": 200,
+  "body": {
+    "data": {
+      "account_id": "near-examples.testnet",
+      "created": {
+        "block_timestamp": "1664639408926991021",
+        "transaction_hash": "4jM2fCA16gw1sjwP5Bdboj5e17QXpKfruxLLiNNYbpyx"
+      },
+      "deleted": {},
+      "locked": false
+    }
+  }
+}

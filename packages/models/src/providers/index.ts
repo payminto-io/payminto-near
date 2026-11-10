@@ -1,11 +1,13 @@
 /**
- * Provider registry: the catalogue the node serves at GET /v1/ai/providers, and the three entry points the node and
+ * Provider registry: the catalogue the node serves at GET /v1/ai/providers (NEAR AI Cloud is its last entry, so the
+ * positions of the others do not move), and the three entry points the node and
  * the CLI use (createModelClient, verifyConnection, listModels). docs/AGENTS.md sections 2 and 3.
  */
 import { ModelError, DEFAULT_MODEL, type ClientOptions, type ConnectionSpec, type ModelClient, type Provider } from "../model.ts";
 import { ANTHROPIC_BASE_URL, anthropicModel, listAnthropicModels } from "./anthropic.ts";
 import { GOOGLE_BASE_URL, googleModel, listGoogleModels } from "./google.ts";
 import { COMPATIBLE_PRESETS, listCompatibleModels, openaiCompatibleModel } from "./openai-compatible.ts";
+import { NEARAI_BASE_URL, NEARAI_DOCS_URL, NEARAI_LABEL, NEARAI_MODELS, NEARAI_NOTE, isNearAiBaseUrl, listNearAiModels, nearaiModel, verifyNearAiKey } from "./nearai.ts";
 import { OPENAI_BASE_URL, listOpenAIModels, openaiModel } from "./openai.ts";
 import { REPLICATE_BASE_URL, REPLICATE_MODELS, listReplicateModels, replicateModel } from "./replicate.ts";
 
@@ -62,7 +64,7 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   },
   {
     id: "openai_compatible",
-    name: "Other (OpenAI-compatible: OpenRouter, Groq, Together, DeepSeek, Mistral, xAI, Ollama, vLLM, LM Studio)",
+    name: "Other (OpenAI-compatible: NEAR AI Cloud, OpenRouter, Groq, Together, DeepSeek, Mistral, xAI, Ollama, vLLM, LM Studio)",
     needsBaseUrl: true,
     defaultBaseUrl: null,
     keyOptional: true,
@@ -82,7 +84,23 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     presets: [],
     note: "Models on Replicate have no native tool calling. Payminto emulates tools with a JSON reply format in the prompt, which works well with DeepSeek V3.1 but is less reliable than native tools.",
   },
+  {
+    id: "nearai",
+    name: NEARAI_LABEL,
+    needsBaseUrl: false,
+    defaultBaseUrl: NEARAI_BASE_URL,
+    keyOptional: false,
+    suggestedModels: [...NEARAI_MODELS],
+    docsUrl: NEARAI_DOCS_URL,
+    presets: [],
+    note: NEARAI_NOTE,
+  },
 ];
+
+/** True for a connection the NEAR AI Cloud adapter serves: the `nearai` provider, or a compatible connection to its gateway. */
+function isNearAi(provider: Provider, baseUrl: string | undefined): boolean {
+  return provider === "nearai" || (provider === "openai_compatible" && isNearAiBaseUrl(baseUrl));
+}
 
 export function providerInfo(id: Provider): ProviderInfo {
   const p = PROVIDERS.find((x) => x.id === id);
@@ -108,6 +126,8 @@ function validate(c: Omit<ConnectionSpec, "model"> & { model?: string }): { base
     if (u.username || u.password) throw fail("base URL must not carry credentials; put the key in the API key field");
   }
   if (c.model !== undefined && !c.model.trim()) throw fail("a model id is required");
+  // The compatible provider may run without a key (local servers); NEAR AI Cloud may not.
+  if (c.provider === "openai_compatible" && isNearAiBaseUrl(raw) && !c.apiKey?.trim()) throw fail(`${NEARAI_LABEL} needs an API key (it starts with sk-); create one under API Keys at https://cloud.near.ai`);
   return { baseUrl: raw?.replace(/\/+$/, "") };
 }
 
@@ -123,9 +143,12 @@ export function createModelClient(c: ConnectionSpec, o: ClientOptions = {}): Mod
     case "google":
       return googleModel({ ...common, baseUrl });
     case "openai_compatible":
-      return openaiCompatibleModel({ ...common, baseUrl: baseUrl! });
+      // NEAR AI Cloud speaks the OpenAI API, but needs its own key check and brings attestation (nearai.ts).
+      return isNearAiBaseUrl(baseUrl) ? nearaiModel({ ...common, baseUrl, provider: "openai_compatible" }) : openaiCompatibleModel({ ...common, baseUrl: baseUrl! });
     case "replicate":
       return replicateModel({ ...common, baseUrl });
+    case "nearai":
+      return nearaiModel({ ...common, baseUrl, provider: "nearai" });
   }
 }
 
@@ -142,9 +165,11 @@ export async function listModels(c: Omit<ConnectionSpec, "model">, o: ClientOpti
     case "google":
       return listGoogleModels({ ...common, baseUrl });
     case "openai_compatible":
-      return listCompatibleModels({ ...common, baseUrl: baseUrl! });
+      return isNearAiBaseUrl(baseUrl) ? listNearAiModels({ ...common, baseUrl, provider: "openai_compatible" }) : listCompatibleModels({ ...common, baseUrl: baseUrl! });
     case "replicate":
       return listReplicateModels({ ...common, baseUrl });
+    case "nearai":
+      return listNearAiModels({ ...common, baseUrl, provider: "nearai" });
   }
 }
 
@@ -156,9 +181,17 @@ export type VerifyResult = { ok: true; models: string[] | null } | { ok: false; 
  */
 export async function verifyConnection(c: ConnectionSpec, o: ClientOptions & { signal?: AbortSignal } = {}): Promise<VerifyResult> {
   try {
-    validate(c);
+    const { baseUrl } = validate(c);
+    // NEAR AI Cloud serves its model list to anyone, so the list proves nothing about the key: ask the key check.
+    // When that endpoint is missing (a proxy), the one-token completion below is the check.
+    const nearai = isNearAi(c.provider, baseUrl);
+    const keyChecked = nearai ? await verifyNearAiKey({ apiKey: c.apiKey.trim(), baseUrl, provider: c.provider, fetch: o.fetch, timeoutMs: o.timeoutMs ?? 30_000, signal: o.signal }) : true;
     const models = await listModels(c, { timeoutMs: 30_000, ...o });
-    if (models !== null) return { ok: true, models };
+    if (models !== null && keyChecked) return { ok: true, models };
+    if (nearai) {
+      await createModelClient(c, { timeoutMs: 30_000, ...o, attestation: "off" }).turn({ system: "Reply with OK.", tools: [], messages: [{ role: "user", parts: [{ type: "text", text: "OK?" }] }], maxTokens: 1 }, { signal: o.signal });
+      return { ok: true, models };
+    }
     await createModelClient(c, { timeoutMs: 30_000, ...o }).turn({ system: "Reply with OK.", tools: [], messages: [{ role: "user", parts: [{ type: "text", text: "OK?" }] }], maxTokens: 1 }, { signal: o.signal });
     return { ok: true, models: null };
   } catch (err) {

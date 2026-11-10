@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "source": "GET https://mainnet.api.bridge.nearone.org/api/v4/transfers/transfer/status?origin_chain=Near&origin_nonce=57628",
+    "recorded": "2026-11-10",
+    "live": true
+  },
+  "status": 200,
+  "body": {
+    "statuses": [
+      "Settled"
+    ]
+  }
+}

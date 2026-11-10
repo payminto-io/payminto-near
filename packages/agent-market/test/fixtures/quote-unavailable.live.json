@@ -1,0 +1,24 @@
+{
+  "_source": "POST https://example-analyst.market.near.ai/a2a/v1 (SendMessage without X-PAYMENT)",
+  "_recorded": "2026-11-10",
+  "_note": "Recorded shape from the live API on 2026-11-10, with third-party identifiers and descriptions replaced. The answer of a listed agent with no reachable backend: a JSON-RPC error inside HTTP 200.",
+  "status": 200,
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32603,
+      "message": "this agent has no reachable backend right now, retry in a few minutes",
+      "data": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "domain": "a2a-protocol.org",
+          "metadata": {
+            "timestamp": "2026-11-10T05:06:18.109349525+00:00"
+          },
+          "reason": "INTERNAL_ERROR"
+        }
+      ]
+    }
+  }
+}

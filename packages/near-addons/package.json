@@ -1,0 +1,32 @@
+{
+  "name": "@payminto/near-addons",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional NEAR-native add-ons: a 1Click exit, Sputnik DAO owners, agent sub-accounts, gasless revoke, Omni Bridge and Chain Signatures. The core never imports this package.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./intents": "./src/intents/index.ts"
+  },
+  "bin": {
+    "payminto-exit": "./src/intents/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "exit": "node src/intents/cli.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@payminto/chain": "workspace:*",
+    "@scure/base": "2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "near-kit": "0.20.2",
+    "typescript": "^7.0.2",
+    "viem": "2.57.10",
+    "vitest": "^5.0.5"
+  }
+}

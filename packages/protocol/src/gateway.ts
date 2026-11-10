@@ -1,30 +1,28 @@
 /**
- * Payminto Gateway shared protocol (docs/GATEWAY.md): ids, EIP-3009 checkout authorizations, per-payment deposit
- * forwarders, webhook signatures, EIP-681 URIs, and the public JSON types the node, dashboard and SDK exchange.
- * Runtime-neutral (Node, browsers, edge): Web Crypto and TextEncoder only, no Buffer.
+ * Payminto Gateway shared protocol on NEAR: ids, the hosted checkout paid with node-signed terms through the hub,
+ * NEP-413 payout proofs, merchant refund transfers, webhook signatures, and the public JSON types the node, dashboard and
+ * SDK exchange. Runtime-neutral (Node, browsers, edge): Web Crypto and TextEncoder only, no Buffer.
  */
 import {
-  encodeAbiParameters,
-  encodeFunctionData,
-  getAddress,
-  getContractAddress,
-  isAddressEqual,
-  keccak256,
-  recoverTypedDataAddress,
-  sha256,
-  toBytes,
-  zeroHash,
-  type Address,
-  type Hex,
-  type PublicClient,
-} from "viem";
-import { depositFactoryAbi, paymentRouterAbi } from "./abi.ts";
-import type { CheckoutHsp, PaymentHsp } from "./hsp-agentic.ts";
+  isAccountId,
+  isPublicKey,
+  sha256Hex,
+  sha256Text,
+  verifyDigest,
+  type AccountId,
+  type CheckoutTerms,
+  type Id32,
+  type Network,
+  type PublicKey,
+  type Sig64,
+  type WalletTx,
+} from "@payminto/chain";
+import type { RetryHint } from "./policy.ts";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Ids and secrets
 
-/** Id prefixes, GATEWAY.md section 4. The random part is 24 lowercase base32 characters (15 random bytes). */
+/** Id prefixes. The random part is 24 lowercase base32 characters (15 random bytes). */
 export const ID_PREFIXES = {
   payment: "pay",
   link: "plink",
@@ -70,6 +68,14 @@ function base64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+const toHex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
 export function newId(kind: IdKind): string {
   return `${ID_PREFIXES[kind]}_${base32(randomBytes(ID_RANDOM_BYTES))}`;
 }
@@ -100,60 +106,150 @@ export function newWebhookSecret(): string {
   return `whsec_${base64url(randomBytes(32))}`;
 }
 
-/** Merchant API secret: `sk_live_` on 177, `sk_test_` elsewhere, + 32 random bytes base32. Store only its hash. */
+/** Merchant API secret: `sk_live_` on mainnet, `sk_test_` elsewhere, + 32 random bytes base32. Store only its hash. */
 export function newApiKeySecret(livemode: boolean): string {
   return `${livemode ? "sk_live_" : "sk_test_"}${base32(randomBytes(32))}`;
 }
 
-/** SHA-256 of the secret's UTF-8 bytes, the only form an API key is stored in. */
-export function hashApiKeySecret(secret: string): Hex {
-  return sha256(toBytes(secret));
+/** SHA-256 of the secret's UTF-8 bytes as 64 lowercase hex characters, the only form an API key is stored in. */
+export function hashApiKeySecret(secret: string): string {
+  return sha256Text(secret);
 }
 
-/** What a payout proof is bound to: the node's chain and its ClearingHub, so a proof is good on one node only. */
-export type PayoutProofScope = { chainId: number; hub: Address };
+/** A fresh on-chain checkout payment id: 32 random bytes. The hub refuses a repeated id, so every payment has its own. */
+export function newCheckoutId(): Id32 {
+  return toHex(randomBytes(32));
+}
+
+/** Public objects carry `livemode`, true only on NEAR mainnet (there is no mainnet node mode in this submission). */
+export function isLivemode(network: Network): boolean {
+  return network === "near:mainnet";
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Payout proofs: NEP-413 signed messages
+
+/** The NEP-413 tag, 2^31 + 413, which keeps a signed message from parsing as a NEAR transaction. */
+export const NEP413_TAG = 2147484061;
+
+export type Nep413Payload = { message: string; nonce: Uint8Array; recipient: string; callbackUrl?: string | null };
+
+const utf8 = new TextEncoder();
 
 /**
- * The EIP-191 message a payout wallet signs to prove control when a merchant is created or its payout changes
- * (GATEWAY.md section 14.3). A merchant that does not exist yet signs with the literal id "new". The chain id and the
- * node's hub are part of the text, so a proof signed for one node cannot be replayed on another.
+ * sha256(borsh(u32 tag, string message, [u8; 32] nonce, string recipient, Option<string> callbackUrl)): the 32 bytes a
+ * NEAR wallet's `signMessage` signs with the account's full-access key.
  */
-export function payoutChangeMessage(merchantId: string, payout: Address, timestamp: number, scope: PayoutProofScope): string {
-  return `Payminto payout change ${merchantId} ${getAddress(payout)} ${timestamp} chain ${scope.chainId} hub ${getAddress(scope.hub)}`;
+export function nep413Digest(p: Nep413Payload): Id32 {
+  if (p.nonce.length !== 32) throw new Error("a NEP-413 nonce is 32 bytes");
+  const parts: Uint8Array[] = [];
+  const u32 = (n: number) => {
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setUint32(0, n, true);
+    parts.push(b);
+  };
+  const str = (s: string) => {
+    const b = utf8.encode(s);
+    u32(b.length);
+    parts.push(b);
+  };
+  u32(NEP413_TAG);
+  str(p.message);
+  parts.push(p.nonce);
+  str(p.recipient);
+  if (p.callbackUrl === undefined || p.callbackUrl === null) parts.push(new Uint8Array([0]));
+  else {
+    parts.push(new Uint8Array([1]));
+    str(p.callbackUrl);
+  }
+  const all = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
+  let at = 0;
+  for (const x of parts) {
+    all.set(x, at);
+    at += x.length;
+  }
+  return sha256Hex(all);
 }
+
+/** What a payout proof is bound to: the node's network and hub, so a proof is good on one node only. */
+export type PayoutProofScope = { network: Network; hub: AccountId };
 
 /** Payout proofs older than this (seconds) are refused. */
 export const PAYOUT_PROOF_MAX_AGE_SECONDS = 600;
 
-/** Public objects carry `livemode`, true only on HashKey Chain mainnet. */
-export function isLivemode(chainId: number): boolean {
-  return chainId === 177;
+/**
+ * The message a payout account signs to prove control when a merchant is created or its payout changes. A merchant that
+ * does not exist yet signs with the literal id "new". The network and the node's hub are in the text, so a proof signed
+ * for one node cannot be replayed on another.
+ */
+export function payoutChangeMessage(merchantId: string, payout: AccountId, timestamp: number, scope: PayoutProofScope): string {
+  return `Payminto payout change ${merchantId} ${payout} ${timestamp} network ${scope.network} hub ${scope.hub}`;
+}
+
+/**
+ * The exact `signMessage` request for a payout proof (NEAR Connect and NEP-413 wallets): the message, the hub as the
+ * recipient, and a nonce derived from the message, so the node can rebuild every byte from the proof alone.
+ */
+export function payoutProofRequest(merchantId: string, payout: AccountId, timestamp: number, scope: PayoutProofScope): { message: string; recipient: string; nonce: Uint8Array } {
+  const message = payoutChangeMessage(merchantId, payout, timestamp, scope);
+  return { message, recipient: scope.hub, nonce: hexToBytes(sha256Text(message)) };
+}
+
+/** What `POST /v1/merchants` (as `payout`) and `POST /v1/merchants/{id}/payout` take. */
+export type PayoutProof = {
+  /** The NEAR account that becomes the payout. */
+  payout: AccountId;
+  /** Unix seconds, as signed in the message. */
+  timestamp: number;
+  /** The key that signed, as the wallet returns it. The node checks it is a full-access key of `payout`. */
+  public_key: PublicKey;
+  /** The ed25519 signature, base64 as NEAR wallets return it. */
+  signature: string;
+};
+
+/** Base64 (standard or url-safe, padded or not) to lowercase hex, or null when it is not 64 bytes. */
+export function signatureHex(base64: string): Sig64 | null {
+  try {
+    const bin = atob(base64.replace(/-/g, "+").replace(/_/g, "/"));
+    if (bin.length !== 64) return null;
+    let hex = "";
+    for (let i = 0; i < bin.length; i++) hex += bin.charCodeAt(i).toString(16).padStart(2, "0");
+    return hex;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when `proof.public_key` signed the payout proof message. This checks the signature only: whether that key is a
+ * full-access key of `proof.payout` is a chain read the node makes (view_access_key).
+ */
+export function verifyPayoutProofSignature(proof: PayoutProof, merchantId: string, scope: PayoutProofScope): boolean {
+  if (!isAccountId(proof.payout) || !isPublicKey(proof.public_key)) return false;
+  const sig = signatureHex(proof.signature);
+  if (!sig) return false;
+  return verifyDigest(proof.public_key, nep413Digest(payoutProofRequest(merchantId, proof.payout, proof.timestamp, scope)), sig);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Payment rules shared by every component
 
-export const PAYMENT_STATUSES = [
-  "open",
-  "processing",
-  "partially_paid",
-  "paid",
-  "overpaid",
-  "underpaid",
-  "expired",
-  "canceled",
-] as const;
+export const PAYMENT_STATUSES = ["open", "processing", "partially_paid", "paid", "overpaid", "underpaid", "expired", "canceled"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
-/** Terminal states. `expired` and `canceled` still take late deposits, which move them to paid, overpaid or underpaid. */
+/** Terminal states. `expired` and `canceled` still take a late wallet payment the hub recorded, which moves them on. */
 export const TERMINAL_PAYMENT_STATUSES: readonly PaymentStatus[] = ["paid", "overpaid", "underpaid", "expired", "canceled"];
 
 export function isTerminalPaymentStatus(status: PaymentStatus): boolean {
   return TERMINAL_PAYMENT_STATUSES.includes(status);
 }
 
-/** `hsp` is HashKey's HSP Agentic Payment into the payment's forwarder (section 17); off until a business enables it. */
-export const PAYMENT_METHODS = ["wallet", "deposit", "x402", "voucher", "hsp"] as const;
+/**
+ * How a payment can be paid. `wallet`: a person's NEAR wallet sends `ft_transfer_call` to the hub with node-signed terms.
+ * `voucher`: an agent pays from its Budget over x402. Add-on rails (any-chain checkout) are registered by the add-ons
+ * layer and are not part of this list.
+ */
+export const PAYMENT_METHODS = ["wallet", "voucher"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 export const DEFAULT_CHECKOUT_TTL_SECONDS = 1800;
@@ -169,262 +265,54 @@ export function linkUrl(checkoutBaseUrl: string, slug: string): string {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Nonce and salt derivation (GATEWAY.md sections 2.1 and 3)
+// Checkout and refunds on NEAR
 
-function tagged(tag: string, chainId: number, paymentId: string): Hex {
-  // Solidity: keccak256(abi.encode(tag, uint256(chainId), paymentId)), tag and id as dynamic strings.
-  return keccak256(
-    encodeAbiParameters([{ type: "string" }, { type: "uint256" }, { type: "string" }], [tag, BigInt(chainId), paymentId]),
-  );
-}
+/** CheckoutTerms in JSON: amounts and times as decimal strings. */
+export type CheckoutTermsJson = { payment_id: Id32; merchant: AccountId; amount: string; expiry_ms: string };
 
-/** `PaymentTerms.paymentRef` for a payment: binds a router authorization to one payment on one chain. */
-export function paymentRef(chainId: number, paymentId: string): Hex {
-  return tagged("payminto.payment.v1", chainId, paymentId);
-}
+export const checkoutTermsToJson = (t: CheckoutTerms): CheckoutTermsJson => ({ payment_id: t.paymentId, merchant: t.merchant, amount: t.amount.toString(), expiry_ms: t.expiryMs.toString() });
 
-/** `PaymentTerms.paymentRef` for a gasless refund the payout wallet signs. */
-export function refundRef(chainId: number, refundId: string): Hex {
-  return tagged("payminto.refund.v1", chainId, refundId);
-}
+export const checkoutTermsFromJson = (j: CheckoutTermsJson): CheckoutTerms => ({ paymentId: j.payment_id, merchant: j.merchant, amount: BigInt(j.amount), expiryMs: BigInt(j.expiry_ms) });
 
 /**
- * The EIP-3009 nonce of a checkout `wallet` TransferWithAuthorization: deterministic per payment and per amount
- * already paid, keccak256(abi.encode("payminto.wallet.v1", paymentRef, paid)), so each payable state of a payment has
- * exactly one wallet authorization.
+ * What a hosted checkout hands the payer's wallet for the `wallet` method: terms the node signed with its checkout key,
+ * and the ready `ft_transfer_call` to the hub (`checkoutPayTx`). The hub verifies the signature, the amount and the
+ * expiry, refuses a repeated payment id, and credits the merchant; it returns the tokens for anything else.
  */
-export function walletPaymentNonce(paymentRefHex: Hex, paid: bigint): Hex {
-  return keccak256(encodeAbiParameters([{ type: "string" }, { type: "bytes32" }, { type: "uint256" }], ["payminto.wallet.v1", paymentRefHex, paid]));
-}
-
-/** The per-payment CREATE2 salt passed to DepositFactory. */
-export function depositSalt(chainId: number, paymentId: string): Hex {
-  return tagged("payminto.deposit.v1", chainId, paymentId);
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Deposit forwarders (GATEWAY.md section 14.2)
-
-/** DepositForwarder.Terms: what a deposit address is bound to. `fee` (base units of `token`) is at most `amountDue`. */
-export type DepositTerms = {
-  token: Address;
-  payout: Address;
-  /** Zero address allowed only when `fee` is 0. */
-  feeRecipient: Address;
-  fee: bigint;
-  amountDue: bigint;
+export type CheckoutWallet = {
+  terms: CheckoutTermsJson;
+  /** The node's ed25519 signature of `checkoutDigest(hub, network, terms)`. */
+  signature: Sig64;
+  /** The key the hub checks it against (`set_checkout_key`). */
+  checkout_key: PublicKey;
+  /** Send this from the payer's wallet. */
+  transaction: WalletTx;
 };
 
-const depositTermsParams = [
-  { type: "address" },
-  { type: "address" },
-  { type: "address" },
-  { type: "uint256" },
-  { type: "uint256" },
-] as const;
-
-/** Throws exactly where DepositFactory.addressOf reverts, so no address is handed out for terms that cannot flush. */
-export function assertDepositTerms(t: DepositTerms): void {
-  if (BigInt(t.payout) === 0n) throw new Error("deposit terms: payout is the zero address");
-  if (t.amountDue <= 0n) throw new Error("deposit terms: amountDue must be positive");
-  if (t.fee < 0n || t.fee > t.amountDue) throw new Error("deposit terms: fee must be between 0 and amountDue");
-  if (t.fee !== 0n && BigInt(t.feeRecipient) === 0n) throw new Error("deposit terms: a non-zero fee needs a feeRecipient");
-}
-
-/** abi.encode(terms): the clone's immutable args. */
-export function encodeDepositTerms(t: DepositTerms): Hex {
-  return encodeAbiParameters(depositTermsParams, [t.token, t.payout, t.feeRecipient, t.fee, t.amountDue]);
-}
-
-/** DepositForwarder.Terms as viem contract args. */
-export function depositTermsArg(t: DepositTerms) {
-  return { token: t.token, payout: t.payout, feeRecipient: t.feeRecipient, fee: t.fee, amountDue: t.amountDue };
-}
-
-/** EIP-1167 clone with immutable args, as OpenZeppelin Clones.cloneDeterministicWithImmutableArgs deploys it. */
-function cloneCreationCode(implementation: Address, args: Hex): Hex {
-  const impl = getAddress(implementation).slice(2).toLowerCase();
-  const runtimeLength = ((args.length - 2) / 2 + 0x2d).toString(16).padStart(4, "0");
-  return `0x61${runtimeLength}3d81600a3d39f3363d3d373d3d3d363d73${impl}5af43d82803e903d91602b57fd5bf3${args.slice(2)}`;
-}
-
-/** Off-chain DepositFactory.addressOf(terms, salt): needs no RPC once the implementation address is known. */
-export function predictForwarder(factory: Address, implementation: Address, terms: DepositTerms, salt: Hex): Address {
-  assertDepositTerms(terms);
-  return getContractAddress({
-    opcode: "CREATE2",
-    from: factory,
-    salt,
-    bytecode: cloneCreationCode(implementation, encodeDepositTerms(terms)),
-  });
-}
-
-/** Reads DepositFactory.implementation(), for callers without depositForwarderImplementation from deployments. */
-export async function readForwarderImplementation(client: Pick<PublicClient, "readContract">, factory: Address): Promise<Address> {
-  return client.readContract({ address: factory, abi: depositFactoryAbi, functionName: "implementation" });
-}
-
-/** Calldata for DepositFactory.flush(terms, salt, token). Permissionless; deploys the forwarder when needed. */
-export function depositFlushData(terms: DepositTerms, salt: Hex, token: Address = terms.token): Hex {
-  return encodeFunctionData({ abi: depositFactoryAbi, functionName: "flush", args: [depositTermsArg(terms), salt, token] });
-}
-
-/**
- * Cumulative fee owed once `paid` has arrived toward a payment: min(fee, floor(paid * fee / amountDue)). This is the
- * forwarder's on-chain rule; a router payment toward a partly paid payment should carry
- * proRataFee(paid + value) - proRataFee(paid) so every rail splits the same way.
- */
-export function proRataFee(p: { fee: bigint; amountDue: bigint; paid: bigint }): bigint {
-  if (p.amountDue <= 0n) throw new Error("amountDue must be positive");
-  if (p.paid <= 0n) return 0n;
-  const share = (p.paid * p.fee) / p.amountDue;
-  return share < p.fee ? share : p.fee;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// EIP-3009 (Circle FiatToken v2)
-
-/** The token's own EIP-712 domain, e.g. `{name: "Bridged USDC", version: "2"}` for USDC.e (see chains.ts). */
-export type TokenDomain = { name: string; version: string; chainId: number; verifyingContract: Address };
-
-const authorizationFields = [
-  { name: "from", type: "address" },
-  { name: "to", type: "address" },
-  { name: "value", type: "uint256" },
-  { name: "validAfter", type: "uint256" },
-  { name: "validBefore", type: "uint256" },
-  { name: "nonce", type: "bytes32" },
-] as const;
-
-export const transferWithAuthorizationTypes = { TransferWithAuthorization: authorizationFields } as const;
-export const receiveWithAuthorizationTypes = { ReceiveWithAuthorization: authorizationFields } as const;
-
-/** The six signed fields of an EIP-3009 transfer or receive authorization. */
-export type TransferAuthorization = {
-  from: Address;
-  to: Address;
-  value: bigint;
-  validAfter: bigint;
-  validBefore: bigint;
-  nonce: Hex;
-};
-export type ReceiveAuthorization = TransferAuthorization;
-
-/** JSON-safe authorization: uint256 fields as decimal strings. */
-export type TransferAuthorizationJson = {
-  from: Address;
-  to: Address;
-  value: string;
-  validAfter: string;
-  validBefore: string;
-  nonce: Hex;
-};
-export type ReceiveAuthorizationJson = TransferAuthorizationJson;
-
-export function transferAuthorizationTypedData(domain: TokenDomain, message: TransferAuthorization) {
-  return { domain, types: transferWithAuthorizationTypes, primaryType: "TransferWithAuthorization" as const, message };
-}
-
-export function receiveAuthorizationTypedData(domain: TokenDomain, message: ReceiveAuthorization) {
-  return { domain, types: receiveWithAuthorizationTypes, primaryType: "ReceiveWithAuthorization" as const, message };
-}
-
-export function transferAuthorizationToJson(m: TransferAuthorization): TransferAuthorizationJson {
-  return { ...m, value: m.value.toString(), validAfter: m.validAfter.toString(), validBefore: m.validBefore.toString() };
-}
-
-export function transferAuthorizationFromJson(j: TransferAuthorizationJson): TransferAuthorization {
-  return { ...j, value: BigInt(j.value), validAfter: BigInt(j.validAfter), validBefore: BigInt(j.validBefore) };
-}
-
-/** Recovers the EOA that signed a TransferWithAuthorization. Throws on a malformed signature. */
-export async function recoverTransferAuthorizer(domain: TokenDomain, message: TransferAuthorization, signature: Hex): Promise<Address> {
-  return recoverTypedDataAddress({ ...transferAuthorizationTypedData(domain, message), signature });
-}
-
-/** Recovers the EOA that signed a ReceiveWithAuthorization. Throws on a malformed signature. */
-export async function recoverReceiveAuthorizer(domain: TokenDomain, message: ReceiveAuthorization, signature: Hex): Promise<Address> {
-  return recoverTypedDataAddress({ ...receiveAuthorizationTypedData(domain, message), signature });
-}
-
-async function signedBy(recover: () => Promise<Address>, from: Address): Promise<boolean> {
-  try {
-    return isAddressEqual(await recover(), from);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * EOA checks that `message.from` signed. FiatToken v2.2 also accepts ERC-1271 wallets on chain; the node's simulation
- * before relaying covers those.
- */
-export async function isTransferAuthorizationSignedBy(domain: TokenDomain, message: TransferAuthorization, signature: Hex): Promise<boolean> {
-  return signedBy(() => recoverTransferAuthorizer(domain, message, signature), message.from);
-}
-
-export async function isReceiveAuthorizationSignedBy(domain: TokenDomain, message: ReceiveAuthorization, signature: Hex): Promise<boolean> {
-  return signedBy(() => recoverReceiveAuthorizer(domain, message, signature), message.from);
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// PaymentRouter (GATEWAY.md section 14.2)
-
-/** PaymentRouter.PaymentTerms. `fee` goes to `feeRecipient` (zero address allowed only when fee is 0). */
-export type PaymentTerms = { paymentRef: Hex; payout: Address; feeRecipient: Address; fee: bigint };
-export type PaymentTermsJson = Omit<PaymentTerms, "fee"> & { fee: string };
-
-export function paymentTermsToJson(t: PaymentTerms): PaymentTermsJson {
-  return { ...t, fee: t.fee.toString() };
-}
-
-export function paymentTermsFromJson(j: PaymentTermsJson): PaymentTerms {
-  return { ...j, fee: BigInt(j.fee) };
-}
-
-/** The EIP-3009 nonce for router terms: keccak256(abi.encode(terms)), PaymentRouter.termsNonce. */
-export function paymentTermsNonce(t: PaymentTerms): Hex {
-  return keccak256(
-    encodeAbiParameters(
-      [{ type: "bytes32" }, { type: "address" }, { type: "address" }, { type: "uint256" }],
-      [t.paymentRef, t.payout, t.feeRecipient, t.fee],
-    ),
-  );
-}
-
-/**
- * The ReceiveWithAuthorization a payer signs to pay through the router: to the router, nonce bound to the terms,
- * valid from 0 until `validBefore` (the payment expiry, unix seconds).
- */
-export function routerAuthorization(p: {
-  router: Address;
-  terms: PaymentTerms;
-  from: Address;
-  value: bigint;
-  validBefore: bigint | number;
-}): ReceiveAuthorization {
-  if (p.terms.fee > p.value) throw new Error("router terms: fee exceeds value");
+/** NEP-141 `ft_transfer` of `amount` to `to`, sent by the merchant's payout account to refund a payment. 1 yoctoNEAR attached. */
+export function refundTransferTx(token: AccountId, to: AccountId, amount: bigint, refundId: string): WalletTx {
   return {
-    from: p.from,
-    to: p.router,
-    value: p.value,
-    validAfter: 0n,
-    validBefore: BigInt(p.validBefore),
-    nonce: paymentTermsNonce(p.terms),
+    receiverId: token,
+    actions: [
+      {
+        type: "FunctionCall",
+        params: { methodName: "ft_transfer", args: { receiver_id: to, amount: amount.toString(), memo: `payminto refund ${refundId}` }, gas: (30n * 1_000_000_000_000n).toString(), deposit: "1" },
+      },
+    ],
   };
 }
 
-/** Calldata for PaymentRouter.payWithAuthorization (packed-signature overload, which also takes ERC-1271 signatures). */
-export function payWithAuthorizationData(token: Address, terms: PaymentTerms, message: ReceiveAuthorization, signature: Hex): Hex {
-  return encodeFunctionData({
-    abi: paymentRouterAbi,
-    functionName: "payWithAuthorization",
-    args: [token, terms, message.from, message.value, message.validAfter, message.validBefore, signature],
-  });
-}
+/**
+ * @deprecated EVM-era refund authorization shapes. The node no longer produces or accepts them (a refund is the
+ * merchant's own `ft_transfer`, see `refundTransferTx`); they remain only so packages/sdk compiles until the clients
+ * stream moves its gateway client to NEAR. Remove both with that change.
+ */
+export type PaymentTermsJson = { paymentRef: string; payout: string; feeRecipient: string; fee: string };
+/** @deprecated See PaymentTermsJson. */
+export type TransferAuthorizationJson = { from: string; to: string; value: string; validAfter: string; validBefore: string; nonce: string };
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Webhook signatures (GATEWAY.md section 7)
+// Webhook signatures
 
 export const WEBHOOK_SIGNATURE_HEADER = "Payminto-Signature";
 export const WEBHOOK_EVENT_ID_HEADER = "Payminto-Event-Id";
@@ -433,21 +321,14 @@ export const WEBHOOK_TOLERANCE_SECONDS = 300;
 /** Delay before each attempt, in seconds: immediately, then 1 m, 5 m, 30 m, 2 h, 6 h, 24 h. */
 export const WEBHOOK_RETRY_SCHEDULE_SECONDS = [0, 60, 300, 1800, 7200, 21_600, 86_400] as const;
 
-const utf8 = new TextEncoder();
-
 async function hmacSha256Hex(secret: string, t: number, body: string | Uint8Array): Promise<string> {
-  const key = await globalThis.crypto.subtle.importKey("raw", utf8.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ]);
+  const key = await globalThis.crypto.subtle.importKey("raw", utf8.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const prefix = utf8.encode(`${t}.`);
   const raw = typeof body === "string" ? utf8.encode(body) : body;
   const payload = new Uint8Array(prefix.length + raw.length);
   payload.set(prefix, 0);
   payload.set(raw, prefix.length);
-  const mac = new Uint8Array(await globalThis.crypto.subtle.sign("HMAC", key, payload));
-  let hex = "";
-  for (const b of mac) hex += b.toString(16).padStart(2, "0");
-  return hex;
+  return toHex(new Uint8Array(await globalThis.crypto.subtle.sign("HMAC", key, payload)));
 }
 
 /** Constant-time for equal lengths; a length mismatch reveals nothing secret (every v1 is 64 hex characters). */
@@ -468,16 +349,10 @@ export async function signWebhook(secret: string, body: string | Uint8Array, t: 
 }
 
 /**
- * True when the header carries a v1 signature of `rawBody` under `secret` and its timestamp is within
- * `toleranceSec` (default 300) of `now` (unix seconds, default the current time) in either direction.
- * Verify the raw request bytes, never a re-serialized JSON object.
+ * True when the header carries a v1 signature of `rawBody` under `secret` and its timestamp is within `toleranceSec`
+ * (default 300) of `now` (unix seconds, default the current time). Verify the raw request bytes, never re-serialized JSON.
  */
-export async function verifyWebhook(
-  rawBody: string | Uint8Array,
-  header: string | null | undefined,
-  secret: string,
-  opts: { toleranceSec?: number; now?: number } = {},
-): Promise<boolean> {
+export async function verifyWebhook(rawBody: string | Uint8Array, header: string | null | undefined, secret: string, opts: { toleranceSec?: number; now?: number } = {}): Promise<boolean> {
   if (!header) return false;
   let t: number | null = null;
   const signatures: string[] = [];
@@ -501,23 +376,23 @@ export async function verifyWebhook(
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Order commitment (GATEWAY.md section 13.2)
+// Order commitment
 
 export type LineItem = { name: string; quantity: number; unit_amount: string };
 
 /**
  * What a payment commits to, and exactly what `GET /v1/checkout/{id}/order` returns. `amount` is the merchant price.
- * Metadata is merchant-private, so the order carries only its hash (`metadataHash`), never the metadata itself.
+ * Metadata is merchant-private, so the order carries only its hash (`metadata_hash`), never the metadata itself.
  */
 export type OrderCommitment = {
   payment_id: string;
   amount: string;
-  token: Address;
-  payout: Address;
+  token: AccountId;
+  payout: AccountId;
   reference: string | null;
   description: string | null;
   line_items: LineItem[];
-  metadata_hash: Hex;
+  metadata_hash: Id32;
 };
 
 function canonicalize(v: unknown): unknown {
@@ -535,20 +410,23 @@ export function canonicalJson(v: unknown): string {
   return JSON.stringify(canonicalize(v));
 }
 
-/** keccak256 of the canonical JSON of the metadata, or the zero hash when there is none (absent or no keys). */
-export function metadataHash(metadata: Record<string, string> | null | undefined): Hex {
-  if (!metadata || Object.keys(metadata).length === 0) return zeroHash;
-  return keccak256(toBytes(canonicalJson(metadata)));
+/** The 32 zero bytes, as the metadata hash of a payment without metadata. */
+export const ZERO_ID32: Id32 = "00".repeat(32);
+
+/** sha256 of the canonical JSON of the metadata, or ZERO_ID32 when there is none (absent or no keys). */
+export function metadataHash(metadata: Record<string, string> | null | undefined): Id32 {
+  if (!metadata || Object.keys(metadata).length === 0) return ZERO_ID32;
+  return sha256Text(canonicalJson(metadata));
 }
 
-/** The order as committed: addresses checksummed so every party serializes the same bytes. */
+/** The order as committed: canonical JSON, so every party serializes the same bytes. NEAR account ids are already canonical. */
 export function canonicalOrder(o: OrderCommitment): string {
-  return canonicalJson({ ...o, token: getAddress(o.token), payout: getAddress(o.payout) });
+  return canonicalJson(o);
 }
 
-/** `order_hash = keccak256(canonical JSON)` of the order a payment commits to. */
-export function orderHash(o: OrderCommitment): Hex {
-  return keccak256(toBytes(canonicalOrder(o)));
+/** `order_hash = sha256(canonical JSON)` of the order a payment commits to. */
+export function orderHash(o: OrderCommitment): Id32 {
+  return sha256Text(canonicalOrder(o));
 }
 
 /** Sum of quantity x unit_amount, in base units. */
@@ -557,7 +435,7 @@ export function lineItemsTotal(items: readonly LineItem[]): bigint {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Fees (GATEWAY.md section 14.1)
+// Fees
 
 /** Fee breakdown of a payment. Strings (base units) in JSON; computeFees returns bigints. */
 export type FeeBreakdown<T = string> = {
@@ -590,11 +468,9 @@ function bps(v: number, max: number, label: string): bigint {
 }
 
 /**
- * The fee math of section 14.1, integers only:
- * platform_fee = clamp(fixed + floor(amount * bps / 10000), min_fee, max_fee);
- * method_fee = fee_fixed + floor(amount * fee_bps / 10000), added to amount_due as the surcharge when the customer
- * bears it. When fees would exceed amount_due, method_fee is kept (it is what the surcharge line shows) and
- * platform_fee is cut, so fee_total == amount_due at most. `method: null` means no method fee.
+ * The fee math, integers only: platform_fee = clamp(fixed + floor(amount * bps / 10000), min_fee, max_fee);
+ * method_fee = fee_fixed + floor(amount * fee_bps / 10000), added to amount_due as the surcharge when the customer bears
+ * it. When fees would exceed amount_due, method_fee is kept and platform_fee is cut, so fee_total <= amount_due.
  */
 export function computeFees(p: {
   amount: Units;
@@ -619,15 +495,7 @@ export function computeFees(p: {
   if (methodFee > amountDue) methodFee = amountDue;
   if (platform > amountDue - methodFee) platform = amountDue - methodFee;
   const feeTotal = platform + methodFee;
-  return {
-    amount,
-    surcharge,
-    amount_due: amountDue,
-    platform_fee: platform,
-    method_fee: methodFee,
-    fee_total: feeTotal,
-    net_amount: amountDue - feeTotal,
-  };
+  return { amount, surcharge, amount_due: amountDue, platform_fee: platform, method_fee: methodFee, fee_total: feeTotal, net_amount: amountDue - feeTotal };
 }
 
 export function feeBreakdownToJson(f: FeeBreakdown<bigint>): FeeBreakdown {
@@ -643,18 +511,8 @@ export function feeBreakdownToJson(f: FeeBreakdown<bigint>): FeeBreakdown {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// EIP-681
-
-/** `ethereum:<token>@<chainId>/transfer?address=<to>&uint256=<amount>` for wallets that scan a QR code. */
-export function erc20TransferUri(p: { token: Address; chainId: number; to: Address; amount: bigint | string }): string {
-  const amount = BigInt(p.amount);
-  if (amount < 0n) throw new Error("amount must be non-negative");
-  return `ethereum:${getAddress(p.token)}@${p.chainId}/transfer?address=${getAddress(p.to)}&uint256=${amount}`;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Public JSON types (GATEWAY.md section 8). Amounts are decimal strings of token base units; `*_at` fields are
-// ISO 8601 strings like the rest of the node; `created` on webhook events is unix seconds.
+// Public JSON types. Amounts are decimal strings of token base units; `*_at` fields are ISO 8601 strings; `created` on
+// webhook events is unix seconds. Accounts are NEAR account ids.
 
 export type RefundStatus = "pending" | "succeeded" | "failed" | "canceled";
 export type PaymentRefundStatus = "none" | "partial" | "full";
@@ -670,11 +528,14 @@ export const PAYMENT_EVENT_TYPES = [
   "payment.canceled",
 ] as const;
 export const REFUND_EVENT_TYPES = ["refund.succeeded", "refund.failed"] as const;
+/** Decision 8: one event per refusal of an agent payment. */
+export const REFUSAL_EVENT_TYPES = ["budget.refused"] as const;
 /** Events an endpoint can subscribe to. `ping` is only sent by the test route. */
-export const WEBHOOK_EVENT_TYPES = [...PAYMENT_EVENT_TYPES, ...REFUND_EVENT_TYPES] as const;
+export const WEBHOOK_EVENT_TYPES = [...PAYMENT_EVENT_TYPES, ...REFUND_EVENT_TYPES, ...REFUSAL_EVENT_TYPES] as const;
 
 export type PaymentEventType = (typeof PAYMENT_EVENT_TYPES)[number];
 export type RefundEventType = (typeof REFUND_EVENT_TYPES)[number];
+export type RefusalEventType = (typeof REFUSAL_EVENT_TYPES)[number];
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
 
 export type Payment = FeeBreakdown & {
@@ -686,23 +547,28 @@ export type Payment = FeeBreakdown & {
   amount_paid: string;
   amount_refunded: string;
   refund_status: PaymentRefundStatus;
-  chain_id: number;
-  token: Address;
-  /** The payment's DepositForwarder address (deterministic; may have no code yet). */
-  deposit_address: Address;
+  network: Network;
+  /** The settlement token contract. */
+  token: AccountId;
+  /** The hub that records the wallet payment. */
+  hub: AccountId;
+  /** The on-chain payment id the checkout terms carry; the hub records the wallet payment under it. */
+  checkout_id: Id32;
   description: string | null;
   reference: string | null;
   customer_email: string | null;
   customer_name: string | null;
   metadata: Record<string, string>;
-  /** Items the order is made of (may be empty); their total equals amount_due. */
+  /** Items the order is made of (may be empty); their total equals amount. */
   line_items: LineItem[];
-  /** keccak256 of the canonical order JSON (section 13.2). */
-  order_hash: Hex;
+  /** sha256 of the canonical order JSON. */
+  order_hash: Id32;
   link_id: string | null;
-  /** Payer of the first credit, once there is one. */
-  payer: Address | null;
-  /** The method the fees were quoted for: set at creation for API and x402 payments, at checkout for people. */
+  /** The account that paid the first credit: the wallet that sent it, or the Budget owner of a voucher payment. */
+  payer: AccountId | null;
+  /** The account fixed at creation that receives this payment. */
+  payout: AccountId;
+  /** The method the fees were quoted for: set at creation for API and agent payments, at checkout for people. */
   method: PaymentMethod | null;
   /** True when a credit arrived after the payment expired or was canceled. */
   late: boolean;
@@ -714,23 +580,23 @@ export type Payment = FeeBreakdown & {
   canceled_at: string | null;
   created_at: string;
   updated_at: string;
-  /** HSP order and status (section 17); null when the payment never had an HSP order. */
-  hsp: PaymentHsp | null;
 };
 
-/** One on-chain transfer (or accepted voucher) toward a payment. Unique by (tx_hash, log_index). */
+/** Money toward a payment: a wallet payment the hub recorded, or an accepted voucher. */
 export type Credit = {
   payment_id: string;
   method: PaymentMethod;
-  payer: Address | null;
+  payer: AccountId | null;
   amount: string;
-  /** Null for a voucher until its clearing batch settles. */
-  tx_hash: Hex | null;
-  log_index: number | null;
-  block_number: number | null;
-  /** Clearing batch for a voucher credit. */
-  batch_id: Hex | null;
-  /** Confirmed means at or below the node's finality tag. Pending credits do not count toward amount_paid. */
+  /** Wallet: the transaction the payer's wallet reported (display only; the hub record is the evidence). Voucher: the settling batch's transaction. */
+  tx_hash: string | null;
+  /** Clearing batch of a voucher credit. */
+  batch_id: Id32 | null;
+  /** The accepted clearing call of a voucher credit. */
+  call_id: Id32 | null;
+  /** Hub block time of a wallet payment, Unix milliseconds as a decimal string. */
+  recorded_at_ms: string | null;
+  /** Wallet credits are confirmed once the hub records them at final finality; voucher credits once their batch settles. */
   status: "pending" | "confirmed";
   late: boolean;
   created_at: string;
@@ -752,7 +618,7 @@ export type PaymentLink = {
   collect_name: boolean;
   success_url: string | null;
   active: boolean;
-  /** Shown in the service directory (section 13.4). */
+  /** Shown in the service directory. */
   listed: boolean;
   max_payments: number | null;
   payments_count: number;
@@ -761,17 +627,52 @@ export type PaymentLink = {
   updated_at: string;
 };
 
+/**
+ * The `budget.refused` webhook object (decision 8): every refusal of an agent payment, with the rule that fired, the
+ * attempted amount, what is left of the Budget and the machine-readable retry hint. Platform alert endpoints receive
+ * every refusal; a business endpoint receives refusals of payments to that business.
+ */
+export type BudgetRefusal = {
+  /** The denial id, `dny_...`. */
+  id: string;
+  object: "refusal";
+  rule: string;
+  message: string;
+  budget_id: string;
+  /** The Budget owner's account, or null when the Budget is unknown to the node. */
+  owner: string | null;
+  /** The agent public key, or null when the Budget is unknown. */
+  agent: string | null;
+  payee: string;
+  provider_id: string;
+  attempted_amount: string;
+  remaining_budget: string | null;
+  retry: RetryHint;
+  request_hash: string;
+  cumulative: string;
+  created_at: string;
+};
+
+/**
+ * A refund the merchant sends from its own payout account (non-custodial): the node prepares `transfer`, the merchant's
+ * wallet sends it, and the node checks the transaction on chain before marking the refund succeeded.
+ */
 export type Refund = {
   id: string;
   livemode: boolean;
   payment_id: string;
   amount: string;
   reason: string | null;
-  to: Address;
+  to: AccountId;
   status: RefundStatus;
-  /** How the payout wallet executed it, once submitted. */
-  method: "authorization" | "transfer" | null;
-  tx_hash: Hex | null;
+  /** `transfer` once the merchant submitted its refund transaction. */
+  method: "transfer" | null;
+  tx_hash: string | null;
+  /**
+   * How the node checked the transaction: `transfer_checked` (sender, token, recipient and amount read from the
+   * transaction) or `finality_only` (the node had no transaction reader, so only success at final finality was checked).
+   */
+  verification: "transfer_checked" | "finality_only" | null;
   failure_reason: string | null;
   created_at: string;
   updated_at: string;
@@ -803,6 +704,7 @@ type EventEnvelope<T extends string, O> = {
 export type WebhookEvent =
   | EventEnvelope<PaymentEventType, Payment>
   | EventEnvelope<RefundEventType, Refund>
+  | EventEnvelope<RefusalEventType, BudgetRefusal>
   | EventEnvelope<"ping", Omit<WebhookEndpoint, "secret">>;
 
 /** One delivery attempt of one event to one endpoint. */
@@ -845,8 +747,8 @@ export type MerchantStatus = "active" | "suspended";
 /** The node's single platform row. */
 export type Platform = {
   name: string;
-  /** Platform treasury (env PLATFORM_FEE_ADDRESS); required once any fee is non-zero. */
-  fee_recipient: Address | null;
+  /** Platform treasury (env PLATFORM_FEE_ACCOUNT); required once any fee is non-zero. */
+  fee_recipient: AccountId | null;
   default_fee_plan_id: string;
 };
 
@@ -880,7 +782,8 @@ export type Merchant = {
   name: string;
   slug: string;
   status: MerchantStatus;
-  payout: Address;
+  /** The NEAR account checkout payments credit, or null for a business that has not proven one yet. */
+  payout: AccountId | null;
   support_email: string | null;
   brand_color: string | null;
   logo_url: string | null;
@@ -891,36 +794,12 @@ export type Merchant = {
 
 /** `GET /v1/merchant`: the merchant plus read-only node facts. */
 export type MerchantProfile = Merchant & {
-  chain_id: number;
-  token: Address;
-  deposit_factory: Address;
-  payment_router: Address;
+  network: Network;
+  hub: AccountId;
+  token: AccountId;
+  /** The key the hub checks checkout terms against. */
+  checkout_key: PublicKey;
   checkout_base_url: string;
-};
-
-/**
- * EIP-3009 ReceiveWithAuthorization a checkout asks the wallet to sign, to the PaymentRouter with the nonce bound to
- * `terms`; `from` is filled in once the payer's wallet connects. The node relays it with the same `terms`.
- */
-export type CheckoutAuthorizationTemplate = {
-  domain: TokenDomain;
-  types: typeof receiveWithAuthorizationTypes;
-  primaryType: "ReceiveWithAuthorization";
-  message: Omit<ReceiveAuthorizationJson, "from">;
-  router: Address;
-  terms: PaymentTermsJson;
-};
-
-/**
- * EIP-3009 TransferWithAuthorization a checkout asks the wallet to sign (GATEWAY.md section 3): to the payment's
- * fee-splitting forwarder (whose address commits to payout, fee recipient, fee and amount due), for the remaining
- * amount, valid until the payment expires, with `walletPaymentNonce`. `from` is filled in once the wallet connects.
- */
-export type CheckoutTransferTemplate = {
-  domain: TokenDomain;
-  types: typeof transferWithAuthorizationTypes;
-  primaryType: "TransferWithAuthorization";
-  message: Omit<TransferAuthorizationJson, "from">;
 };
 
 /** Public payment view for the hosted checkout. Never carries metadata, customer email or name. */
@@ -941,86 +820,27 @@ export type CheckoutView = {
   amount_paid: string;
   /** max(amount_due - amount_paid, 0). */
   amount_remaining: string;
-  chain_id: number;
-  token: { address: Address; symbol: string; decimals: number };
-  deposit_address: Address;
-  /** EIP-681 URI for the remaining amount to deposit_address. */
-  deposit_uri: string;
-  /** The method the amounts are quoted for; null until a person picks one. Re-quote with /quote?method=. */
+  network: Network;
+  hub: AccountId;
+  token: { address: AccountId; symbol: string; decimals: number };
+  /** The method the amounts are quoted for; null until a person picks one. */
   method: PaymentMethod | null;
   /** Methods a person can use on this page right now. */
   methods: PaymentMethod[];
   /** Null once the payment is terminal or expired, or when `wallet` is not offered. */
-  authorization: CheckoutTransferTemplate | null;
+  wallet: CheckoutWallet | null;
   success_url: string | null;
-  /** Latest confirmed credit transaction, for the success screen. */
-  tx_hash: Hex | null;
-  /** keccak256 of the canonical order JSON (section 13.2). */
-  order_hash: Hex;
+  /** Latest transaction behind a confirmed credit, for the success screen (the payer's report for a wallet payment). */
+  tx_hash: string | null;
+  /** sha256 of the canonical order JSON. */
+  order_hash: Id32;
   expires_at: string;
   created_at: string;
-  /** HSP availability and status (section 17); null when this node has no HSP. */
-  hsp: CheckoutHsp | null;
 };
 
-/** Builds the sign-ready typed data from a checkout template (either kind) and the connected payer. */
-export function checkoutTypedData(template: CheckoutTransferTemplate, from: Address): ReturnType<typeof transferAuthorizationTypedData>;
-export function checkoutTypedData(template: CheckoutAuthorizationTemplate, from: Address): ReturnType<typeof receiveAuthorizationTypedData>;
-export function checkoutTypedData(template: CheckoutTransferTemplate | CheckoutAuthorizationTemplate, from: Address) {
-  const message = transferAuthorizationFromJson({ ...template.message, from });
-  return template.primaryType === "TransferWithAuthorization"
-    ? transferAuthorizationTypedData(template.domain, message)
-    : receiveAuthorizationTypedData(template.domain, message);
-}
-
-/** The TransferWithAuthorization template a node puts in CheckoutView.authorization for the `wallet` method. */
-export function checkoutTransferTemplate(p: {
-  domain: TokenDomain;
-  /** The payment's current deposit forwarder. */
-  forwarder: Address;
-  /** paymentRef of the payment. */
-  paymentRef: Hex;
-  /** Confirmed amount already paid (base units); part of the nonce. */
-  paid: bigint;
-  /** The remaining amount. */
-  value: bigint;
-  /** Payment expiry, unix seconds. */
-  expiresAt: bigint | number;
-}): CheckoutTransferTemplate {
-  const { from: _from, ...message } = transferAuthorizationToJson(walletTransferAuthorization({ ...p, from: "0x0000000000000000000000000000000000000000" }));
-  return { domain: p.domain, types: transferWithAuthorizationTypes, primaryType: "TransferWithAuthorization", message };
-}
-
-/** The full TransferWithAuthorization behind checkoutTransferTemplate, for a known payer (what the node relays). */
-export function walletTransferAuthorization(p: { forwarder: Address; paymentRef: Hex; paid: bigint; value: bigint; expiresAt: bigint | number; from: Address }): TransferAuthorization {
-  return { from: p.from, to: getAddress(p.forwarder), value: p.value, validAfter: 0n, validBefore: BigInt(p.expiresAt), nonce: walletPaymentNonce(p.paymentRef, p.paid) };
-}
-
-/** The template a node puts in CheckoutView.authorization for `value` (the remaining amount) under `terms`. */
-export function checkoutAuthorizationTemplate(p: {
-  domain: TokenDomain;
-  router: Address;
-  terms: PaymentTerms;
-  value: bigint;
-  /** Payment expiry, unix seconds. */
-  expiresAt: bigint | number;
-}): CheckoutAuthorizationTemplate {
-  const { from: _from, ...message } = transferAuthorizationToJson(
-    routerAuthorization({ router: p.router, terms: p.terms, from: "0x0000000000000000000000000000000000000000", value: p.value, validBefore: p.expiresAt }),
-  );
-  return {
-    domain: p.domain,
-    types: receiveWithAuthorizationTypes,
-    primaryType: "ReceiveWithAuthorization",
-    message,
-    router: p.router,
-    terms: paymentTermsToJson(p.terms),
-  };
-}
-
 // ---------------------------------------------------------------------------------------------------------------------
-// Reconciliation report (docs/GATEWAY.md section 16): `GET /v1/reports/reconciliation`.
-// Amounts are decimal token units with the token's decimals ("12.500000"); `base_units` repeats them in base units.
+// Reconciliation report: `GET /v1/reports/reconciliation`. Amounts are decimal token units with the token's decimals
+// ("12.500000"); `base_units` repeats them in base units.
 
 export const REPORT_AMOUNT_FIELDS = [
   "amount",
@@ -1059,8 +879,6 @@ export const REPORT_CSV_COLUMNS = [
   "batch_ids",
   "receipt_proof_urls",
   "proof_url",
-  "hsp_flow_id",
-  "hsp_status",
   "screening_rules",
 ] as const;
 export type ReportCsvColumn = (typeof REPORT_CSV_COLUMNS)[number];
@@ -1084,23 +902,23 @@ export type ReconciliationRefund = {
   amount_base_units: string;
   status: RefundStatus;
   approval: "not_required" | "requested" | "approved";
-  tx_hash: Hex | null;
+  tx_hash: string | null;
   explorer_url: string | null;
   created_at: string;
 };
 
-/** One credit of the payment: an on-chain transfer, or an agent charge settled in a clearing batch. */
+/** One credit of the payment: a wallet payment the hub recorded, or an agent charge settled in a clearing batch. */
 export type ReconciliationTransaction = {
   /** The method that paid this credit, read as stored (never a fixed list). */
   method: string;
   amount: string;
   amount_base_units: string;
   status: "pending" | "confirmed";
-  /** The payer's transfer, or the batch settlement transaction for an agent charge. */
-  tx_hash: Hex | null;
+  /** The payer's reported transaction, or the batch settlement transaction for an agent charge. */
+  tx_hash: string | null;
   explorer_url: string | null;
-  batch_id: Hex | null;
-  call_id: Hex | null;
+  batch_id: Id32 | null;
+  call_id: Id32 | null;
   /** Public JSON proof of an agent charge: its Merkle path to the batch's receipts root on chain. */
   receipt_proof_url: string | null;
 };
@@ -1115,15 +933,13 @@ export type ReconciliationRow = ReportAmounts<ReportAmountField> & {
   status: PaymentStatus;
   /** The method shown on the payment: quoted, else the one that paid. Read as stored, never a fixed list. */
   method: string | null;
-  payer: Address | null;
+  payer: AccountId | null;
   currency: string;
   refunds: ReconciliationRefund[];
   transactions: ReconciliationTransaction[];
-  batch_ids: Hex[];
+  batch_ids: Id32[];
   /** The public payment proof page, for paid and overpaid payments. */
   proof_url: string | null;
-  hsp_flow_id: string | null;
-  hsp_status: string | null;
   /** Screening rules that refused a payer for this payment (for example PAYER_DENIED). */
   screening_rules: string[];
 };
@@ -1136,13 +952,61 @@ export type ReconciliationReport = {
   from: string;
   to: string;
   generated_at: string;
-  chain_id: number;
+  network: Network;
   livemode: boolean;
-  token: { address: Address; symbol: string; decimals: number };
+  token: { address: AccountId; symbol: string; decimals: number };
   totals: ReportAmounts<ReportTotalField> & { payments: number };
   counts: Record<string, number>;
   by_method: Record<string, ReportAmounts<"gross" | "fees" | "net" | "refunds"> & { payments: number }>;
   /** Agent charges of the range against the clearing ledger's call.accepted journals for the same calls. */
   ledger: { calls: number; charges: string; ledger_accepted: string; base_units: { charges: string; ledger_accepted: string }; matches: boolean };
   rows: ReconciliationRow[];
+};
+
+/**
+ * `GET /v1/checkout/{id}/proof`: the evidence that a payment was paid, read from the chain when asked. A wallet credit
+ * is proven by the hub's own record of the checkout payment id; a voucher credit by its clearing receipt, whose Merkle
+ * path the hub verifies against the batch root (inclusion and agent authorization, not delivery).
+ */
+export type PaymentProof = {
+  payment_id: string;
+  livemode: boolean;
+  status: PaymentStatus;
+  network: Network;
+  hub: AccountId;
+  token: { address: AccountId; symbol: string; decimals: number };
+  payout: AccountId;
+  amount_due: string;
+  amount_paid: string;
+  order_hash: Id32;
+  paid_at: string | null;
+  checked_at: string;
+  credits: Array<
+    | {
+        method: "wallet";
+        amount: string;
+        payer: AccountId | null;
+        checkout_id: Id32;
+        /**
+         * The transaction the payer's wallet reported, so a person can find it; null when the wallet reported none.
+         * It is never the evidence: `hub_record` and `verified` are.
+         */
+        tx_hash: string | null;
+        /** The hub's record read now; null when the hub has none (or could not be read, see `verified`). */
+        hub_record: { merchant: AccountId; amount: string; payer: AccountId; at_ms: string } | null;
+        /** True when the hub's record matches this credit's merchant and amount; null when the chain could not be read. */
+        verified: boolean | null;
+      }
+    | {
+        method: "voucher";
+        amount: string;
+        payer: AccountId | null;
+        call_id: Id32;
+        batch_id: Id32 | null;
+        tx_hash: string | null;
+        receipt_proof_url: string;
+        /** True when the hub verified the call's Merkle proof against a batch this node settled; null before settlement or on a read failure. */
+        verified: boolean | null;
+      }
+  >;
 };
