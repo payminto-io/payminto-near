@@ -60,7 +60,7 @@ describe("public/embed.js", () => {
   it("is small, has no dependency and no em dash", () => {
     expect(src.length).toBeLessThan(6_000);
     expect(src).not.toMatch(/\bimport\b|\brequire\(/);
-    expect(src).not.toMatch(/—/);
+    expect(src).not.toMatch(/\u2014/);
   });
 
   it("opens the checkout for a button and tells the page when it is paid", async () => {

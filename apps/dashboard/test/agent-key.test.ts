@@ -41,6 +41,6 @@ describe("agentKeyProblem: the New Budget form's check of the agent key", () => 
   });
 
   it("never uses an em dash", () => {
-    for (const k of ["", SMALL_ORDER_8, NON_CANONICAL]) expect(agentKeyProblem(k) ?? "").not.toMatch(/—/);
+    for (const k of ["", SMALL_ORDER_8, NON_CANONICAL]) expect(agentKeyProblem(k) ?? "").not.toMatch(/\u2014/);
   });
 });

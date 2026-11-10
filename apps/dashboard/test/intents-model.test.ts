@@ -246,7 +246,7 @@ describe("screen E copy, exactly as designed", () => {
   });
   it("never uses an em dash", () => {
     const all = [incompleteCopy(quote({ deposited: { amount: "1", formatted: "0.000001", symbol: "USDC" } })), returnedCopy(quote()), failedCopy(view()), expiredCopy(quote()), paidFromText(quote())];
-    for (const s of all) expect(s).not.toMatch(/—/);
+    for (const s of all) expect(s).not.toMatch(/\u2014/);
   });
 });
 
