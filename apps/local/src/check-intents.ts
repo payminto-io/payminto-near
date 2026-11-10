@@ -7,7 +7,7 @@
  */
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { verifyWebhook, WEBHOOK_SIGNATURE_HEADER, type AccountId, type CheckoutView, type IntentsOptions, type IntentsQuote } from "@payminto/protocol";
+import { verifyWebhook, WEBHOOK_SIGNATURE_HEADER, type AccountId, type CheckoutView, type IntentsOptions, type IntentsProofCredit, type IntentsQuote, type IntentsSummary, type PaymentProof, type PublicLinkIntents } from "@payminto/protocol";
 import { NodeSession } from "./session.ts";
 import { rpc } from "./signer-near.ts";
 import type { Stack } from "./stack.ts";
@@ -124,6 +124,29 @@ export async function intentsChecks(s: Stack, step: Step, o: { api: string; orig
       return {
         ok,
         detail: `payment ${view.id} offered ${view.methods.join(", ")}; USDC on Base quoted at ${base?.amount_in?.formatted ?? "?"} USDC; "send exactly ${quote.send_exactly.formatted} USDC on Base to ${quote.deposit_address}"; the quote ended ${done.status} (${done.verification}); ${anyAccount} went from ${before} to ${after} (${after - before} of ${amount}); tx ${done.delivery_tx?.hash ?? "none"} by ${s.accounts.solver} emits ft_transfer of ${event?.amount ?? 0} from ${token}; payment ${paid.status}; payment.paid ${hook ? (hook.signed ? "arrived signed" : "arrived UNSIGNED") : "did not arrive"}; report row ${row ? `${row.method}, ${row.settlement_network}, ${row.origin_amount}` : "missing"}`,
+      };
+    });
+
+    await step("the any-chain payment as the business and the buyer see it: the payment list says USDC on Base, the link offers Any chain, and its proof reads the delivery on chain", async () => {
+      const list = await admin.get<{ items: Array<{ id: string; method: string | null; intents: IntentsSummary | null }> }>("/v1/payments?method=oneclick&status=paid&limit=10", scope);
+      const item = list.items.find((x) => x.intents?.status === "confirmed");
+      const link = await anon.get<{ intents: PublicLinkIntents | null }>(`/v1/links/public/${s.setup.link.slug}`);
+      const proof = item ? await anon.get<PaymentProof>(`/v1/checkout/${item.id}/proof`) : null;
+      const credit = proof?.credits.find((c): c is IntentsProofCredit => c.method === "oneclick");
+      const onChain = credit?.delivery_tx ? await transfersOf(s.urls.rpc, credit.delivery_tx.hash, s.accounts.solver) : [];
+      const delivered = onChain.filter((t) => t.token === token && t.to === anyAccount).reduce((sum, t) => sum + t.amount, 0n);
+      const ok =
+        item?.intents?.origin.symbol === "USDC" &&
+        item.intents.origin.chain_name === "Base" &&
+        link.intents?.offered === true &&
+        credit?.verified === true &&
+        credit.recipient === anyAccount &&
+        credit.oneclick.status === "SUCCESS" &&
+        credit.delivered_on_chain === delivered.toString() &&
+        delivered >= BigInt(credit.amount);
+      return {
+        ok,
+        detail: `list: ${item ? `${item.id} "Any chain - ${item.intents?.origin.symbol} on ${item.intents?.origin.chain_name}"` : "no paid any-chain payment"}; link ${s.setup.link.slug} offers Any chain: ${link.intents?.offered}; proof: delivery ${credit?.delivery_tx?.hash ?? "none"} read again by the node, ${credit?.delivered_on_chain ?? "?"} to ${credit?.recipient ?? "?"} (verified ${credit?.verified}), on chain ${delivered}; 1Click ${credit?.oneclick.status ?? "?"}`,
       };
     });
 
