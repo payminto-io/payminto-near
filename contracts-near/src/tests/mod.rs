@@ -2,10 +2,15 @@
 //! `Harness` keeps a separate token ledger, so the solvency invariant is checked against an independent number.
 //! A panicking call is rolled back to the state before it, as the real runtime does.
 
+mod audit;
+mod auth;
+mod events;
 mod review;
 mod scenarios;
+mod v2;
 mod vectors;
 
+use crate::encoding::*;
 use crate::*;
 use ed25519_dalek::{Signer, SigningKey};
 use near_sdk::json_types::{U64, U128};
@@ -37,6 +42,9 @@ pub fn node() -> AccountId {
 pub const A: &str = "a.test";
 pub const B: &str = "b.test";
 pub const S: &str = "seller.test";
+
+/// Distinct payees the test Budgets that may pay anyone declare.
+pub const DEFAULT_ANY_PAYEES: u32 = 16;
 
 pub fn agent(n: u8) -> SigningKey {
     SigningKey::from_bytes(&[n; 32])
@@ -138,6 +146,8 @@ impl Harness {
     }
 
     pub fn rollback(&mut self, saved: Snapshot) {
+        // The old hub's maps write their dirty entries when dropped, so they go to the storage being replaced.
+        self.hub.flush();
         self.install(saved.storage, saved.usage);
         self.hub = near_sdk::env::state_read().expect("state was written by snapshot");
     }
@@ -192,7 +202,9 @@ impl Harness {
         id(self.seq)
     }
 
+    /// Terms for a Budget that lists `payees`, or, with an empty list, may pay any `DEFAULT_ANY_PAYEES` accounts.
     pub fn terms(&mut self, key: &SigningKey, cap: u128, payees: Vec<&str>) -> BudgetTerms {
+        let any = payees.is_empty();
         BudgetTerms {
             agent_pk: pk(key),
             settler: node(),
@@ -201,11 +213,13 @@ impl Harness {
             payees: payees.into_iter().map(acct).collect(),
             policy_hash: id(0xaa),
             salt: self.salt(),
+            allow_any_payee: any,
+            max_payees: if any { DEFAULT_ANY_PAYEES } else { 0 },
         }
     }
 
     pub fn open(&mut self, owner: &str, terms: BudgetTerms) -> Id32 {
-        self.ctx(acct(owner), near_sdk::env::storage_byte_cost().as_yoctonear() * 20_000);
+        self.ctx(acct(owner), near_sdk::env::storage_byte_cost().as_yoctonear() * 200_000);
         let budget_id = self.hub.open_budget(terms);
         self.budgets.push(budget_id);
         self.accounts.insert(acct(owner));
@@ -245,19 +259,50 @@ impl Harness {
 
     /// Runs a call that should panic, asserts its message contains `code`, and undoes whatever it wrote.
     pub fn expect_err<F: FnOnce(&mut Self)>(&mut self, code: &str, f: F) {
+        let message = self
+            .panic_message(f)
+            .unwrap_or_else(|| panic!("expected panic with {code}"));
+        assert!(message.contains(code), "expected {code}, got: {message}");
+    }
+
+    /// Runs a call that should panic with exactly `code` as its whole message, and undoes whatever it wrote.
+    pub fn expect_code<F: FnOnce(&mut Self)>(&mut self, code: &str, f: F) {
+        let message = self
+            .panic_message(f)
+            .unwrap_or_else(|| panic!("expected panic with {code}"));
+        assert_eq!(message, code);
+    }
+
+    /// The panic message of `f`, or `None` if it returned; either way its writes are undone.
+    pub fn panic_message<F: FnOnce(&mut Self)>(&mut self, f: F) -> Option<String> {
         let saved = self.snapshot();
         let token_balance = self.token_balance;
         let result = catch_unwind(AssertUnwindSafe(|| f(self)));
-        let payload = result.err().unwrap_or_else(|| panic!("expected panic with {code}"));
-        let message = payload
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_default();
-        assert!(message.contains(code), "expected {code}, got: {message}");
+        let message = result.err().map(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default()
+        });
         self.rollback(saved);
         self.token_balance = token_balance;
         self.assert_solvent();
+        message
+    }
+
+    /// The batch the node settled under `batch_id`.
+    pub fn batch(&self, batch_id: Id32) -> Option<BatchRecord> {
+        self.hub.batch(node(), batch_id)
+    }
+
+    /// The NEP-297 events logged by the last call, as JSON, in order.
+    pub fn events(&self) -> Vec<serde_json::Value> {
+        near_sdk::test_utils::get_logs()
+            .iter()
+            .filter_map(|line| line.strip_prefix(crate::events::PREFIX))
+            .map(|json| serde_json::from_str(json).expect("event JSON"))
+            .collect()
     }
 
     /// The solvency invariant, checked from individually summed state rather than the running totals.

@@ -12,7 +12,6 @@ import {
   checkReceiptOnChain,
   depositBudgetTx,
   formatAmount,
-  MAX_CLAIMS,
   maxSettleBatchStorageCost,
   nep413Digest,
   NearReader,
@@ -100,10 +99,11 @@ export async function runChecks(s: Stack, say: (line: string) => void): Promise<
 
   await step("the node is ready on the hub: its receipt key is registered, its storage is prepaid, and it reported no readiness problem", async () => {
     const [keys, storage] = await Promise.all([chain.receiptKeys(s.accounts.settler), chain.storageOf(s.accounts.settler)]);
-    const need = maxSettleBatchStorageCost(MAX_CLAIMS);
+    // The settler pays only for its own batch records: owners prepay their payees' settlement storage.
+    const need = maxSettleBatchStorageCost(100);
     const reported = readFileSync(s.paths.nodeLog, "utf8").split("\n").filter((l) => l.includes("hub readiness")).length;
     const near = (y: bigint) => `${(Number(y / 10n ** 18n) / 1e6).toFixed(4)} NEAR`;
-    return { ok: keys.includes(s.nodeKey) && storage >= need && reported === 0, detail: `the hub holds receipt key ${keys.join(", ") || "none"} for ${s.accounts.settler}, which is the node's; prepaid storage ${near(storage)}, a full batch can cost ${near(need)}; ${reported} readiness problems in the node's log` };
+    return { ok: keys.includes(s.nodeKey) && storage >= need && reported === 0, detail: `the hub holds receipt key ${keys.join(", ") || "none"} for ${s.accounts.settler}, which is the node's; prepaid storage ${near(storage)}, the records of 100 batches cost ${near(need)}; ${reported} readiness problems in the node's log` };
   });
 
   await step("the signer refuses a wrong token, a foreign origin, another network and anything but a function call", async () => {
@@ -247,7 +247,7 @@ export async function runChecks(s: Stack, say: (line: string) => void): Promise<
     if (out.batches.length === 0 || out.batches.some((x) => x.status !== "confirmed")) return { ok: false, detail: `no confirmed batch: ${JSON.stringify(out).slice(0, 300)}` };
     settled = true;
     // One press can make more than one batch: a batch clears one Budget per owner, and Bob now owns two.
-    const rows = await Promise.all(out.batches.map(async (x) => ({ x, onChain: await chain.batch(x.id), tx: x.txHash ? await chain.txState(x.txHash) : null })));
+    const rows = await Promise.all(out.batches.map(async (x) => ({ x, onChain: await chain.batch(x.id, s.accounts.settler), tx: x.txHash ? await chain.txState(x.txHash) : null })));
     const same = rows.every((r) => r.onChain !== null && r.onChain.settler === s.accounts.settler && r.onChain.gross === BigInt(r.x.gross) && r.onChain.net === BigInt(r.x.net) && r.tx?.status === "final");
     const gross = rows.reduce((n, r) => n + (r.onChain?.gross ?? 0n), 0n);
     const net = rows.reduce((n, r) => n + (r.onChain?.net ?? 0n), 0n);
@@ -265,8 +265,8 @@ export async function runChecks(s: Stack, say: (line: string) => void): Promise<
     // The browser's reader: plain fetch JSON-RPC at final finality against the RPC the node reports for the sandbox.
     const info = await fetch(`${api}/v1/info`).then((x) => x.json() as Promise<{ network: { rpc_url: string } }>);
     const reader = new NearReader({ rpcUrl: info.network.rpc_url, hub, timeoutMs: 8_000 });
-    const good = await checkReceiptOnChain(reader, { network: NETWORK, batchId: p.batchId, fields, proof: p.proof });
-    const bad = await checkReceiptOnChain(reader, { network: NETWORK, batchId: p.batchId, fields: { ...fields, amount: fields.amount + 1n }, proof: p.proof });
+    const good = await checkReceiptOnChain(reader, { network: NETWORK, batchId: p.batchId, settler: s.accounts.settler, fields, proof: p.proof });
+    const bad = await checkReceiptOnChain(reader, { network: NETWORK, batchId: p.batchId, settler: s.accounts.settler, fields: { ...fields, amount: fields.amount + 1n }, proof: p.proof });
     const sdk = await verifyReceiptOnchain({ chain, operator: s.accounts.settler, nodeKey: s.nodeKey, receipt: r, batchId: p.batchId, proof: p.proof, agentPk: alice.agentPk });
     return { ok: good.verified && good.rootMatches && good.hubVerified === true && !bad.verified && sdk.verified && info.network.rpc_url === s.urls.rpc, detail: `read from ${good.rpcUrl} at final block ${good.blockHeight}: root ${good.storedRoot?.slice(0, 8)}... equals the recomputed root, verify_receipt agrees; with the amount raised by one: ${bad.verified ? "VERIFIED (wrong)" : "not verified"}; SDK verifier: ${sdk.verified ? "verified" : sdk.reason}` };
   });

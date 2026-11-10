@@ -18,7 +18,9 @@ const PAYOUT_SCAN_FROM_TGAS: u64 = 262;
 /// A batch of `n` claims from one Budget to `n` payees that have no settled or credit entry yet.
 async fn one_budget_new_payees(w: &World, owner: &near_api::AccountId, n: usize, batch: u8) -> TestResult<f64> {
     let key = agent(100 + batch);
-    let budget = w.open_budget(owner, &key, 1_000_000, DAY_MS, &[], 200 + batch).await?;
+    let budget = w
+        .open_budget_for(owner, &key, 1_000_000, DAY_MS, &[], n as u32, 200 + batch)
+        .await?;
     w.deposit(owner, &budget, n as u128).await?;
 
     let mut claims = Vec::new();
@@ -69,6 +71,61 @@ async fn many_budgets(w: &World, n: usize, batch: u8) -> TestResult<f64> {
     let entries: Vec<Value> = expected.into_values().collect();
     let result = w.settle(&w.node, id32(batch), claims, entries).await?;
     burnt(result)
+}
+
+/// The worst case the hub allows in one batch: 100 owners with 64-character accounts, each with its own Budget that
+/// lists 16 payees of 64 characters, and one claim per Budget to a payee that has no settled or credit entry yet.
+async fn worst_case(w: &World, batch: u8) -> TestResult<f64> {
+    let n = 100usize;
+    let owners: Vec<near_api::AccountId> =
+        join_all((0..n).map(|i| w.create_quiet(format!("w{batch:02}{i:03}{}", "x".repeat(50)))))
+            .await
+            .into_iter()
+            .collect::<TestResult<_>>()?;
+
+    let budgets: Vec<_> = join_all(owners.iter().enumerate().map(|(i, owner)| async move {
+        let key = agent(1 + (i % 200) as u8);
+        let payees: Vec<near_api::AccountId> = (0..16)
+            .map(|j| acct(&format!("{:064x}", (batch as usize) << 24 | i << 8 | j)))
+            .collect();
+        let refs: Vec<&near_api::AccountId> = payees.iter().collect();
+        let budget = w
+            .open_budget(owner, &key, 1_000_000, DAY_MS, &refs, (i % 250) as u8)
+            .await?;
+        w.deposit(owner, &budget, 5).await?;
+        let row: TestResult<(
+            near_api::AccountId,
+            ed25519_dalek::SigningKey,
+            payminto_hub::types::Id32,
+            near_api::AccountId,
+        )> = Ok((owner.clone(), key, budget, payees[15].clone()));
+        row
+    }))
+    .await
+    .into_iter()
+    .collect::<TestResult<_>>()?;
+
+    let mut claims = Vec::new();
+    let mut expected: BTreeMap<String, Value> = BTreeMap::new();
+    for (owner, key, budget, payee) in &budgets {
+        claims.push(voucher(&w.hub, key, budget, payee, 5, 5));
+        expected.insert(payee.to_string(), net_entry(payee, 0, 5));
+        expected.insert(owner.to_string(), net_entry(owner, 5, 0));
+    }
+    let entries: Vec<Value> = expected.into_values().collect();
+    let result = w.settle(&w.node, id32(batch), claims, entries).await?;
+    burnt(result)
+}
+
+#[tokio::test]
+#[ignore = "creates 100 accounts with 64-character names; run explicitly for profiling"]
+async fn profile_settle_batch_worst_case() -> TestResult<()> {
+    let w = World::start().await?;
+    let gas = worst_case(&w, 60).await?;
+    println!(
+        "worst case: 100 claims, 100 owners and Budgets of 16 listed 64-character payees, 64-character accounts: {gas:.1} Tgas burnt"
+    );
+    Ok(())
 }
 
 fn burnt(result: TransactionResult) -> TestResult<f64> {

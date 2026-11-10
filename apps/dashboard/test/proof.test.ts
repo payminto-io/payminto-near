@@ -18,6 +18,7 @@ const check = (o: Partial<ReceiptCheck> = {}): ReceiptCheck => ({
   hub,
   network: "near:testnet",
   batchId,
+  settler: "node.payminto.testnet",
   blockHeight: 219_402_871,
   storedRoot: tree.root,
   leaf: tree.leaves[0]!,
@@ -81,15 +82,15 @@ describe("the demo RPC", () => {
   const source = mockReader({
     hub,
     view: (method, args) => {
-      if (method === "batch") return args.batch_id === batchId ? { root: tree.root, settler: "node.payminto.testnet", gross: "3000", net: "3000", at: "1762000060000" } : null;
-      if (method === "verify_receipt") return args.batch_id === batchId;
+      if (method === "batch") return args.batch_id === batchId && args.settler === "node.payminto.testnet" ? { root: tree.root, settler: "node.payminto.testnet", gross: "3000", net: "3000", at: "1762000060000" } : null;
+      if (method === "verify_receipt") return args.batch_id === batchId && args.settler === "node.payminto.testnet";
       throw new Error("MethodNotFound");
     },
     txFinal: () => true,
   });
 
   it("serves NearReader through fetch, so mock pages run the real proof code", async () => {
-    const c = await checkReceiptOnChain(source.reader, { network: "near:testnet", batchId, fields, proof: tree.proofOf(fields.callId) });
+    const c = await checkReceiptOnChain(source.reader, { network: "near:testnet", batchId, settler: "node.payminto.testnet", fields, proof: tree.proofOf(fields.callId) });
     expect(source.demo).toBe(true);
     expect(c).toMatchObject({ rpcUrl: "demo:in-browser-hub", storedRoot: tree.root, rootMatches: true, hubVerified: true, verified: true });
   });

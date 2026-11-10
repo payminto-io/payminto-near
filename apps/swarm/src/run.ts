@@ -414,7 +414,7 @@ export async function runSwarm(w: World, o: RunOptions): Promise<Report> {
     say(`  nothing settled: ${settled.skipped}`);
   }
   for (const id of settled.batchIds ?? []) {
-    const b = await chain.batch(id);
+    const b = await chain.batch(id, chain.operator);
     if (!b) throw new Error(`the node reports batch ${id}, but the hub does not have it`);
     const summary = settled.batches?.find((x) => x.id === id);
     const txHash = summary?.txHash ?? null;
@@ -520,7 +520,7 @@ async function prove(w: World, o: RunOptions, round: string, roundNumber: number
   const res = await fetch(`${w.nodeUrl}/v1/receipts/${receipt.callId}/proof`);
   const p = res.ok ? ((await res.json()) as { batchId: Id32 | null; proof: Id32[] }) : null;
   if (!p?.batchId) return { ...base, batchId: "", steps: 0, verified: false, reason: "the node has no settled batch for this Call", tamperedRejected: false };
-  const batch = await chain.batch(p.batchId);
+  const batch = await chain.batch(p.batchId, chain.operator);
   const proofFile: SwarmProofFile = {
     ...receiptFile({ network: chain.network, hub: chain.hub, operator: chain.operator, rpcUrl: w.hub.rpcUrl, batchId: p.batchId, proof: p.proof, receipt }),
     swarm: { kind: PROOF_FILE_KIND, chain: w.hub.label, round, buyer, seller, agentPk, batchRoot: batch?.root ?? "" },

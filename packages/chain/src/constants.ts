@@ -18,7 +18,17 @@ export const CALL_DOMAIN = "payminto.call.v1";
 export const ACCEPTANCE_DOMAIN = "payminto.accepted.v1";
 
 export const MAX_CLAIMS = 100;
+/** Payees a Budget can list. */
 export const MAX_PAYEES = 16;
+/** Distinct payees a Budget with `allow_any_payee` can declare it will ever pay (`max_payees`). */
+export const MAX_ANY_PAYEES = 256;
+/**
+ * What `budgetTermsArgs` declares as `max_payees` for a Budget with no payee list, unless `BudgetTerms.maxPayees`
+ * says otherwise. The owner prepays settlement storage for this many payees.
+ */
+export const DEFAULT_MAX_PAYEES = 16;
+/** Payees one `prune` call can clear. */
+export const MAX_PRUNE_PAYEES = 100;
 export const MAX_PAYOUT_ACCOUNTS = 10;
 export const MAX_MERKLE_DEPTH = 32;
 /** Receipt keys one settler can register on the hub. Keys are append-only. */
@@ -38,6 +48,7 @@ export const HUB_ERRORS = [
   "ACCEPTANCE_TOO_LATE",
   "ADMIN_IS_HUB",
   "ALREADY_REVOKED",
+  "AMOUNT_ABOVE_STEP",
   "BAD_ACCEPTANCE",
   "BAD_SIGNATURE",
   "BATCH_EXISTS",
@@ -45,19 +56,26 @@ export const HUB_ERRORS = [
   "BUDGET_EXISTS",
   "BUDGET_NOT_OPEN",
   "CAP_EXCEEDED",
+  "DEPOSIT_REQUIRED",
+  "ENCODING_FAILED",
   "INSUFFICIENT_CREDIT",
   "INSUFFICIENT_DEPOSIT",
   "INSUFFICIENT_ESCROW",
   "INSUFFICIENT_GAS",
+  "INSUFFICIENT_RESERVE",
   "INSUFFICIENT_STORAGE",
   "INVALID_BUDGET",
+  "INVALID_KEY",
   "NET_MISMATCH",
   "NOT_ADMIN",
   "NOT_BUDGET_SETTLER",
   "NOT_OWNER",
   "NOT_PAYEE",
+  "NOT_PENDING_ADMIN",
+  "NOT_SELF",
   "NOT_SETTLER",
   "ONE_BUDGET_PER_OWNER",
+  "ONE_YOCTO_REQUIRED",
   "OVERFLOW",
   "PAYEE_IS_OWNER",
   "PAYEE_NOT_ALLOWED",

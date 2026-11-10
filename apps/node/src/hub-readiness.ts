@@ -1,4 +1,4 @@
-import { MAX_CLAIMS, maxSettleBatchStorageCost } from "@payminto/chain";
+import { maxSettleBatchStorageCost } from "@payminto/chain";
 import type { ChainClient } from "./chain.ts";
 
 /** One thing about this node's standing on the hub that would stop it from settling or from being believed. */
@@ -7,11 +7,15 @@ export type HubReadinessProblem = {
   message: string;
 };
 
+/** Batch records the least prepaid storage balance covers. */
+export const MIN_SETTLE_STORAGE_BATCHES = 100;
+
 /**
- * The least prepaid storage balance a node should hold, in yoctoNEAR: what one full batch of `MAX_CLAIMS` claims to
- * new payees with the longest account names can cost (about 0.37 NEAR). Below it the next batch may be refused.
+ * The least prepaid storage balance a node should hold, in yoctoNEAR: the records of 100 batches by a settler with the
+ * longest account name (0.281 NEAR). The settler pays only for its own batch records, receipt keys and checkout
+ * payments, because each Budget's owner prepays its payees' settlement storage. Below it a batch may be refused.
  */
-export const MIN_SETTLE_STORAGE_YOCTO = maxSettleBatchStorageCost(MAX_CLAIMS);
+export const MIN_SETTLE_STORAGE_YOCTO = maxSettleBatchStorageCost(MIN_SETTLE_STORAGE_BATCHES);
 
 const near = (yocto: bigint) => `${(Number(yocto / 10n ** 18n) / 1e6).toFixed(4)} NEAR`;
 
@@ -41,7 +45,7 @@ export async function hubReadinessProblems(chain: ChainClient, minStorageYocto: 
   if (storage < minStorageYocto) {
     problems.push({
       check: "settle_storage_balance",
-      message: `${chain.operator} holds ${near(storage)} of prepaid storage balance on ${chain.hub}, below the ${near(minStorageYocto)} one full batch can cost; settle_batch is refused with INSUFFICIENT_STORAGE once it runs out, so call fund_storage for ${chain.operator}`,
+      message: `${chain.operator} holds ${near(storage)} of prepaid storage balance on ${chain.hub}, below the ${near(minStorageYocto)} that 100 batch records cost; settle_batch is refused with INSUFFICIENT_STORAGE once it runs out, so call fund_storage for ${chain.operator}`,
     });
   }
   return problems;

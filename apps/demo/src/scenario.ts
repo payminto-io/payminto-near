@@ -57,7 +57,8 @@ export type Report = {
    * and what the batch took from it. On a real chain also how many bytes the hub account grew and how its own NEAR
    * balance changed; both are null on the simulated hub, which has no NEAR accounts.
    */
-  storage: { settler: AccountId; receiptKeyOnHub: boolean; prepaidBefore: bigint; charged: bigint; hubBytesGrown: number | null; hubOwnChange: bigint | null };
+  /** `charged` is yoctoNEAR from the settler's balance; `fromReserves` is bytes from the Budgets' owner-paid reserves. */
+  storage: { settler: AccountId; receiptKeyOnHub: boolean; prepaidBefore: bigint; charged: bigint; fromReserves: bigint; hubBytesGrown: number | null; hubOwnChange: bigint | null };
   fundFromCredit: { owner: AccountId; amount: bigint; escrowRise: bigint; creditFall: bigint; capUnchanged: boolean } | null;
   payout: { creditors: AccountId[]; transfers: number; paidOut: bigint; balanceRisesMatchCredits: boolean; creditLeft: bigint; txFinal: boolean };
   proofs: { sdk: boolean; mcp: boolean; sdkReason: string | null; mcpReason: string | null };
@@ -231,7 +232,7 @@ export async function runStory(s: Stack, say: Say = () => {}): Promise<Report> {
     refusals: [],
     swarm: { workers: SWARM_SIZE, paid: 0, hourlyCapCalls: Number(s.swarmHourlyCap / PRICES.quote) },
     settlement: { batches: 0, gross: 0n, net: 0n, claims: 0, unsettledAfter: 0n, txHashes: [], txFinal: false },
-    storage: { settler: chain.operator, receiptKeyOnHub: false, prepaidBefore: 0n, charged: 0n, hubBytesGrown: null, hubOwnChange: null },
+    storage: { settler: chain.operator, receiptKeyOnHub: false, prepaidBefore: 0n, charged: 0n, fromReserves: 0n, hubBytesGrown: null, hubOwnChange: null },
     fundFromCredit: null,
     payout: { creditors: [], transfers: 0, paidOut: 0n, balanceRisesMatchCredits: false, creditLeft: 0n, txFinal: true },
     proofs: { sdk: false, mcp: false, sdkReason: null, mcpReason: null },
@@ -356,14 +357,22 @@ export async function runStory(s: Stack, say: Say = () => {}): Promise<Report> {
   say("4. The node nets what owners owe each other and settles one batch on the hub.");
   const accounts = [...Object.values(owners), sellers.scans];
   const creditBefore = new Map(await Promise.all(accounts.map(async (a) => [a, await chain.creditOf(a)] as const)));
-  // The hub never pays for the storage a batch writes: it comes out of the node's prepaid storage balance.
+  // The hub never pays for the storage a batch writes: each Budget's new payees come out of the reserve its owner
+  // prepaid at open_budget, and the batch record out of the node's prepaid storage balance.
   const nodeKey = s.node.services.chain.nodeKey;
   report.storage.receiptKeyOnHub = (await chain.receiptKeys(chain.operator)).includes(nodeKey);
   report.storage.prepaidBefore = await chain.storageOf(chain.operator);
+  const reserves = async () => {
+    let bytes = 0n;
+    for (const who of OWNER_KEYS) bytes += (await chain.budget(s.budgets[who]))?.storageReserveBytes ?? 0n;
+    return bytes;
+  };
+  const reservesBefore = await reserves();
   const nearBefore = await s.hub.near();
   const settled = await s.node.services.settlement.settle("manual");
   if ("skipped" in settled) throw new Error(`settlement skipped: ${settled.skipped}`);
   report.storage.charged = report.storage.prepaidBefore - (await chain.storageOf(chain.operator));
+  report.storage.fromReserves = reservesBefore - (await reserves());
   const nearAfter = await s.hub.near();
   if (nearBefore && nearAfter) {
     report.storage.hubBytesGrown = nearAfter.storageBytes - nearBefore.storageBytes;
@@ -371,7 +380,7 @@ export async function runStory(s: Stack, say: Say = () => {}): Promise<Report> {
   }
   let final = settled.batchIds.length > 0;
   for (const [i, id] of settled.batchIds.entries()) {
-    const b = await chain.batch(id);
+    const b = await chain.batch(id, chain.operator);
     if (!b) throw new Error(`batch ${id} is not on the hub`);
     report.settlement.gross += b.gross;
     report.settlement.net += b.net;
@@ -391,7 +400,7 @@ export async function runStory(s: Stack, say: Say = () => {}): Promise<Report> {
   say(`   Tokens moved inside the hub (escrow to credit): ${usdc(net)}. Offset between owners: ${usdc(gross - net)}.`);
   const st = report.storage;
   const onChain = st.hubBytesGrown === null ? "" : ` The hub account grew by ${st.hubBytesGrown} bytes, and its own NEAR balance changed by ${st.hubOwnChange} yoctoNEAR.`;
-  say(`   Storage: ${near(st.charged)} (${st.charged / STORAGE_BYTE_COST} bytes) taken from ${chain.operator}'s prepaid storage balance of ${near(st.prepaidBefore)}, not from the hub.${onChain}`);
+  say(`   Storage: ${st.fromReserves} bytes for new payees from the Budgets' reserves their owners prepaid, and ${st.charged / STORAGE_BYTE_COST} bytes for the batch record (${near(st.charged)}) from ${chain.operator}'s prepaid storage balance of ${near(st.prepaidBefore)}, not from the hub.${onChain}`);
   for (const who of OWNER_KEYS) {
     const b = (await chain.budget(s.budgets[who]))!;
     const credit = (await chain.creditOf(owners[who])) - (creditBefore.get(owners[who]) ?? 0n);

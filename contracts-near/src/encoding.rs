@@ -4,7 +4,14 @@
 use near_sdk::borsh::{self, BorshSerialize};
 use near_sdk::env;
 
+use crate::errors::ENCODING_FAILED;
 use crate::types::{BudgetTerms, Id32, Sig64};
+
+/// Borsh bytes of a preimage. Writing into a `Vec` cannot fail for these types; if it ever did, the hub panics with a
+/// code rather than a library message.
+fn encode<T: BorshSerialize>(value: &T) -> Vec<u8> {
+    borsh::to_vec(value).unwrap_or_else(|_| env::panic_str(ENCODING_FAILED))
+}
 
 /// Above 2^31 so that a voucher preimage cannot parse as a Borsh-encoded NEAR transaction.
 pub const VOUCHER_TAG: u32 = 2_147_504_402;
@@ -45,20 +52,17 @@ pub fn voucher_digest(
     cumulative: u128,
     request_hash: &Id32,
 ) -> [u8; 32] {
-    env::sha256_array(
-        borsh::to_vec(&VoucherPreimage {
-            tag: VOUCHER_TAG,
-            domain: VOUCHER_DOMAIN,
-            hub,
-            network,
-            budget_id: &budget_id.0,
-            payee,
-            amount,
-            cumulative,
-            request_hash: &request_hash.0,
-        })
-        .expect("borsh"),
-    )
+    env::sha256_array(encode(&VoucherPreimage {
+        tag: VOUCHER_TAG,
+        domain: VOUCHER_DOMAIN,
+        hub,
+        network,
+        budget_id: &budget_id.0,
+        payee,
+        amount,
+        cumulative,
+        request_hash: &request_hash.0,
+    }))
 }
 
 #[derive(BorshSerialize)]
@@ -79,22 +83,19 @@ struct BudgetPreimage<'a> {
 
 /// The Budget id for canonical terms: `payees` must already be sorted and deduplicated.
 pub fn budget_id(hub: &str, network: &str, owner: &str, terms: &BudgetTerms) -> Id32 {
-    Id32(env::sha256_array(
-        borsh::to_vec(&BudgetPreimage {
-            domain: BUDGET_DOMAIN,
-            hub,
-            network,
-            owner,
-            agent_pk: &terms.agent_pk.0,
-            settler: terms.settler.as_str(),
-            cap: terms.cap.0,
-            valid_until: terms.valid_until.0,
-            payees: terms.payees.iter().map(|p| p.as_str()).collect(),
-            policy_hash: &terms.policy_hash.0,
-            salt: &terms.salt.0,
-        })
-        .expect("borsh"),
-    ))
+    Id32(env::sha256_array(encode(&BudgetPreimage {
+        domain: BUDGET_DOMAIN,
+        hub,
+        network,
+        owner,
+        agent_pk: &terms.agent_pk.0,
+        settler: terms.settler.as_str(),
+        cap: terms.cap.0,
+        valid_until: terms.valid_until.0,
+        payees: terms.payees.iter().map(|p| p.as_str()).collect(),
+        policy_hash: &terms.policy_hash.0,
+        salt: &terms.salt.0,
+    })))
 }
 
 #[derive(BorshSerialize)]
@@ -118,19 +119,16 @@ pub fn checkout_digest(
     amount: u128,
     expiry_ms: u64,
 ) -> [u8; 32] {
-    env::sha256_array(
-        borsh::to_vec(&CheckoutPreimage {
-            tag: CHECKOUT_TAG,
-            domain: CHECKOUT_DOMAIN,
-            hub,
-            network,
-            payment_id: &payment_id.0,
-            merchant,
-            amount,
-            expiry_ms,
-        })
-        .expect("borsh"),
-    )
+    env::sha256_array(encode(&CheckoutPreimage {
+        tag: CHECKOUT_TAG,
+        domain: CHECKOUT_DOMAIN,
+        hub,
+        network,
+        payment_id: &payment_id.0,
+        merchant,
+        amount,
+        expiry_ms,
+    }))
 }
 
 #[derive(BorshSerialize)]
@@ -164,7 +162,7 @@ pub fn receipt_leaf(
     timestamp_ms: u64,
     voucher_sig: &[u8; 64],
 ) -> [u8; 32] {
-    let body = borsh::to_vec(&LeafPreimage {
+    let body = encode(&LeafPreimage {
         domain: RECEIPT_DOMAIN,
         hub,
         network,
@@ -177,8 +175,7 @@ pub fn receipt_leaf(
         request_hash: &request_hash.0,
         timestamp_ms,
         voucher_sig,
-    })
-    .expect("borsh");
+    });
     let mut preimage = Vec::with_capacity(body.len() + 1);
     preimage.push(0x00);
     preimage.extend_from_slice(&body);
@@ -241,11 +238,6 @@ pub fn verify_proof(root: &[u8; 32], leaf: [u8; 32], proof: &[Id32]) -> bool {
     }
     let computed = proof.iter().fold(leaf, |acc, sibling| hash_pair(&acc, &sibling.0));
     &computed == root
-}
-
-/// Verifies a signature over a 32-byte digest.
-pub fn verify_signature(digest: &[u8; 32], signature: &[u8; 64], key: &[u8; 32]) -> bool {
-    env::ed25519_verify(signature, digest, key)
 }
 
 /// Builds the Merkle root of leaves already sorted by `call_id`, promoting odd nodes.

@@ -159,14 +159,14 @@ Two more things are needed on the hub before a settler can settle and its seller
 
 | Need | Hub method | Who signs | Detail |
 |---|---|---|---|
-| A prepaid storage balance | `fund_storage({ account })`, with the NEAR attached as the deposit | Anyone; the deploy script has the admin do it | `settle_batch`, `register_receipt_key` and checkout payments draw on it for the bytes they write. One full batch of 100 claims to new payees can cost 0.36913 NEAR, and the deploy script puts in 1 NEAR by default. `storage_of({ account })` reports the balance, and `withdraw_storage({ amount })` returns the unused part with one yoctoNEAR attached |
+| A prepaid storage balance | `fund_storage({ account })`, with the NEAR attached as the deposit | Anyone; the deploy script has the admin do it | `settle_batch` draws on it for its batch record, and `register_receipt_key` and checkout payments for the bytes they write; each Budget's owner prepays its payees' settlement storage at `open_budget`. A batch record of a 64-character settler is 281 bytes (0.00281 NEAR), the deploy script and the node's startup check ask for at least 100 of them (0.281 NEAR), and the deploy script puts in 1 NEAR by default. `storage_of({ account })` reports the balance, and `withdraw_storage({ amount })` returns the unused part with one yoctoNEAR attached |
 | A registered receipt key | `register_receipt_key({ key })`, with exactly one yoctoNEAR attached | The settler account itself, with its full-access key; a function-call key cannot attach a deposit | The key is the public key of `NODE_SIGNING_SEED`, as 64 hex characters. `settle_own` takes a seller's voucher only with an acceptance signed by a registered key. Keys are only ever added, at most 4 per settler, and `receipt_keys({ settler })` lists them |
 
 `fundStorageTx`, `registerReceiptKeyTx` and `withdrawStorageTx` in `packages/chain/src/actions.ts` build these transactions for a wallet.
 Fund the storage balance first: registering a key draws on it.
 
 The node checks both at startup (`apps/node/src/hub-readiness.ts`).
-A receipt key that is not registered, or a storage balance below one full batch, is an error log line and an increase of `payminto_operator_alerts_total{kind="hub_readiness"}`.
+A receipt key that is not registered, or a storage balance below 100 batch records (0.281 NEAR), is an error log line and an increase of `payminto_operator_alerts_total{kind="hub_readiness"}`.
 It does not stop the node.
 
 ## 4. Run the node and the dashboard
@@ -391,7 +391,7 @@ Its first line and the wasm line, as printed:
 
 ```text
 DRY RUN: nothing is signed or sent on near:testnet
-wasm <repo>/contracts-near/out/hub.wasm: 289790 bytes, sha256 a8a5339259dfb01b48b2d04b319aa357aead63f3e47e7a69855fed095a152c37, code hash CMKbhRxTnjQsgFZpDPsEqTz55h6iDvxy8qYXpAhJUtqc
+wasm <repo>/contracts-near/out/hub.wasm: 337826 bytes, sha256 cf978c32ec76c2967c05384e1533b298c9cbe623274e9542bc07987d9babcd3f, code hash EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx
 ```
 
 The steps it plans, in order, with the names the report uses:
@@ -425,7 +425,7 @@ The live run was not run for this guide, and no assistant should run it.
 | `--wasm` | Another wasm file; default `contracts-near/out/hub.wasm` |
 | `--storage-deposit` | Lower bound in yoctoNEAR for the hub's token registration; default 0.00125 NEAR |
 | `--settler-storage` | yoctoNEAR the admin puts into the settler's storage balance; default 1 NEAR |
-| `--min-settler-storage` | The storage balance below which the prefund runs, in yoctoNEAR; default 0.36913 NEAR, one batch of 100 claims to new 64-character payees |
+| `--min-settler-storage` | The storage balance below which the prefund runs, in yoctoNEAR; default 0.281 NEAR, the records of 100 batches by a 64-character settler |
 | `--min-hub-balance` | NEAR the hub account must keep beyond its storage, in yoctoNEAR; default 0.1 NEAR |
 | `--credentials-dir` | Another near-cli credentials directory |
 | `--dry-run` | Print the plan and sign nothing |

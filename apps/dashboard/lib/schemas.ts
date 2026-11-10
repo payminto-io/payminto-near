@@ -463,6 +463,8 @@ export const proofSchema = z.object({
   settledBy: settledBySchema,
   sellerSettlement: sellerSettlementProofSchema.nullable().optional(),
   batchId: bytes32Schema.nullable(),
+  /** The account that settled the batch. The hub keys batches by settler; older nodes leave it out (it is the operator). */
+  settler: addressSchema.nullable().optional(),
   batchStatus: z.string().nullable().optional(),
   receiptsRoot: bytes32Schema.nullable(),
   proof: z.array(bytes32Schema),

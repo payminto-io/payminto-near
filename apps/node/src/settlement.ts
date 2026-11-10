@@ -415,7 +415,7 @@ export class SettlementService {
     );
     for (const b of batches) {
       try {
-        if ((await this.#chain.chain.batch(b.batch_id)) !== null) return true;
+        if ((await this.#chain.chain.batch(b.batch_id, this.#chain.chain.operator)) !== null) return true;
       } catch {
         return null;
       }
@@ -617,7 +617,7 @@ export class SettlementService {
         return { kind: "failed" };
       }
       // No verdict. The hub may have it already, or may still get it.
-      const landed = await this.#chain.chain.batch(batchId).catch(() => undefined);
+      const landed = await this.#chain.chain.batch(batchId, this.#chain.chain.operator).catch(() => undefined);
       if (landed) {
         if (!this.#ownsRecord(seq, landed)) return { kind: "failed" };
         this.#confirm(seq, null, entries);
@@ -708,7 +708,7 @@ export class SettlementService {
    */
   async #reconcile(seq: number): Promise<boolean> {
     const row = this.#store.batch(String(seq))!;
-    const onchain = await this.#chain.chain.batch(row.batch_id);
+    const onchain = await this.#chain.chain.batch(row.batch_id, this.#chain.chain.operator);
     if (!onchain) {
       this.#fail(seq, "the hub has no record of this batch");
       return false;
@@ -729,7 +729,7 @@ export class SettlementService {
         this.#fail(b.seq, "the node stopped before sending this batch");
         continue;
       }
-      const onchain = await this.#chain.chain.batch(b.batch_id).catch((err: unknown) => {
+      const onchain = await this.#chain.chain.batch(b.batch_id, this.#chain.chain.operator).catch((err: unknown) => {
         this.#log.warn("cannot read a pending batch from the hub; asking again on the next run", { seq: b.seq, err });
         return undefined;
       });

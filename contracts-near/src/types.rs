@@ -85,6 +85,8 @@ fn to_hex(bytes: &[u8]) -> String {
 
 /// Everything the owner fixes when opening a Budget.
 /// The owner is the predecessor of `open_budget`, so it is not part of the arguments.
+/// `allow_any_payee` and `max_payees` are not part of the Budget id: the id hashes `payees`, and the hub only accepts
+/// `allow_any_payee` when `payees` is empty, so the flag is fixed by the list.
 #[near(serializers = [json])]
 #[derive(Clone, Debug)]
 pub struct BudgetTerms {
@@ -92,9 +94,16 @@ pub struct BudgetTerms {
     pub settler: AccountId,
     pub cap: U128,
     pub valid_until: U64,
+    /// The only accounts the Budget can pay, 1 to `MAX_PAYEES` of them, unless `allow_any_payee`.
     pub payees: Vec<AccountId>,
     pub policy_hash: Id32,
     pub salt: Id32,
+    /// True for a Budget that can pay any account. Then `payees` must be empty, and `max_payees` says how many distinct
+    /// accounts it can ever pay. An empty list alone never means "any payee".
+    pub allow_any_payee: bool,
+    /// With `allow_any_payee`, the most distinct payees the Budget can ever pay, 1 to `MAX_ANY_PAYEES`; otherwise 0.
+    /// The owner prepays the settlement storage of that many payees at `open_budget`.
+    pub max_payees: u32,
 }
 
 /// A spending authority on one owner's escrow.
@@ -112,8 +121,12 @@ pub struct Budget {
     pub revoked_at: Option<U64>,
     pub payees: Vec<AccountId>,
     pub policy_hash: Id32,
-    /// Storage bytes already paid for by the owner, which `settle_own` consumes before charging the payee.
-    pub reserved_settle_own_bytes: u64,
+    /// True when the Budget can pay any account; `payees` is then empty.
+    pub allow_any_payee: bool,
+    /// Storage bytes the owner prepaid at `open_budget` for this Budget's settlement records and not used yet.
+    /// `settle_batch` and `settle_own` draw the bytes of each new `(Budget, payee)` pair from it, a removed credit
+    /// entry the Budget paid for returns its bytes, and `prune` refunds what is left to the owner.
+    pub storage_reserve_bytes: U64,
 }
 
 /// The latest voucher for a `(budget, payee)` pair, as submitted for settlement.
@@ -140,6 +153,16 @@ pub struct Acceptance {
     pub signature: Sig64,
 }
 
+/// Who paid for the storage of a credit entry, and so gets it back when the entry is removed.
+#[near(serializers = [borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Funder {
+    /// A settler's storage balance: checkout payments.
+    Settler(AccountId),
+    /// A Budget's storage reserve: the credit a settlement of that Budget created.
+    Budget(Id32),
+}
+
 /// Withdrawable token credit of one account.
 #[near(serializers = [borsh])]
 #[derive(Clone, Debug, PartialEq)]
@@ -147,8 +170,9 @@ pub struct Credit {
     pub amount: u128,
     /// Sent by `payout` and not yet confirmed or restored by its callback. The entry stays while this is non-zero.
     pub in_flight: u128,
-    /// The settler whose storage balance paid for this entry, which gets that storage back when the entry is removed.
-    pub funder: Option<AccountId>,
+    /// Who paid for this entry's storage and gets it back when the entry is removed. `None` when a payee's own
+    /// deposit paid, in `settle_own`.
+    pub funder: Option<Funder>,
 }
 
 /// The node key that signs checkout terms, and the settler whose storage balance pays for accepted payments.
@@ -221,11 +245,14 @@ pub struct Totals {
     pub in_flight: U128,
 }
 
-/// The immutable deployment parameters.
+/// The deployment parameters: `token` and `network` never change, and `admin` only through `propose_admin` and
+/// `accept_admin`.
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub admin: AccountId,
+    /// The account `propose_admin` named, which becomes the admin when it calls `accept_admin`.
+    pub pending_admin: Option<AccountId>,
     pub token: AccountId,
     pub network: String,
 }

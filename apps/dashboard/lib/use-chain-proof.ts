@@ -29,10 +29,12 @@ export function useChainProof(p: ReceiptProof): ChainProof {
   const source = useMemo(() => (info.data ? api.nearReader(info.data) : null), [api, info.data]);
   const hub = info.data?.hub ?? null;
   const leaf = useMemo(() => (hub && network ? rebuildLeaf(p, { hub, network }) : null), [hub, network, p]);
+  // The hub keys batches by settler: the proof names it, and a node that does not is its own settler.
+  const settler = p.settler ?? info.data?.operator ?? null;
   const q = useQuery({
-    queryKey: ["near-proof", p.receipt.callId, p.batchId, source?.reader.rpcUrl, hub],
-    enabled: Boolean(source && network && p.batchId),
-    queryFn: () => checkReceiptOnChain(source!.reader, { network: network!, batchId: p.batchId!, fields: receiptFieldsOf(p.receipt), proof: p.proof }),
+    queryKey: ["near-proof", p.receipt.callId, p.batchId, settler, source?.reader.rpcUrl, hub],
+    enabled: Boolean(source && network && p.batchId && settler),
+    queryFn: () => checkReceiptOnChain(source!.reader, { network: network!, batchId: p.batchId!, settler: settler!, fields: receiptFieldsOf(p.receipt), proof: p.proof }),
     retry: false,
     staleTime: 60_000,
     refetchOnWindowFocus: false,

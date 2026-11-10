@@ -15,7 +15,7 @@ Where this page and the code differ, the code is what runs; `contracts-near/READ
 
 | Part | Path | What it does |
 |---|---|---|
-| Hub contract | `contracts-near/` | Rust contract on NEAR. Escrows a NEP-141 token in owner-funded Budgets, verifies vouchers and node acceptances, settles netted batches, stores a Merkle root per batch, keeps each settler's receipt keys and prepaid storage balance, pays out credit. Locked: the account has no access keys |
+| Hub contract | `contracts-near/` | Rust contract on NEAR, one module per invariant. Escrows a NEP-141 token in owner-funded Budgets, verifies vouchers and node acceptances, settles netted batches, stores a Merkle root per settler and batch id, keeps each settler's receipt keys and prepaid storage balance and each Budget's prepaid storage reserve, pays out credit, and logs a NEP-297 event for every state change. Locked: the account has no access keys |
 | Chain seam | `packages/chain` | The only package that imports NEAR libraries: types, the `Chain` interface, Borsh digests, the Merkle tree, wallet transaction builders (`actions.ts`), `FakeChain` (simulated hub), `NearRpcChain` (RPC client on near-kit) and `scripts/deploy-hub.ts` |
 | Protocol | `packages/protocol` | x402 v2 wire schemas for the `payminto-voucher` scheme, policy rules and refusals, gateway wire types, webhook signatures |
 | Clearing node | `apps/node` | Hono HTTP server on `node:sqlite`. Registers Budgets, checks every voucher against policy, signs receipts and refusal records, builds and settles batches, books what sellers settle themselves, runs payouts, sends refusal webhooks, exports settlements, and runs the merchant gateway |
@@ -91,7 +91,7 @@ agent                seller (paywall)           clearing node                hub
   |                      |<--------------------------|                           |
   | 200 + PAYMENT-RESPONSE (receipt)                 |                           |
   |<---------------------|                           |                           |
-  |                      |                           | settle_batch(root, claims, expected_net)
+  |                      |                           | settle_batch(batch_id, root, claims, expected_net)
   |                      |                           |-------------------------->|
   |                      |                           | payout(accounts)          |
   |                      |                           |-------------------------->|
@@ -128,9 +128,11 @@ agent                seller (paywall)           clearing node                hub
 8. On `POST /v1/settlements`, or on a timer, the node first reads the hub's settled position of every (Budget, payee) pair it would claim, and books what a payee settled itself.
    It then takes the latest voucher of each pair, checks each Budget on the hub, and packs claims into batches of at most 100 with one Budget per owner.
    It builds a Merkle tree over every call in the batch and calls `settle_batch(batch_id, root, claims, expected_net)`.
-9. The hub checks, in one atomic receipt: the caller is an allowed settler and each Budget's own settler, the batch id is new, each voucher verifies with `env::ed25519_verify`, each claim is inside its cap, payee list and settlement deadline, the netting result equals `expected_net`, and each owner's net debit fits its escrow.
+9. The hub checks, in one atomic receipt: the caller is an allowed settler and each Budget's own settler, the batch id is new for this settler, each voucher verifies with `env::ed25519_verify`, each claim's signed amount is within its cumulative step, each claim is inside its cap, payee list and settlement deadline, the netting result equals `expected_net`, and each owner's net debit fits its escrow.
    Then it debits escrow by each owner's net debit, credits each net creditor, and stores the root.
-   The bytes these entries take are charged to a NEAR storage balance the settler prepaid on the hub with `fund_storage`; `storage_of(account)` reports what is left, and a batch the balance cannot pay for is refused whole with `INSUFFICIENT_STORAGE`.
+   The bytes each Budget's new payees take are charged to the storage reserve its owner prepaid at `open_budget`, 332 bytes per payee the Budget can pay; a Budget whose reserve is short fails the batch with `INSUFFICIENT_RESERVE`.
+   The batch record is charged to a NEAR storage balance the settler prepaid on the hub with `fund_storage`; `storage_of(account)` reports what is left, and a batch the balance cannot pay for is refused whole with `INSUFFICIENT_STORAGE`.
+   The hub logs a NEP-297 `batch_settled` event, as it does for every state change.
 10. Net creditors are paid by `payout`, at most 10 accounts per call.
     An account that is not registered with the token keeps its credit on the hub until it registers; the hub never pays token registration.
 11. Anyone can fetch a call's Merkle path from the node (`GET /v1/receipts/{callId}/proof`) and check it against the hub with `verify_receipt`, or run `pnpm verify:near` with only an RPC URL, the hub account and the receipt file.
@@ -170,7 +172,7 @@ Every send of a batch ends one of three ways:
 | No verdict (timeout, dropped connection, restart in flight) | `unknown` | Returned to the queue; before every later run the node asks the hub again and adopts the batch if it landed |
 
 The node never retries a write with a new nonce.
-The hub refuses a known batch id (`BATCH_EXISTS`) and changes nothing, so a resend cannot settle twice.
+The hub refuses a batch id this settler already used (`BATCH_EXISTS`) and changes nothing, so a resend cannot settle twice; another settler's batch under the same id is no conflict.
 The runbook for each status is in [OPERATIONS.md](OPERATIONS.md).
 
 ## Receipts and proofs
@@ -180,7 +182,7 @@ The runbook for each status is in [OPERATIONS.md](OPERATIONS.md).
 | Leaf | `sha256(0x00 \|\| borsh(domain, hub, network, batch_id, call_id, budget_id, payee, amount, cumulative, request_hash, timestamp_ms, voucher_sig))` |
 | Inner node | `sha256(0x01 \|\| min(a,b) \|\| max(a,b))` |
 | Order | Leaves sorted by `call_id`; an odd node is promoted; depth at most 32 |
-| View | `verify_receipt(batch_id, fields, proof)` takes fields and rebuilds the leaf, never a raw leaf |
+| View | `verify_receipt(settler, batch_id, fields, proof)` takes fields and rebuilds the leaf, never a raw leaf; batch ids belong to their settler, so the view names it |
 
 Because each leaf carries the voucher signature and the request hash, a verifier can confirm that the agent signed that specific call.
 A proof shows inclusion and agent authorization.
@@ -213,7 +215,7 @@ A settler registers for itself, with exactly one yoctoNEAR attached, so its func
 | A voucher the hub already settled | `STALE_VOUCHER` |
 
 So the exit covers calls the node accepted, and a seller must keep its receipts; the SDK voucher store does.
-`settle_own` draws its storage from a reserve the owner paid for when the Budget opened, and then from the caller's deposit.
+`settle_own` draws its storage from the same reserve the owner paid for when the Budget opened, and then from the caller's deposit.
 The node reads `settled_of` before every settlement and books each movement that none of its batches made as a seller settlement.
 Those calls are `settled` with `settledBy: "seller"`; they are in no batch, so they have no Merkle proof.
 
@@ -244,6 +246,8 @@ The platform fee is 0% by default: the node seeds a "No fee" plan, and a non-zer
 | Sign acceptances, including more than escrow covers, which its signatures then prove | Change the hub's code: the hub account has no keys |
 
 Sellers leave through `settle_own`, and owners reclaim unspent escrow after the settlement deadline, which is the earlier of expiry plus 3 days and revoke plus 24 hours.
+The hub refuses a revoke after `validUntil`, so a revoke can never shorten the 3 days after expiry.
+After the deadline the owner can also `prune` the Budget's settled entries and get back the storage it prepaid and did not use.
 A settler that keeps accepting calls after a revoke is not stopped on chain during those 24 hours; its signatures prove what it did, and [SECURITY.md](SECURITY.md) says what that means for an owner.
 Funds are escrowed in an unaudited contract, so these are properties of the code as written and tested, not of an audit.
 
@@ -263,7 +267,7 @@ The node keeps one SQLite database in WAL mode.
 The database holds Budgets, positions, calls, refusals, payee verdicts and approvals, batches with their claims and net entries, seller settlements, payouts, a double-entry ledger, an event log for the live stream, and the gateway and account tables.
 A database belongs to one network, hub and token, and the node refuses to start against another.
 Startup also refuses a database with migration entries this build does not ship, and never drops one.
-At startup the node also checks what the hub requires of a settler: that its receipt key is registered (`receipt_keys`) and that its prepaid storage balance (`storage_of`) covers at least one full batch.
+At startup the node also checks what the hub requires of a settler: that its receipt key is registered (`receipt_keys`) and that its prepaid storage balance (`storage_of`) covers at least 100 batch records (0.281 NEAR).
 A failed check is an error log line and an operator alert; it does not stop the node.
 
 ## Three kinds of chain

@@ -29,6 +29,8 @@ const write = (name: string, note: string, request: unknown, response: unknown) 
 const view = (method: string, args: unknown) => ({ method: "query", params: { request_type: "call_function", finality: "final", account_id: c.hub, method_name: method, args } });
 
 const r = c.receipts_in_leaf_order[2];
+/** The settler whose batch the vector is: batch ids belong to their settler. */
+const SETTLER = "node.payminto.testnet";
 const fields = {
   call_id: r.call_id,
   budget_id: r.budget_id,
@@ -40,21 +42,21 @@ const fields = {
   voucher_sig: r.voucher_sig,
 };
 
-write("batch", `Hub batch view for merkle vector ${c.name}.`, view("batch", { batch_id: c.batch_id }), ok({ root: c.root, settler: "node.payminto.testnet", gross: "15000", net: "9000", at: "1800000060000" }));
-write("batch-missing", "Hub batch view for a batch id the hub never stored.", view("batch", { batch_id: "ab".repeat(32) }), ok(null));
-write("verify-receipt", `Hub verify_receipt for receipt 2 of ${c.name}.`, view("verify_receipt", { batch_id: c.batch_id, fields, proof: r.proof }), ok(true));
+write("batch", `Hub batch view for merkle vector ${c.name}.`, view("batch", { settler: SETTLER, batch_id: c.batch_id }), ok({ root: c.root, settler: SETTLER, gross: "15000", net: "9000", at: "1800000060000" }));
+write("batch-missing", "Hub batch view for a batch id the hub never stored.", view("batch", { settler: SETTLER, batch_id: "ab".repeat(32) }), ok(null));
+write("verify-receipt", `Hub verify_receipt for receipt 2 of ${c.name}.`, view("verify_receipt", { settler: SETTLER, batch_id: c.batch_id, fields, proof: r.proof }), ok(true));
 const pay = { id: "0bafe22156d2698c143b86040446d366ead863ba600d5c924f3d15c786ef4057", merchant: "shop.testnet", amount: "25000000", payer: "buyer.testnet", at: "1800000001000" };
 write("payments", "Hub payments view: one recorded payment, one unknown.", view("payments", { ids: [pay.id, "cd".repeat(32)] }), ok([pay, null]));
 write(
   "unknown-account",
   "View against a hub account that does not exist on this network.",
-  view("batch", { batch_id: c.batch_id }),
+  view("batch", { settler: SETTLER, batch_id: c.batch_id }),
   err("UNKNOWN_ACCOUNT", { requested_account_id: c.hub, block_height: HEIGHT, block_hash: BLOCK }, `account ${c.hub} does not exist while viewing`),
 );
 write(
   "contract-panic",
   "View that panics inside the hub contract.",
-  view("verify_receipt", { batch_id: c.batch_id, fields, proof: r.proof }),
+  view("verify_receipt", { settler: SETTLER, batch_id: c.batch_id, fields, proof: r.proof }),
   err(
     "CONTRACT_EXECUTION_ERROR",
     { vm_error: 'wasm execution failed with error: FunctionCallError(ExecutionError("Smart contract panicked: UNKNOWN_BUDGET"))', block_height: HEIGHT, block_hash: BLOCK },
@@ -64,7 +66,7 @@ write(
 write(
   "legacy-panic",
   "Older nodes answer a panicking view inside a successful envelope.",
-  view("batch", { batch_id: c.batch_id }),
+  view("batch", { settler: SETTLER, batch_id: c.batch_id }),
   { jsonrpc: "2.0", id: "payminto-1", result: { block_hash: BLOCK, block_height: HEIGHT, logs: [], error: 'wasm execution failed with error: FunctionCallError(HostError(GuestPanic { panic_msg: "panicked at src/lib.rs: OVERFLOW" }))' } },
 );
 const TX = "9sK2zUvbYgq7bhUGkNsrJtQJMdz6aRuC5U3hyGJxR7fH";

@@ -10,13 +10,14 @@
  *
  * Pure, for tests. `use-hub-readiness.ts` does the reading.
  */
-import { MAX_CLAIMS, id32Bytes, isId32, maxSettleBatchStorageCost, publicKeyToString } from "@payminto/protocol";
+import { id32Bytes, isId32, maxSettleBatchStorageCost, publicKeyToString } from "@payminto/protocol";
 
 /**
- * The least prepaid storage a server should hold, in yoctoNEAR: what one full batch to new Payees with the longest
- * account names can cost (0.36913 NEAR). The same threshold the server and the deploy script use.
+ * The least prepaid storage a server should hold, in yoctoNEAR: the records of 100 batches (0.281 NEAR). The server
+ * pays only for its own batch records, because each Budget's owner prepays its Payees' settlement storage. The same
+ * threshold the server and the deploy script use.
  */
-export const MIN_SETTLE_STORAGE_YOCTO: bigint = maxSettleBatchStorageCost(MAX_CLAIMS);
+export const MIN_SETTLE_STORAGE_YOCTO: bigint = maxSettleBatchStorageCost(100);
 
 export type HubStanding = {
   /** The receipt keys the hub holds for the server's account, in NEAR text form (`ed25519:...`). */
@@ -44,7 +45,7 @@ export function receiptKeyText(raw: unknown): string {
 
 const YOCTO_PER_NEAR = 10n ** 24n;
 
-/** An exact NEAR figure from yoctoNEAR, with no rounding: "0.36913 NEAR", "1 NEAR", "0 NEAR". */
+/** An exact NEAR figure from yoctoNEAR, with no rounding: "0.281 NEAR", "1 NEAR", "0 NEAR". */
 export function nearText(yocto: bigint): string {
   const whole = yocto / YOCTO_PER_NEAR;
   const frac = (yocto % YOCTO_PER_NEAR).toString().padStart(24, "0").replace(/0+$/, "");
@@ -74,7 +75,7 @@ export function hubReadinessProblems(
     problems.push({
       check: "settle_storage_balance",
       title: "The prepaid storage balance on the hub is low",
-      happened: `${a.operator} holds ${nearText(standing.storageYocto)} of prepaid storage on the hub, below the ${nearText(minStorageYocto)} one full settlement batch can cost. Once it runs out the hub refuses every batch with INSUFFICIENT_STORAGE, and accepted Calls stay unsettled.`,
+      happened: `${a.operator} holds ${nearText(standing.storageYocto)} of prepaid storage on the hub, below the ${nearText(minStorageYocto)} that 100 settlement batch records cost. Once it runs out the hub refuses every batch with INSUFFICIENT_STORAGE, and accepted Calls stay unsettled.`,
       todo: `Call fund_storage on ${a.hub} for ${a.operator} with NEAR attached. Anyone may fund it, and the unused part can be withdrawn later.`,
     });
   }

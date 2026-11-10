@@ -38,7 +38,8 @@ export type HubFacts = { accessKeys: number; codeHash: string; expectedCodeHash:
 
 /**
  * The hub account's NEAR side: the bytes of storage it uses, and its own balance, which is its NEAR less what that
- * storage locks and less the storage balance it holds for the node. If `ownYocto` falls, the hub paid for something.
+ * storage locks and less the storage balance it holds for the node. The Budgets' storage reserves are NEAR their owners
+ * prepaid, so a batch that draws on them lowers `ownYocto` by exactly the bytes it takes; anything more, the hub paid.
  */
 export type HubNear = { storageBytes: number; ownYocto: bigint };
 

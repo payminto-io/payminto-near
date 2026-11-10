@@ -18,9 +18,10 @@ export async function receiptVerifiedOnchain(
 ): Promise<boolean | null> {
   if (!verifyDigest(nodeKey, nodeDigest(attestation), nodeSignature)) return false;
   try {
-    const batch = await chain.batch(batchId);
+    // Batch ids belong to their settler, so the hub is asked for this node's batch under that id.
+    const batch = await chain.batch(batchId, operator);
     if (!batch || batch.settler !== operator) return false;
-    return await chain.verifyReceipt(batchId, fields, proof);
+    return await chain.verifyReceipt(batchId, operator, fields, proof);
   } catch {
     return null;
   }

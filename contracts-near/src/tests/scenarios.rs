@@ -264,7 +264,7 @@ fn offset_lets_a_batch_clear_more_gross_than_escrow() {
     assert_eq!((bb.spent.0, bb.escrow.0), (98, 5));
     assert_eq!(h.hub.credit_of(acct(B)).0, 2);
     assert_eq!(h.hub.credit_of(acct(A)).0, 0);
-    let batch = h.hub.batch(id(1)).unwrap();
+    let batch = h.batch(id(1)).unwrap();
     assert_eq!((batch.gross.0, batch.net.0), (198, 2));
     h.assert_solvent();
 }
@@ -276,7 +276,7 @@ fn same_claims_fail_without_offset_and_clear_with_offset() {
     h.expect_err(INSUFFICIENT_ESCROW, |h| {
         h.settle(id(1), vec![claim(&a, B, &agent(1), 100, 100)], entries(&[(A, B, 100)]));
     });
-    assert_eq!(h.hub.batch(id(1)), None);
+    assert_eq!(h.batch(id(1)), None);
     h.settle(
         id(2),
         vec![claim(&a, B, &agent(1), 100, 100), claim(&b, A, &agent(2), 98, 98)],
@@ -322,7 +322,7 @@ fn fully_offset_batch_moves_no_cash_and_self_payment_is_gross_only() {
         vec![claim(&a, B, &agent(1), 6, 6), claim(&b, A, &agent(2), 6, 6)],
         vec![],
     );
-    assert_eq!(h.hub.batch(id(1)).unwrap().net.0, 0);
+    assert_eq!(h.batch(id(1)).unwrap().net.0, 0);
     assert_eq!(h.budget(&a).spent.0, 6);
     h.assert_solvent();
 
@@ -330,8 +330,8 @@ fn fully_offset_batch_moves_no_cash_and_self_payment_is_gross_only() {
     let a = h.open_simple(A, &agent(1), 100);
     h.settle(id(1), vec![claim(&a, A, &agent(1), 4, 4)], vec![]);
     assert_eq!(h.budget(&a).spent.0, 4);
-    assert_eq!(h.hub.batch(id(1)).unwrap().gross.0, 4);
-    assert_eq!(h.hub.batch(id(1)).unwrap().net.0, 0);
+    assert_eq!(h.batch(id(1)).unwrap().gross.0, 4);
+    assert_eq!(h.batch(id(1)).unwrap().net.0, 0);
     h.assert_solvent();
 }
 
@@ -558,13 +558,15 @@ fn expired_budget_settles_during_grace_then_closes() {
 }
 
 #[test]
-fn revoking_after_expiry_cannot_shorten_or_extend_past_the_earlier_deadline() {
+fn revoking_after_expiry_is_refused_so_the_expiry_grace_always_stands() {
     let mut h = Harness::new();
     let a = one_budget(&mut h, 100, 1000);
     h.advance(DAY + 1);
-    h.ctx(acct(A), 0);
-    h.hub.revoke_budget(a);
-    h.advance(REVOKE_GRACE_MS);
+    h.expect_code(BUDGET_NOT_OPEN, |h| {
+        h.ctx(acct(A), 0);
+        h.hub.revoke_budget(a);
+    });
+    h.advance(EXPIRY_GRACE_MS - 1);
     h.settle(id(1), vec![claim(&a, S, &agent(1), 1, 1)], entries(&[(A, S, 1)]));
     h.advance(1);
     h.expect_err(BUDGET_CLOSED, |h| {
@@ -836,14 +838,17 @@ fn settle_own_after_deadline_is_closed() {
 fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
     let mut h = Harness::new();
     let a = one_budget(&mut h, 1_000, 1_000_000);
-    assert_eq!(h.budget(&a).reserved_settle_own_bytes, RESERVED_SETTLE_OWN_BYTES);
+    assert_eq!(
+        h.budget(&a).storage_reserve_bytes.0,
+        u64::from(DEFAULT_ANY_PAYEES) * crate::PAIR_BYTES
+    );
 
     // Each new payee writes a `settled` and a `credits` entry, drawn from the bytes the owner prepaid.
     let mut settled = 0u128;
     let mut i = 0;
     let per_claim = loop {
         let payee = format!("p{i:02}.test");
-        let reserve = h.budget(&a).reserved_settle_own_bytes;
+        let reserve = h.budget(&a).storage_reserve_bytes.0;
         let before = h.usage();
         h.ctx(acct(&payee), 0);
         h.accounts.insert(acct(&payee));
@@ -852,7 +857,7 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
         settled += 1;
         i += 1;
         assert_eq!(
-            reserve - h.budget(&a).reserved_settle_own_bytes,
+            reserve - h.budget(&a).storage_reserve_bytes.0,
             grown,
             "the reserve pays every byte"
         );
@@ -860,7 +865,7 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
             near_sdk::test_utils::get_created_receipts().is_empty(),
             "nothing to refund"
         );
-        if h.budget(&a).reserved_settle_own_bytes < grown {
+        if h.budget(&a).storage_reserve_bytes.0 < grown {
             break grown;
         }
     };
@@ -870,7 +875,7 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
     );
 
     // The reserve no longer covers a new payee, so the payee pays the rest, and only the rest.
-    let left = h.budget(&a).reserved_settle_own_bytes;
+    let left = h.budget(&a).storage_reserve_bytes.0;
     let owed = u128::from(per_claim - left) * byte_cost();
     let extra = "pxx.test";
     assert_eq!(extra.len(), "p00.test".len(), "same entry size as the measured claims");
@@ -881,7 +886,7 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
         h.own(unpaid);
     });
     assert_eq!(
-        h.budget(&a).reserved_settle_own_bytes,
+        h.budget(&a).storage_reserve_bytes.0,
         left,
         "a refused claim consumes no reserve"
     );
@@ -889,7 +894,7 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
     h.accounts.insert(acct(extra));
     h.own(paid);
     assert_eq!(h.hub.credit_of(acct(extra)).0, 1);
-    assert_eq!(h.budget(&a).reserved_settle_own_bytes, 0);
+    assert_eq!(h.budget(&a).storage_reserve_bytes.0, 0);
     let receipts = near_sdk::test_utils::get_created_receipts();
     assert_eq!(receipts.len(), 1, "only the excess deposit is refunded");
 
@@ -962,21 +967,26 @@ fn verify_receipt_proves_inclusion_only_against_the_stored_root() {
     for (i, (fields, _)) in built.iter().enumerate() {
         let proof = merkle_proof(&leaves, i);
         assert!(
-            h.hub.verify_receipt(id(0xb0), fields.clone(), proof.clone()),
+            h.hub.verify_receipt(node(), id(0xb0), fields.clone(), proof.clone()),
             "leaf {i}"
         );
 
         let mut tampered = fields.clone();
         tampered.amount = U128(fields.amount.0 + 1);
-        assert!(!h.hub.verify_receipt(id(0xb0), tampered, proof.clone()));
+        assert!(!h.hub.verify_receipt(node(), id(0xb0), tampered, proof.clone()));
         let mut wrong_sig = fields.clone();
         wrong_sig.voucher_sig = Sig64([0x11; 64]);
-        assert!(!h.hub.verify_receipt(id(0xb0), wrong_sig, proof.clone()));
-        assert!(!h.hub.verify_receipt(id(0xb1), fields.clone(), proof));
+        assert!(!h.hub.verify_receipt(node(), id(0xb0), wrong_sig, proof.clone()));
+        assert!(!h.hub.verify_receipt(node(), id(0xb1), fields.clone(), proof.clone()));
+        // The batch id is the node's: under another settler's name it proves nothing.
+        assert!(
+            !h.hub
+                .verify_receipt(acct("other-node.test"), id(0xb0), fields.clone(), proof)
+        );
     }
 
     let deep = vec![id(0); MAX_MERKLE_DEPTH + 1];
-    assert!(!h.hub.verify_receipt(id(0xb0), built[0].0.clone(), deep));
+    assert!(!h.hub.verify_receipt(node(), id(0xb0), built[0].0.clone(), deep));
     h.assert_solvent();
 }
 
@@ -993,7 +1003,7 @@ fn admin_methods_are_admin_only_and_need_a_deposit_that_covers_their_storage() {
         h.ctx(acct("attacker.test"), 1);
         h.hub.set_checkout_key(id(1), node());
     });
-    h.expect_err("Requires attached deposit", |h| {
+    h.expect_code(DEPOSIT_REQUIRED, |h| {
         h.ctx(admin(), 0);
         h.hub.set_settler(acct("x.test"), true);
     });
@@ -1082,9 +1092,13 @@ fn solvency_holds_across_a_random_sequence_of_operations() {
     };
     let mut cumulative: BTreeMap<(Id32, String), u128> = BTreeMap::new();
     let mut batch = 0u8;
-    // Every byte written in this walk is charged to the node's storage balance, and every byte freed is returned to
-    // it, so the balance plus the cost of the storage in use never changes: the hub pays for nothing.
-    let paid_for = |h: &mut Harness| h.storage_of(node().as_str()) + u128::from(h.usage()) * byte_cost();
+    // Every byte written in this walk is charged to a Budget's reserve or the node's storage balance, and every byte
+    // freed is returned to whichever paid, so the balance, the reserves and the cost of the storage in use add up to
+    // the same amount throughout: the hub pays for nothing.
+    let paid_for = |h: &mut Harness| {
+        let reserves = h.budget(&a).storage_reserve_bytes.0 + h.budget(&b).storage_reserve_bytes.0;
+        h.storage_of(node().as_str()) + u128::from(h.usage() + reserves) * byte_cost()
+    };
     let storage_invariant = paid_for(&mut h);
     for _ in 0..300 {
         match roll(6) {
@@ -1214,11 +1228,11 @@ fn fund_from_credit_is_owner_only_and_bounded_by_credit() {
 #[test]
 fn fund_from_credit_needs_exactly_one_yocto() {
     let (mut h, a, _) = owner_with_credit();
-    h.expect_err("Requires attached deposit", |h| {
+    h.expect_code(ONE_YOCTO_REQUIRED, |h| {
         h.ctx(acct(A), 0);
         h.hub.fund_from_credit(a, U128(1));
     });
-    h.expect_err("Requires attached deposit", |h| {
+    h.expect_code(ONE_YOCTO_REQUIRED, |h| {
         h.ctx(acct(A), 2);
         h.hub.fund_from_credit(a, U128(1));
     });
