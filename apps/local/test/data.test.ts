@@ -113,7 +113,7 @@ describe("logins", () => {
 
 describe("arguments", () => {
   it("defaults to a run, and reads the modes and ports", () => {
-    expect(parseArgs([])).toEqual({ mode: "run", empty: false, ports: {}, noDashboard: false });
+    expect(parseArgs([])).toEqual({ mode: "run", empty: false, ports: {}, noDashboard: false, intents: { mode: "simulated" } });
     expect(parseArgs(["--check"]).mode).toBe("check");
     expect(parseArgs(["--reset"]).mode).toBe("reset");
     expect(parseArgs(["--empty", "--dashboard-port", "3300", "--node-port=4300"])).toMatchObject({ empty: true, ports: { dashboard: 3300, node: 4300 } });

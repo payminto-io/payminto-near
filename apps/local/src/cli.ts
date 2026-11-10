@@ -10,6 +10,7 @@ import { parseArgs, USAGE, UsageError, DATA_DIR, type LocalOptions } from "./con
 import { runChecks } from "./check.ts";
 import { DataError, dataPaths, runningStack, wipeData } from "./data.ts";
 import { guide } from "./guide.ts";
+import { liveBanner } from "./intents-live.ts";
 import { PortBusyError } from "./ports.ts";
 import { StartError, startStack, type Stack } from "./stack.ts";
 
@@ -90,7 +91,13 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 }
 
 say("Payminto local: the real contracts, the real clearing node and the dashboard, on a NEAR node on this machine.");
-say("Nothing here reaches testnet or mainnet, and nothing needs an account, a wallet extension or a secret.");
+if (opts.intents.mode === "live") {
+  // Said before anything starts, so a person who did not mean it can press Ctrl-C now.
+  say("");
+  for (const line of liveBanner(opts.intents.payout)) say(line);
+} else {
+  say("Nothing here reaches testnet or mainnet, and nothing needs an account, a wallet extension or a secret.");
+}
 say("");
 try {
   stack = await startStack(opts, say);

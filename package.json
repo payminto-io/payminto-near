@@ -13,6 +13,7 @@
     "demo": "node apps/node/scripts/check-runtime.mjs && pnpm --filter @payminto/demo demo",
     "demo:stage": "node apps/node/scripts/check-runtime.mjs && pnpm --filter @payminto/demo demo:stage",
     "local": "node apps/node/scripts/check-runtime.mjs && pnpm --silent --filter @payminto/local local",
+    "live:capture": "node apps/node/scripts/check-runtime.mjs && pnpm --silent --filter @payminto/local capture",
     "verify:near": "node apps/node/scripts/check-runtime.mjs && pnpm --silent --filter @payminto/demo verify:near",
     "mcp": "node apps/node/scripts/check-runtime.mjs && pnpm --filter @payminto/mcp start",
     "market": "pnpm --silent --filter @payminto/agent-market market",

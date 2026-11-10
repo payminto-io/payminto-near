@@ -18,6 +18,8 @@ export type DashboardOptions = {
   relayerUrl: string;
   /** The RPC the browser reads proofs from; empty lets the page use the RPC the local node reports. */
   rpcUrl: string;
+  /** `--intents live --intents-rpc`: the NEAR mainnet RPC the proof page reads an any-chain delivery from; null for the public one. */
+  mainnetRpcUrl?: string | null;
   logPath: string;
   readyTimeoutMs?: number;
 };
@@ -68,6 +70,7 @@ export function dashboardEnv(o: DashboardOptions, base: NodeJS.ProcessEnv = proc
     NEXT_PUBLIC_LOCAL_SIGNER_TOKEN: o.signerToken,
     NEXT_PUBLIC_RELAYER_URL: o.relayerUrl,
     NEXT_PUBLIC_NEAR_RPC_URL: o.rpcUrl,
+    NEXT_PUBLIC_NEAR_MAINNET_RPC_URL: o.mainnetRpcUrl ?? "",
     // Set, and empty: a value in apps/dashboard/.env.local cannot turn the mock node back on.
     NEXT_PUBLIC_MOCK: "",
     NEXT_TELEMETRY_DISABLED: "1",

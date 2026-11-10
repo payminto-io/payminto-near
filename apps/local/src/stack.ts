@@ -17,6 +17,7 @@ import type { Hono } from "hono";
 import { createLogger as createRelayerLogger, loadConfig as loadRelayerConfig, startRelayer, type RunningRelayer } from "@payminto/relayer";
 import { FakeOneClick } from "@payminto/near-addons/intents/fake-server";
 import { createLocalAccounts, drainNear, type LocalAccounts } from "./accounts.ts";
+import { DEFAULT_MAINNET_RPC, intentsNodeEnv, payoutStatusText, readMainnetPayout, type MainnetPayout } from "./intents-live.ts";
 import { runActivity, type ActivityResult } from "./activity.ts";
 import { AgentDesk } from "./agents.ts";
 import { DASHBOARD_DIR, NETWORK, type LocalOptions, type Ports } from "./config.ts";
@@ -47,8 +48,10 @@ export type Stack = {
   setup: SetupResult;
   activity: ActivityResult | null;
   dashboard: DashboardProcess | null;
-  /** The fake 1Click server of the simulated any-chain checkout; its deliveries are real transfers on this chain. */
-  oneclick: FakeOneClick;
+  /** The fake 1Click server of the simulated any-chain checkout; its deliveries are real transfers on this chain. Null live. */
+  oneclick: FakeOneClick | null;
+  /** `--intents live`: the payout account as read from NEAR mainnet at start; null when it could not be read, or simulated. */
+  mainnetPayout: MainnetPayout | null;
   /** Calls back once when a part of the stack dies on its own. */
   onCrash(cb: (what: string, detail: string) => void): void;
   stop(): Promise<void>;
@@ -155,32 +158,38 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     // ---- 1b. The fake 1Click server (NEAR Intents, simulated). It never talks to the live API. A delivery is a real
     //      ft_transfer of mock USDC from the local solver account to the merchant's account, so the node's delivery
     //      check reads a real transaction on this chain.
-    const oneclickLog: WriteStream = createWriteStream(join(paths.logs, "oneclick-fake.log"), { flags: "a" });
-    cleanups.push(() => new Promise<void>((r) => oneclickLog.end(() => r())));
-    const signers = hub.sandbox.signers;
-    const oneclick = new FakeOneClick({
-      stepMs: check ? 300 : 2_000,
-      refundAfterMs: check ? 600 : 20_000,
-      log: (line) => void oneclickLog.write(`${new Date().toISOString()} ${line}\n`),
-      accountExists: async (id) => {
-        try {
-          await rpc(rpcUrl, "query", { request_type: "view_account", finality: "final", account_id: id });
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      deliver: async ({ recipient, amount }) => {
-        const txHash = await signers.built(accounts.solver, `deliver ${amount} to ${recipient}`, (b) =>
-          b.functionCall(hub.names.token, "ft_transfer", { receiver_id: recipient, amount: amount.toString(), memo: "NEAR Intents delivery (simulated)" }, { gas: "30 Tgas", attachedDeposit: 1n }),
-        );
-        oneclickLog.write(`${new Date().toISOString()} delivered ${amount} to ${recipient} in tx ${txHash}\n`);
-        return { txHash };
-      },
-    });
-    urls.oneclick = await oneclick.listen(0);
-    cleanups.push(() => oneclick.close());
-    say(`   NEAR Intents (simulated): a fake 1Click server on ${urls.oneclick}, signing with a public test key; ${accounts.solver} delivers its mock USDC on this chain.`);
+    //      Live (`--intents live`): no fake server; the node talks to the real 1Click API and reads NEAR mainnet.
+    const live = opts.intents.mode === "live" ? opts.intents : null;
+    let oneclick: FakeOneClick | null = null;
+    if (!live) {
+      const oneclickLog: WriteStream = createWriteStream(join(paths.logs, "oneclick-fake.log"), { flags: "a" });
+      cleanups.push(() => new Promise<void>((r) => oneclickLog.end(() => r())));
+      const signers = hub.sandbox.signers;
+      const fake = new FakeOneClick({
+        stepMs: check ? 300 : 2_000,
+        refundAfterMs: check ? 600 : 20_000,
+        log: (line) => void oneclickLog.write(`${new Date().toISOString()} ${line}\n`),
+        accountExists: async (id) => {
+          try {
+            await rpc(rpcUrl, "query", { request_type: "view_account", finality: "final", account_id: id });
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        deliver: async ({ recipient, amount }) => {
+          const txHash = await signers.built(accounts.solver, `deliver ${amount} to ${recipient}`, (b) =>
+            b.functionCall(hub.names.token, "ft_transfer", { receiver_id: recipient, amount: amount.toString(), memo: "NEAR Intents delivery (simulated)" }, { gas: "30 Tgas", attachedDeposit: 1n }),
+          );
+          oneclickLog.write(`${new Date().toISOString()} delivered ${amount} to ${recipient} in tx ${txHash}\n`);
+          return { txHash };
+        },
+      });
+      urls.oneclick = await fake.listen(0);
+      oneclick = fake;
+      cleanups.push(() => fake.close());
+      say(`   NEAR Intents (simulated): a fake 1Click server on ${urls.oneclick}, signing with a public test key; ${accounts.solver} delivers its mock USDC on this chain.`);
+    }
 
     // ---- 2. The clearing node: the real node, its real NearRpcChain, the gateway on, a database that passes the guard.
     assertLocalDatabase(paths.db);
@@ -232,13 +241,9 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       // hits it; on one machine there is nobody to keep out.
       AUTH_RATE_LIMIT_PER_MIN: "600",
       LOG_LEVEL: "info",
-      // The any-chain checkout, simulated: the fake 1Click server, its test key, and this chain standing in for mainnet.
-      INTENTS_CHECKOUT: "simulated",
-      ONECLICK_BASE_URL: urls.oneclick,
-      ONECLICK_MANAGER_PUBLIC_KEY: oneclick.managerPublicKey,
-      NEAR_MAINNET_RPC_URL: rpcUrl,
-      INTENTS_USDC_CONTRACT: hub.names.token,
-      INTENTS_DELIVERY_SENDERS: accounts.solver,
+      // The any-chain checkout. Simulated: the fake 1Click server, its test key, and this chain standing in for mainnet.
+      // Live: the real 1Click API and NEAR mainnet, for that rail only (see intents-live.ts).
+      ...intentsNodeEnv(opts.intents, oneclick ? { baseUrl: urls.oneclick, managerPublicKey: oneclick.managerPublicKey, rpcUrl, token: hub.names.token, solver: accounts.solver } : null),
       ...hub.nodeEnv,
     });
     let node: ClearingNode;
@@ -253,6 +258,12 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     if (hubReadiness.length > 0) throw new StartError(`The clearing node reports that it is not ready on the hub:\n  - ${hubReadiness.join("\n  - ")}\nIts log is ${paths.nodeLog}.`);
     const nodeKey = node.services.chain.nodeKey;
     say(`2. Clearing node: ${urls.node} (the real node, NearRpcChain against ${rpcUrl}, gateway on), database ${paths.db}, log ${paths.nodeLog}`);
+    // Live: what the payout account needs, read from NEAR mainnet (two views; nothing is sent).
+    let mainnetPayout: MainnetPayout | null = null;
+    if (live) {
+      mainnetPayout = await readMainnetPayout(live.rpcUrl ?? DEFAULT_MAINNET_RPC, live.payout).catch(() => null);
+      say(`   LIVE any-chain checkout: ${payoutStatusText(live.payout, mainnetPayout)}`);
+    }
 
     // ---- 3. The local signer.
     const signerToken = randomBytes(32).toString("base64url");
@@ -321,6 +332,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       desk,
       loginsPath: paths.logins,
       say,
+      simulatedIntents: !live,
       registerServices: async (owner) => {
         const reg = await registerServices({ session: owner, nodeUrl: urls.node, baseUrl: urls.services, accounts, voucherPath: paths.vouchers });
         cleanups.push(() => reg.close());
@@ -351,7 +363,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     let dashboard: DashboardProcess | null = null;
     if (!opts.noDashboard) {
       say(`${opts.empty ? 5 : 6}. Dashboard: starting next dev in apps/dashboard (the first start compiles for a while), log ${paths.dashboardLog}`);
-      dashboard = DashboardProcess.spawn({ port: ports.dashboard, nodeUrl: urls.node, signerUrl: urls.signer, signerToken, relayerUrl: urls.relayer, rpcUrl: "", logPath: paths.dashboardLog });
+      dashboard = DashboardProcess.spawn({ port: ports.dashboard, nodeUrl: urls.node, signerUrl: urls.signer, signerToken, relayerUrl: urls.relayer, rpcUrl: "", mainnetRpcUrl: live?.rpcUrl ?? null, logPath: paths.dashboardLog });
       const d = dashboard;
       cleanups.push(() => d.stop());
       process.on("exit", () => d.killSync());
@@ -390,6 +402,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       activity,
       dashboard,
       oneclick,
+      mainnetPayout,
       onCrash: (cb) => void crashListeners.push(cb),
       stop,
     };
