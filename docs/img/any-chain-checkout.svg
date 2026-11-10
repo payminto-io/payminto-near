@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" role="img" aria-labelledby="t d">
+  <title id="t">Any-chain checkout through NEAR Intents</title>
+  <desc id="d">A buyer picks a token and chain on the Payminto checkout. The node asks NEAR Intents (the 1Click API) for a signed quote that delivers exactly the invoice amount, checks it, and shows a deposit address. The buyer sends from their own wallet, NEAR Intents delivers USDC to the merchant's own NEAR account, and the node reads that delivery on NEAR before marking the payment paid.</desc>
+  <style>
+    .bg { fill: #ffffff; stroke: #e1e4ea; }
+    .head { fill: #ffffff; stroke: #2443b8; stroke-width: 1.5; }
+    .hubhead { fill: #2443b8; stroke: #2443b8; }
+    .lane { stroke: #c4c9d4; stroke-width: 1.2; stroke-dasharray: 4 5; }
+    .msg { stroke: #0e1726; stroke-width: 1.6; fill: none; }
+    .ret { stroke: #5b6475; stroke-width: 1.4; fill: none; stroke-dasharray: 6 4; }
+    .chain { stroke: #2443b8; stroke-width: 2; fill: none; }
+    .ah { fill: #0e1726; }
+    .ahr { fill: #5b6475; }
+    .ahc { fill: #2443b8; }
+    .note { fill: #fff8e6; stroke: #e0b44c; }
+    .foot { fill: #f3f4f6; }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0e1726; }
+    .h { font-size: 15px; font-weight: 600; text-anchor: middle; }
+    .hs { font-size: 12px; font-weight: 500; text-anchor: middle; fill: #4a5363; }
+    .hw { font-size: 15px; font-weight: 600; text-anchor: middle; fill: #ffffff; }
+    .hws { font-size: 12px; font-weight: 500; text-anchor: middle; fill: #dfe5fb; }
+    .l { font-size: 13px; text-anchor: middle; }
+    .lr { font-size: 13px; text-anchor: middle; fill: #4a5363; }
+    .lc { font-size: 13px; text-anchor: middle; fill: #2443b8; font-weight: 600; }
+    .n { font-size: 12.5px; text-anchor: middle; }
+    .num { font-weight: 700; }
+    .f { font-size: 13px; text-anchor: middle; fill: #4a5363; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #121a26; stroke: #263142; }
+      .head { fill: #121a26; stroke: #8ea2f5; }
+      .hubhead { fill: #8ea2f5; stroke: #8ea2f5; }
+      .lane { stroke: #3a4658; }
+      .msg { stroke: #e6eaf0; }
+      .ret { stroke: #9aa4b5; }
+      .chain { stroke: #8ea2f5; }
+      .ah { fill: #e6eaf0; }
+      .ahr { fill: #9aa4b5; }
+      .ahc { fill: #8ea2f5; }
+      .note { fill: #2a2414; stroke: #8a6d2a; }
+      .foot { fill: #172131; }
+      text { fill: #e6eaf0; }
+      .hs, .lr, .f { fill: #aab3c2; }
+      .hw { fill: #0c121b; }
+      .hws { fill: #1f2a44; }
+      .lc { fill: #8ea2f5; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ahc" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="959" height="559" rx="14"/>
+
+  <!-- lanes -->
+  <line class="lane" x1="110" y1="80" x2="110" y2="490"/>
+  <line class="lane" x1="360" y1="80" x2="360" y2="490"/>
+  <line class="lane" x1="610" y1="80" x2="610" y2="490"/>
+  <line class="lane" x1="850" y1="80" x2="850" y2="490"/>
+
+  <!-- heads -->
+  <rect class="head" x="30" y="22" width="160" height="56" rx="9"/>
+  <text class="h" x="110" y="46">Buyer</text>
+  <text class="hs" x="110" y="64">any chain, own wallet</text>
+  <rect class="head" x="270" y="22" width="180" height="56" rx="9"/>
+  <text class="h" x="360" y="46">Payminto checkout</text>
+  <text class="hs" x="360" y="64">and clearing node</text>
+  <rect class="head" x="520" y="22" width="180" height="56" rx="9"/>
+  <text class="h" x="610" y="46">NEAR Intents</text>
+  <text class="hs" x="610" y="64">1Click API, solvers</text>
+  <rect class="hubhead" x="770" y="22" width="160" height="56" rx="9"/>
+  <text class="hw" x="850" y="46">Merchant</text>
+  <text class="hws" x="850" y="64">own account on NEAR</text>
+
+  <!-- 1 pick -->
+  <text class="l" x="235" y="112"><tspan class="num">1</tspan>  picks a token and chain,</text>
+  <text class="l" x="235" y="128">gives a refund address</text>
+  <line class="msg" x1="112" y1="138" x2="356" y2="138" marker-end="url(#a)"/>
+
+  <!-- 2 quote -->
+  <text class="l" x="485" y="164"><tspan class="num">2</tspan>  quote: the merchant</text>
+  <text class="l" x="485" y="180">gets the exact invoice</text>
+  <line class="msg" x1="362" y1="190" x2="606" y2="190" marker-end="url(#a)"/>
+  <text class="lr" x="485" y="214">signed quote, deposit address</text>
+  <line class="ret" x1="608" y1="224" x2="364" y2="224" marker-end="url(#r)"/>
+
+  <!-- 3 check -->
+  <rect class="note" x="270" y="238" width="180" height="42" rx="6"/>
+  <text class="n" x="360" y="255"><tspan class="num">3</tspan>  checks the signature,</text>
+  <text class="n" x="360" y="272">amount, recipient, deadline</text>
+  <text class="lr" x="235" y="300">"Send exactly 5.010154 USDC on Base"</text>
+  <line class="ret" x1="358" y1="310" x2="114" y2="310" marker-end="url(#r)"/>
+
+  <!-- 4 deposit -->
+  <text class="l" x="360" y="340"><tspan class="num">4</tspan>  sends from their own wallet, on their own chain</text>
+  <line class="msg" x1="112" y1="350" x2="606" y2="350" marker-end="url(#a)"/>
+
+  <!-- 5 deliver -->
+  <text class="lc" x="730" y="380"><tspan class="num">5</tspan>  swap, deliver USDC</text>
+  <line class="chain" x1="612" y1="390" x2="846" y2="390" marker-end="url(#c)"/>
+
+  <!-- 6 verify -->
+  <text class="l" x="605" y="420"><tspan class="num">6</tspan>  reads the NEP-141 transfer on NEAR itself</text>
+  <line class="msg" x1="362" y1="430" x2="846" y2="430" marker-end="url(#a)"/>
+
+  <!-- 7 paid -->
+  <text class="lr" x="235" y="472"><tspan class="num" style="fill:inherit">7</tspan>  "Payment complete", both transactions</text>
+  <line class="ret" x1="358" y1="482" x2="114" y2="482" marker-end="url(#r)"/>
+  <text class="lr" x="605" y="448">signed webhook to the merchant</text>
+  <line class="ret" x1="362" y1="458" x2="846" y2="458" marker-end="url(#r)"/>
+
+  <!-- footer -->
+  <rect class="foot" x="16" y="498" width="928" height="46" rx="8"/>
+  <text class="f" x="480" y="526">Non-custodial: the money goes from the buyer's wallet through NEAR Intents to the merchant's own account. Payminto holds none of it.</text>
+</svg>
