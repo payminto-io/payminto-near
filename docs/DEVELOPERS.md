@@ -926,7 +926,7 @@ The refund request bodies use camelCase (`paymentId`, `requestApproval`, `txHash
 | `GET /v1/platform/fees` | `earnings.read` | Fees collected; zero under the default plan |
 | `GET /v1/fee-plans`, `POST /v1/fee-plans`, `GET /v1/fee-plans/:id`, `PATCH /v1/fee-plans/:id` | `pricing.read`, `pricing.manage` | Fee plans; `platform_fee_bps` from 0 to 1000 |
 | `GET /v1/merchants`, `POST /v1/merchants`, `GET /v1/merchants/:id`, `PATCH /v1/merchants/:id` | `businesses.read`, `businesses.manage` | Businesses; creating one needs a NEP-413 payout proof |
-| Platform webhook endpoints under `/v1/platform/webhooks` | `agents.read`, `agents.manage` | Alert endpoints for `budget.refused`; see "Webhooks" |
+| Platform webhook endpoints under `/v1/platform/webhooks` | `agents.read`, `agents.manage` | Alert endpoints for `budget.refused` and `payment.deposit_failed`; see "Webhooks" |
 
 A payout proof is `{ payout, timestamp, public_key, signature }`: a NEP-413 `signMessage` result over the text `Payminto payout change <merchant id or "new"> <payout> <timestamp> network <network> hub <hub>`, signed by a full-access key of the payout account, at most 600 seconds old.
 `payoutProofRequest` in `packages/protocol/src/gateway.ts` builds the exact request.
@@ -1031,6 +1031,214 @@ One entry of `GET /v1/directory`:
 }
 ```
 
+### Any-chain checkout (NEAR Intents)
+
+A buyer pays from another chain and the merchant receives exactly the invoice amount of USDC in its own NEAR mainnet account, through the 1Click API.
+The method is `oneclick`.
+It is an add-on: the core `PAYMENT_METHODS` stay `wallet` and `voucher`, and `CHECKOUT_METHODS` in `@payminto/protocol` adds `oneclick`.
+Clients that parse `method` or `methods` must accept `oneclick` on a node that runs it.
+Every type below is exported from `@payminto/protocol` (`packages/protocol/src/intents.ts`).
+
+The node runs it only with `INTENTS_CHECKOUT=simulated` or `live` (default `off`; see `apps/node/.env.example`).
+`simulated` talks to the fake 1Click server and delivers on a local chain; `pnpm local` sets it up.
+`live` moves real money on NEAR mainnet and is only ever turned on by the operator.
+Every object that carries intents data has `mode` and `label`: `Live - NEAR mainnet` or `Simulated - no real money`.
+Show the label wherever intents data is shown.
+With `INTENTS_CHECKOUT=off` every route below answers `404 INTENTS_CHECKOUT_OFF`, except `GET /v1/platform/intents`, which answers `{ "object": "intents_status", "mode": "off", "label": null }`.
+
+Public checkout routes (no auth):
+
+| Method and path | Does |
+|---|---|
+| `GET /v1/checkout/:id/intents/options` | `IntentsOptions`: each offered origin with an indicative price from a signed dry quote, or greyed with a reason; cached 30 seconds |
+| `POST /v1/checkout/:id/intents/quotes` | Body `{ "origin_asset", "refund_to" }`; `201` with a new `IntentsQuote`, or `200` with the active one for the same origin and refund address when 10 minutes or more are left; `Idempotency-Key` honored; 10 per client address per minute |
+| `GET /v1/checkout/:id/intents/quotes/:qid` | One `IntentsQuote` |
+| `POST /v1/checkout/:id/intents/quotes/:qid/deposit` | Body `{ "tx_hash" }` (the buyer's transaction on the origin chain); forwards it to 1Click to speed detection and checks now; answers the `IntentsQuote` |
+| `POST /v1/checkout/:id/intents/quotes/:qid/simulate` | Simulated mode only, `404` in live mode: body `{ "amount"? }` in the origin token's base units (default `send_exactly`); the fake server receives that deposit; answers the `IntentsQuote` |
+
+`GET /v1/checkout/:id` and every `status` event of `GET /v1/checkout/:id/events` carry `methods` with `oneclick` when the payment can be paid from another chain now, and an `intents` object (null when the node runs with `INTENTS_CHECKOUT=off`):
+
+```json
+{
+  "methods": ["wallet", "oneclick"],
+  "intents": {
+    "mode": "simulated",
+    "label": "Simulated - no real money",
+    "available": true,
+    "reason": null,
+    "settlement_network": "near:mainnet (simulated)",
+    "active_quote": null
+  }
+}
+```
+
+`active_quote` is the newest quote of the payment that has not expired, whatever its state, so the page can show progress, success or a returned deposit.
+`reason` says in plain words why `available` is false (for example "This checkout expires too soon to pay from another chain.").
+A payment can be paid from another chain while it is open, has 10 minutes or more left, carries no fee, and the business turned `oneclick` on with a verified NEAR account.
+
+The origins are USDC on Base, Ethereum, Arbitrum, Solana and Polygon, USDT on Ethereum, and ETH on Base and Ethereum.
+One row of `IntentsOptions.options`:
+
+```json
+{
+  "origin": { "asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", "chain": "base", "chain_name": "Base", "symbol": "USDC", "decimals": 6 },
+  "available": true,
+  "reason": null,
+  "slippage_bps": 10,
+  "amount_in": { "amount": "4509585", "formatted": "4.509585", "symbol": "USDC" },
+  "amount_in_usd": "4.507570845505",
+  "time_estimate_sec": 35,
+  "fees": { "...": "the same IntentsFeeLines as on a quote" }
+}
+```
+
+A greyed row has `available: false`, `reason` (for example "The minimum on this network is $100."), and null amounts.
+
+An `IntentsQuote`, the deposit screen:
+
+```json
+{
+  "id": "iq_ccbq7ktq3ypx2m3l3wmbqcbb",
+  "object": "intents_quote",
+  "payment_id": "pay_boxykimcem2hjper3q3nb53l",
+  "mode": "simulated",
+  "label": "Simulated - no real money",
+  "status": "awaiting_deposit",
+  "provider_status": null,
+  "origin": { "asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", "chain": "base", "chain_name": "Base", "symbol": "USDC", "decimals": 6 },
+  "deposit_address": "0x87151c5ac911a4459762ce215649313cd369dc05",
+  "deposit_memo": null,
+  "send_exactly": { "amount": "4509585", "formatted": "4.509585", "symbol": "USDC" },
+  "min_amount_in": { "amount": "4505080", "formatted": "4.505080", "symbol": "USDC" },
+  "amount_out": { "amount": "4500000", "formatted": "4.500000", "symbol": "USDC" },
+  "amount_in_usd": "4.507570845505",
+  "fees": {
+    "send_exactly": { "amount": "4509585", "formatted": "4.509585", "symbol": "USDC" },
+    "merchant_receives": { "amount": "4500000", "formatted": "4.500000", "symbol": "USDC" },
+    "swap_cost": { "amount": "5080", "formatted": "0.005080", "unit": "USDC" },
+    "price_buffer": { "amount": "4505", "formatted": "0.004505", "symbol": "USDC" },
+    "refund_fee": { "amount": "2402", "formatted": "0.002402", "symbol": "USDC" },
+    "delivery_fee": { "amount": "4628", "formatted": "0.004628", "symbol": "USDC" },
+    "time_estimate_sec": 35
+  },
+  "slippage_bps": 10,
+  "time_estimate_sec": 35,
+  "refund_to": "0x5f2b...554f",
+  "recipient": "anychain.test.near",
+  "settlement_network": "near:mainnet (simulated)",
+  "deadline": "2026-11-10T22:38:01.000Z",
+  "deadline_passed": false,
+  "inactive_at": "2026-11-10T22:38:01.000Z",
+  "deposited": null,
+  "delivered": null,
+  "refunded": null,
+  "refund_reason": null,
+  "origin_txs": [],
+  "destination_txs": [],
+  "near_txs": [],
+  "delivery_tx": null,
+  "verification": null,
+  "steps": [
+    { "key": "waiting", "label": "Waiting for deposit", "state": "current" },
+    { "key": "received", "label": "Deposit received", "state": "pending" },
+    { "key": "converting", "label": "Converting to USDC", "state": "pending" },
+    { "key": "delivered", "label": "Delivered to merchant", "state": "pending" }
+  ],
+  "warning": "Send only USDC on the Base network, to this address. Other tokens, other networks, or a deposit after 22:38 UTC may be lost.",
+  "correlation_id": "0f8b2c1e-6a43-4c1b-9d61-3f0c8f0d2a77",
+  "signature_valid": true,
+  "created_at": "2026-11-10T22:08:01.512Z",
+  "updated_at": "2026-11-10T22:08:01.512Z"
+}
+```
+
+Show `deadline` (when the deposit address goes inactive), never the payment's `expires_at`.
+`swap_cost` is in the origin token for a stablecoin and in USD (`unit: "USD"`, `amount` in micro-dollars) for ETH.
+`price_buffer` goes back to the refund address when the price holds.
+Every fee number comes from the signed quote; none is a constant.
+On the public routes `refund_to` is masked; the merchant sees it in full.
+`steps[].state` is `done`, `current`, `pending` or `failed`.
+`explorer_url` on a transaction is null when there is no explorer (simulated mode, and 1Click sends none).
+
+States of a quote (`status`):
+
+| Status | Meaning | Payment |
+|---|---|---|
+| `awaiting_deposit` | Nothing arrived yet | open |
+| `deposit_detected` | 1Click saw the deposit | processing (a pending `oneclick` credit holds expiry) |
+| `incomplete_deposit` | Less than `min_amount_in` arrived; top it up before `deadline` or it is returned | processing |
+| `processing` | The swap runs | processing |
+| `delivered` | 1Click says the USDC was delivered; the node is reading it on NEAR | processing |
+| `confirmed` | The node read the delivery on NEAR (`verification: rpc_checked`), or could not read it for 10 minutes and took 1Click's word (`provider_only`) | paid (overpaid when two quotes delivered) |
+| `refunded` | The deposit went back to `refund_to`; `refunded`, `refund_reason` say how much and why | open again, or expired |
+| `failed` | The swap failed | open again, or expired |
+| `expired` | The address never saw a deposit, a day after its deadline | unchanged |
+
+The node confirms only after it read the NEP-141 `ft_transfer` event of the USDC contract to the merchant's account for at least the invoice amount in the delivery transaction.
+A transaction that shows less, or another recipient, is never confirmed and stays `delivered`.
+`deadline_passed` turns true at `deadline`; the quote stays watched for a day, because a late deposit can still be swapped or returned, so offer "Get a new address" then.
+
+Errors of `POST .../quotes` (all `{ "error": { "code", "message", "details"? } }`, `message` in plain words for the buyer):
+
+| Status and code | When |
+|---|---|
+| `400 ORIGIN_NOT_OFFERED`, `400 INVALID_REFUND_ADDRESS` | Not one of the origins; not an address of the origin chain |
+| `409 INTENTS_UNAVAILABLE` | `message` is the same plain reason as `intents.reason` |
+| `409 INTENTS_QUOTE_LIMIT` | 5 deposit addresses of this payment are waiting already |
+| `502 INTENTS_QUOTE_FAILED` | 1Click refused the route (for example a minimum); `details.provider_message` has its words |
+| `502 INTENTS_QUOTE_REFUSED` | 1Click's quote failed a check (signature, echoed fields, `minAmountOut`, recipient, deposit address, memo, deadline); `details.refusals` lists them; no deposit address is shown or stored |
+| `503 INTENTS_BUSY` | 1Click rate limited the node or could not be reached |
+| `429 RATE_LIMITED` | More than 10 deposit addresses a minute from one client address |
+
+Merchant and platform routes:
+
+| Method and path | Does |
+|---|---|
+| `GET /v1/merchant/intents-payout` | `IntentsPayout`: the business's NEAR account for any-chain payments and its checks, read now (`payments.read`) |
+| `PUT /v1/merchant/intents-payout` | Body `{ "account", "proof": { "timestamp", "public_key", "signature" } }`: checks the NEP-413 signature, that the key is a full-access key of the account, that the account exists, and its USDC registration (`payout.change`, a verified email and a fresh password check, like a payout change) |
+| `PUT /v1/merchants/:id/methods` | Turns `oneclick` on or off; turning it on is refused with `409 INTENTS_PAYOUT_REQUIRED` or `INTENTS_PAYOUT_NOT_REGISTERED` until the account is verified |
+| `GET /v1/merchants/:id/methods`, `GET /v1/merchant` | `methods` list the `oneclick` row too when the node runs the any-chain checkout |
+| `GET /v1/payments/:id` | Adds `intents: { mode, label, quotes: IntentsQuote[] }`, null when the payment has no quote; merchant quotes carry the full `refund_to` and `quote_response`, the whole signed 1Click answer, for disputes |
+| `GET /v1/platform/intents` | `IntentsPlatformStatus`: mode, base URL, whether an API key is set, which manager key checks quotes, the last 1Click call, the rate limit left and quote counts by state (`platform.read`) |
+
+The proof is a NEP-413 `signMessage` of `intentsPayoutProofRequest(merchantId, account, timestamp, { settlementNetwork, hub })` from `@payminto/protocol`, signed by the account itself within 10 minutes.
+The message reads `Payminto intents payout <merchant id> <account> <timestamp> network <settlement network> hub <hub>`, with the hub as the recipient.
+`settlementNetwork` and `hub` are in `IntentsPayout.proof_scope`.
+`IntentsPayout`:
+
+```json
+{
+  "object": "intents_payout",
+  "mode": "simulated",
+  "label": "Simulated - no real money",
+  "settlement_network": "near:mainnet (simulated)",
+  "account": "anychain.test.near",
+  "verified": false,
+  "checks": { "exists": true, "usdc_registered": false, "proven": true, "proven_at": "2026-11-10T22:01:12.044Z" },
+  "usdc": { "contract": "usdc.test.near", "asset_id": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", "decimals": 6 },
+  "storage_step": {
+    "why": "anychain.test.near is not registered with USDC yet, so a delivery to it would fail. Send this storage_deposit from anychain.test.near (it costs 0.00125 NEAR, once).",
+    "deposit_near": "0.00125",
+    "transaction": { "receiverId": "usdc.test.near", "actions": [{ "type": "FunctionCall", "params": { "methodName": "storage_deposit", "args": { "account_id": "anychain.test.near", "registration_only": true }, "gas": "30000000000000", "deposit": "1250000000000000000000" } }] }
+  },
+  "enabled": false,
+  "proof_scope": { "settlement_network": "near:mainnet (simulated)", "hub": "hub.test.near" },
+  "checked_at": "2026-11-10T22:01:12.101Z"
+}
+```
+
+`storage_step` is the one human step when the account is not registered with USDC; the account sends it from its own wallet, and the next `GET` sees it.
+
+Webhooks: `payment.processing`, `payment.paid`, `payment.overpaid` and `payment.expired` come as for any payment.
+`payment.deposit_returned` (1Click returned a deposit) and `payment.deposit_failed` (the swap failed; also sent to platform alert endpoints) are new; their object is the payment with `intents` and `deposit`, the quote they are about (`IntentsDepositEvent`).
+Subscribe to them like any other event.
+
+Reconciliation: an any-chain payment is one row with `method` `oneclick`, `payer` the buyer's refund address prefixed by its chain (`base:0x...`), `currency` `USDC (NEAR mainnet)`, and four columns at the end of the CSV: `settlement_network`, `origin_asset`, `origin_amount` and `deposit_address`.
+Its `transactions` have a `leg`: `origin_deposit` (the buyer's deposit, in the origin token's units) and `near_delivery` (the credit, in USDC).
+The buyer bears the swap cost, so `fee_total` is 0 and `net_amount` equals the amount.
+
+`packages/near-addons/README.md` section 1 has the 1Click side: the quote checks, the fake server and the `quote-in` command.
+
 ### Hosted business agents
 
 These routes exist when the gateway is on and `AGENTS_ENABLED` is true; see [AGENTS.md](AGENTS.md).
@@ -1064,8 +1272,8 @@ Webhook routes are part of the gateway, so `budget.refused` webhooks need the ga
 
 | Endpoint kind | Events it can subscribe to |
 |---|---|
-| Business | `payment.created`, `payment.processing`, `payment.partially_paid`, `payment.paid`, `payment.overpaid`, `payment.underpaid`, `payment.expired`, `payment.canceled`, `refund.succeeded`, `refund.failed`, `budget.refused` (refusals of payments to this business), `merchant.payout_changed`, `agent_run.succeeded`, `agent_run.failed`, `agent_run.cancelled`, `agent_run.timed_out`, or `*` |
-| Platform | `budget.refused` (every refusal on this node), or `*` |
+| Business | `payment.created`, `payment.processing`, `payment.partially_paid`, `payment.paid`, `payment.overpaid`, `payment.underpaid`, `payment.expired`, `payment.canceled`, `payment.deposit_returned` and `payment.deposit_failed` (any-chain checkout), `refund.succeeded`, `refund.failed`, `budget.refused` (refusals of payments to this business), `merchant.payout_changed`, `agent_run.succeeded`, `agent_run.failed`, `agent_run.cancelled`, `agent_run.timed_out`, or `*` |
+| Platform | `budget.refused` (every refusal on this node), `payment.deposit_failed` (any-chain swaps that failed), or `*` |
 
 A real `budget.refused` delivery.
 The request headers:

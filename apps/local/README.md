@@ -20,6 +20,7 @@ It takes about 100 seconds to start, most of it deploying contracts and compilin
 4. The real clearing node (`@payminto/node`) with its real `NearRpcChain`, the gateway on, and its database in `apps/local/data/`.
 5. A local signer on 127.0.0.1 that signs for the local accounts in place of a browser wallet.
 6. The real gas relayer (`@payminto/relayer`) with its own funded account.
+   A fake 1Click server for the any-chain checkout (NEAR Intents, simulated), and the node runs with `INTENTS_CHECKOUT=simulated`; see "Any-chain checkout, simulated" below.
 7. Six small paid services behind the SDK paywall, and an agent remote: a page that makes paid agent calls.
 8. First-run setup, done through the node's HTTP API exactly as a person would do it in the dashboard.
 9. A little real activity, so every page has something true to show.
@@ -53,10 +54,12 @@ Before it shows an account, the driver also asks the signer and the Payminto ser
 | `carol.test.near` | Budget owner, no gas | Owns the Budget "Support agent"; holds USDC and no NEAR for gas, so she can only revoke through the relayer |
 | `seller.test.near` | Seller | Is paid for the Risk Scan and Deep Report services |
 | `merchant.test.near` | Merchant payout | The payout account of the business Northwind Coffee |
+| `anychain.test.near` | Any-chain payout | Northwind Coffee's account for payments from other chains (NEAR Intents, simulated): the USDC lands in it directly |
 | `shopper.test.near` | Shopper | Pays checkout links |
 | `platform.test.near` | Platform operator | The fee treasury of whoever runs the server |
 | `node.test.near` | Settler | The node's own account; the node holds a key limited to `settle_batch` and `payout`, and the signer does not hold it |
 | `relayer.test.near` | Gas relayer | Pays gas for `revoke_budget`, `reclaim` and `payout` on the hub; only the relayer holds its key |
+| `solver.test.near` | 1Click solver (simulated) | The fake 1Click server delivers any-chain payments from it with a real `ft_transfer` of mock USDC; only the stack holds its key |
 | `newvendor.test.near` | New payee | Exists on chain and never registered with the token, so the node's payee check warns about it and its payouts wait |
 | `hub.test.near` | Hub | The Payminto contract, locked: it has no access key |
 | `usdc.test.near` | Mock USDC | A mock NEP-141 token |
@@ -64,6 +67,20 @@ Before it shows an account, the driver also asks the signer and the Payminto ser
 When a step needs a signature, the dashboard shows "Local test accounts" in place of a wallet's window, and you pick who signs.
 The choice belongs to the page it was made on: a Budget page asks for its owner, a checkout page asks again.
 Every screen still shows the exact transaction before it asks, as it does with a real wallet.
+
+## Any-chain checkout, simulated
+
+The node runs the any-chain checkout (method `oneclick`, docs/DEVELOPERS.md "Any-chain checkout") in simulated mode, labeled "Simulated - no real money" everywhere.
+Nothing reaches the live 1Click API or NEAR mainnet:
+
+- A fake 1Click server from `@payminto/near-addons` listens on 127.0.0.1 and signs quotes with a public test key; the node is configured to trust only that key.
+- The local chain stands in for NEAR mainnet and the mock USDC for native USDC.
+- When a simulated deposit arrives, the fake server's solver account `solver.test.near` sends a real `ft_transfer` of mock USDC to the business's any-chain account, so the node's delivery check reads a real transaction and its NEP-141 event on this chain.
+
+Setup proves `anychain.test.near` as the business's any-chain account with a NEP-413 message it signs, and the Admin turns the method on.
+The guide's any-chain step does through the node's API what the checkout's "Any chain" tab will do: get the options, get a deposit address for USDC on Base, simulate the deposit, and watch the quote reach `confirmed`.
+A second link, "Gift card, 2 USDC", is for sending too little: the deposit is returned and the payment is open again.
+The fake server's log is `apps/local/data/logs/oneclick-fake.log`.
 
 ## Transactions and proofs on a local node
 
@@ -140,7 +157,7 @@ Exit codes: 0 stopped cleanly or every check passed, 1 a check failed or a part 
 The scripted pass does the steps of the guide through the routes the browser uses: the node's API through the dashboard's own `/api` path with a signed-in session, the signer over HTTP with the dashboard's origin, the public checkout routes, and the agent remote's route.
 Every result is then asserted against the chain through a client that holds no key.
 It picks free ports, so it can run on a machine where the default ports are taken.
-A full run takes about two and a half minutes and ends with `21 of 21 checks passed`.
+A full run takes about three minutes and ends with `23 of 23 checks passed`.
 
 It checks, in order:
 
@@ -148,7 +165,7 @@ It checks, in order:
 - the node is ready on the hub: its receipt key is registered, its storage is prepaid, and it reported no readiness problem;
 - the signer refuses a wrong token, a foreign origin, `near:testnet`, `near:mainnet`, a plain transfer and an account it does not hold;
 - both logins work through the dashboard's `/api` path;
-- setup left a business, a payment link, six paid services and three funded Budgets, and the hub holds all three;
+- setup left a business, two payment links, six paid services and three funded Budgets, and the hub holds all three;
 - a deposit from a local account raises escrow on the hub by exactly its amount;
 - a new Budget opened by its owner is on the hub and the agent remote can pay from it;
 - an agent call is paid and shows up at the node;
@@ -158,6 +175,8 @@ It checks, in order:
 - "settle now": the hub stores every batch with the node's gross and net, and less moves than was cleared;
 - a call's proof verifies against the local chain with the browser's own reader, and a changed amount does not;
 - the shopper pays a checkout link and the hub records the payment for the merchant;
+- a buyer pays a checkout from USDC on Base through the simulated any-chain path: the business's any-chain account receives exactly the invoice amount on chain, the delivery transaction's NEP-141 event says so, the quote is `confirmed` with `rpc_checked`, the payment is paid, a signed `payment.paid` reaches a local webhook receiver, and the reconciliation row names the origin and the settlement network;
+- a buyer sends too little from another chain: the deposit is returned, no USDC moves on chain, the payment is open again and a signed `payment.deposit_returned` arrives;
 - a payout empties hub credit into each creditor's own account, and the unregistered payee's credit stays on the hub;
 - a revoke by the owner marks the Budget revoked on the hub and the node refuses its next call;
 - a NEP-413 message signed by the signer verifies against the account's key;
