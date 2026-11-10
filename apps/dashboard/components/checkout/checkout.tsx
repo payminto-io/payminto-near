@@ -949,12 +949,8 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
         <motion.div initial={calm ? false : { opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ ...T.spring, delay: 0.55 }}>
           <h1 className="text-xl font-semibold tracking-[-0.01em]">{model.copy.headline}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{model.copy.body}</p>
-          {iq && (
-            <p className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5 text-sm font-medium">
-              {paidFromText(iq)}
-              <IntentsLabel mode={iq.mode} label={iq.label} />
-            </p>
-          )}
+          {/* The panel's header carries the Simulated or Live label for this receipt. */}
+          {iq && <p className="mt-2 text-sm font-medium">{paidFromText(iq)}</p>}
         </motion.div>
       </div>
       {(view.status === "overpaid" || view.late) && <Notice tone="neutral">{model.copy.next}</Notice>}

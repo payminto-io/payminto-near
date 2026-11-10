@@ -350,8 +350,9 @@ function OriginList({ rows, value, onChange }: { rows: IntentsOption[]; value: s
             {/* The selected row: an ink frame, drawn inside so rows never shift; the keyboard focus ring sits inside it too. */}
             <span aria-hidden className={cn("pointer-events-none absolute inset-0 border-2 transition-colors duration-150", checked ? "border-[var(--ink)]" : "border-transparent", "peer-focus-visible:outline-2 peer-focus-visible:-outline-offset-4 peer-focus-visible:outline-ring")} />
             <OriginMark symbol={o.origin.symbol} chain={o.origin.chain} muted={!o.available} />
-            <span className={cn("min-w-0 flex-1", !o.available && "text-muted-foreground")}>
-              <span className="block truncate text-sm">
+            {/* The token and chain are never cut; a long amount (18 decimals of ETH) wraps on its side instead. */}
+            <span className={cn(o.available ? "shrink-0" : "min-w-0 flex-1 text-muted-foreground")}>
+              <span className="block text-sm whitespace-nowrap">
                 <span className="font-medium">{o.origin.symbol}</span> <span className="text-muted-foreground">on {o.origin.chain_name}</span>
               </span>
               {o.available ? (
@@ -363,14 +364,9 @@ function OriginList({ rows, value, onChange }: { rows: IntentsOption[]; value: s
               )}
             </span>
             {o.available && o.amount_in && (
-              <span id={`${id}-d`} className="shrink-0 text-right">
+              <span id={`${id}-d`} className="min-w-0 flex-1 text-right">
                 <span className="block text-xs text-muted-foreground">about</span>
-                <span className="num block text-[0.8125rem] font-medium">{amountText(o.amount_in)}</span>
-              </span>
-            )}
-            {checked && (
-              <span aria-hidden className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-card">
-                <Check className="size-3" strokeWidth={3} />
+                <span className="num block text-[0.8125rem] font-medium [overflow-wrap:anywhere]">{amountText(o.amount_in)}</span>
               </span>
             )}
           </label>
@@ -463,8 +459,9 @@ function DeadlineLine({ d }: { d: ReturnType<typeof deadlineModel> }) {
 function DepositAddress({ q, dim }: { q: IntentsQuote; dim: boolean }) {
   return (
     <div className={cn("flex flex-col items-center gap-4 rounded-xl border p-4 transition-opacity duration-300 sm:flex-row sm:items-start", dim && "opacity-60")}>
-      <div className="shrink-0 rounded-lg border bg-white p-2.5">
-        <QRCodeSVG value={q.deposit_address} size={132} level="M" marginSize={0} title={`QR code of the deposit address ${q.deposit_address}`} className="block size-[7.5rem] sm:size-[6.5rem]" />
+      {/* Two modules of quiet zone inside the white tile, plus its padding, keep the code readable by phone cameras. */}
+      <div className="shrink-0 rounded-lg border bg-white p-1.5">
+        <QRCodeSVG value={q.deposit_address} size={132} level="M" marginSize={2} title={`QR code of the deposit address ${q.deposit_address}`} className="block size-[7.5rem] sm:size-[6.5rem]" />
       </div>
       <div className="flex w-full min-w-0 flex-col gap-2">
         <p className="text-xs font-medium text-muted-foreground">Deposit address on {q.origin.chain_name}</p>

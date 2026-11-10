@@ -108,6 +108,8 @@ function Settings({ merchantId, p, refetch, refreshing, canPayout, canToggle }: 
               merchantId={merchantId}
               onSaved={(next) => {
                 qc.setQueryData(payoutKey, next);
+                // The save answers with the checks it ran; read all three again so none shows as not read.
+                void qc.invalidateQueries({ queryKey: payoutKey });
                 setEditing(false);
                 setToggleError(null);
               }}

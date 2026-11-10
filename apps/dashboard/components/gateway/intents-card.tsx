@@ -39,6 +39,7 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
   const s = QUOTE_STATUS[q.status];
   const reason = refundReasonText(q.refund_reason);
   const checked = q.verification === "rpc_checked";
+  const ended = ["refunded", "failed", "expired"].includes(q.status);
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -52,9 +53,11 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
           {q.deposited ? <span className="num font-medium">{amountText(q.deposited)}</span> : <span className="text-muted-foreground">Nothing yet</span>}
           <span className="block text-xs text-muted-foreground">Asked for {amountText(q.send_exactly)}, at least {amountText(q.min_amount_in)}</span>
         </Field>
-        <Field label="You receive">
+        <Field label={ended ? "Invoice amount" : "You receive"}>
           <span className="num font-medium">{q.delivered ? amountText(q.delivered) : amountText(q.amount_out)}</span>
-          <span className="block text-xs text-muted-foreground">{q.delivered ? "Delivered to" : "To"} <span className="hash">{q.recipient}</span></span>
+          <span className="block text-xs text-muted-foreground">
+            {q.delivered ? "Delivered to" : ended ? "Nothing reached" : "To"} <span className="hash">{q.recipient}</span>
+          </span>
         </Field>
         <Field label="Deposit address">
           <span className="inline-flex max-w-full items-start gap-0.5">
@@ -84,10 +87,14 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
         </Field>
         <Field label="NEAR delivery">{q.delivery_tx ? <TxValue tx={q.delivery_tx} /> : <span className="text-muted-foreground">-</span>}</Field>
         <Field label="Delivery check">
+          {ended ? (
+            <span className="text-muted-foreground">Nothing was delivered</span>
+          ) : (
           <span className={cn("inline-flex items-center gap-1.5", checked ? "text-positive" : q.verification === "provider_only" ? "text-warning" : "text-muted-foreground")}>
             {checked ? <CircleCheck className="size-4" aria-hidden /> : q.verification === "provider_only" ? <CircleAlert className="size-4" aria-hidden /> : <Clock3 className="size-4" aria-hidden />}
             {verificationText(q.verification)}
           </span>
+          )}
         </Field>
         {(q.refunded || q.status === "refunded") && (
           <Field label="Returned to buyer">
