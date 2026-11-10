@@ -20,8 +20,9 @@ let report: Report;
 
 const sandboxPids = () => {
   try {
-    // Every node this demo starts runs with --home <tmp>/payminto-sandbox-XXXXXX.
-    return execFileSync("pgrep", ["-f", "near-sandbox --home .*payminto-sandbox-"], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
+    // Every node this demo starts runs with --home <tmp>/payminto-sandbox-XXXXXX and is a child of this test process.
+    // Only those count: another run on the same machine starts its own nodes with the same kind of home.
+    return execFileSync("pgrep", ["-P", String(process.pid), "-f", "near-sandbox --home .*payminto-sandbox-"], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
   } catch {
     return [];
   }
@@ -58,6 +59,8 @@ describe.skipIf(!RUN)("the demo story on near-sandbox", () => {
   });
 
   it("leaves no sandbox process once stopped", async () => {
+    // The node is this process's child while the stack runs, so the check below can see it.
+    expect(sandboxPids()).toHaveLength(1);
     await stack.stop();
     expect(sandboxPids()).toEqual([]);
   });
