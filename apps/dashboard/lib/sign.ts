@@ -20,6 +20,7 @@ import {
   type PublicKey,
   type WalletTx,
 } from "@payminto/protocol";
+import { publicKeyProblem } from "@payminto/chain";
 
 export type BudgetDraft = {
   agentPk: PublicKey;
@@ -62,7 +63,28 @@ export function openBudgetPlan(args: { hub: AccountId; token: AccountId; network
   return { id, terms: args.terms, json: budgetTermsToJson(args.terms), txs };
 }
 
-export const isAgentKey = (v: string): v is PublicKey => isPublicKey(v);
+/**
+ * Why an agent key cannot open a Budget, in plain words, or null when it can. Beyond the NEAR text form, the key must be
+ * the one canonical encoding of a curve point that is not of small order: anyone can sign for a small-order key without
+ * its secret (audit F3), and the hub v1 would still accept one, so the form refuses it before anything is signed.
+ */
+export function agentKeyProblem(value: string): string | null {
+  const v = value.trim();
+  if (!isPublicKey(v)) return "Enter the agent public key (ed25519: followed by base58).";
+  switch (publicKeyProblem(v)) {
+    case null:
+      return null;
+    case "small_order":
+      return "This key is unsafe: anyone could sign Calls with it. Make a new key with payminto-agent keygen.";
+    case "non_canonical":
+      return "This key is not in its standard form, so the hub would not treat it as one key. Make a new key with payminto-agent keygen.";
+    default:
+      return "This is not a valid ed25519 public key. Copy it again from payminto-agent keygen.";
+  }
+}
+
+/** A key the form accepts: see `agentKeyProblem`. */
+export const isAgentKey = (v: string): v is PublicKey => agentKeyProblem(v) === null;
 
 export function parseAccountList(text: string): { valid: AccountId[]; invalid: string[] } {
   const parts = text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);

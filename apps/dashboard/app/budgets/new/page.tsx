@@ -12,7 +12,7 @@ import { useApi } from "@/lib/session";
 import { MOCK_MODE } from "@/lib/config";
 import { networkIdOf, qk, useInfo, useProviders, useToken } from "@/lib/queries";
 import { formatInt, formatMoney } from "@/lib/format";
-import { OPEN_BUDGET_STORAGE_YOCTO, buildBudgetTerms, isAgentKey, openBudgetPlan, parseAccountList, type BudgetDraft, type OpenBudget } from "@/lib/sign";
+import { OPEN_BUDGET_STORAGE_YOCTO, agentKeyProblem, buildBudgetTerms, isAgentKey, openBudgetPlan, parseAccountList, type BudgetDraft, type OpenBudget } from "@/lib/sign";
 import { ensureConnected, walletErrorMessage } from "@/lib/wallet";
 import { bondText, daoAccountError, daoFailureText, innerTx } from "@/lib/dao";
 import { daoReadErrorText, useDaoAddon, useDaoMembership, useDaoPolicy } from "@/lib/use-dao";
@@ -110,7 +110,8 @@ function NewBudgetPagePage() {
     if (step === 0) {
       if (daoProblem) e.dao = daoProblem;
       if (!f.label.trim()) e.label = "Give the Budget a name you will recognise.";
-      if (!isAgentKey(f.agent.trim())) e.agent = "Enter the agent public key (ed25519: followed by base58).";
+      const keyProblem = agentKeyProblem(f.agent);
+      if (keyProblem) e.agent = keyProblem;
       const cap = amount(f.cap, d);
       if (!cap || cap <= 0n) e.cap = `Enter a cap in ${token.symbol}, for example 25.`;
       const dep = f.deposit.trim() === "" ? 0n : amount(f.deposit, d);
