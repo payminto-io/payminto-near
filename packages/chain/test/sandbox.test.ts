@@ -26,6 +26,7 @@ import {
   fundStorageTx,
   keypairFromSeed,
   maxSettleBatchStorageCost,
+  DEFAULT_MIN_PAYMENT,
   openBudgetTx,
   revokeBudgetTx,
   settleOwnTx,
@@ -180,11 +181,14 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
 
   it("the deploy script registered the hub at the token, set the settler and checkout key, prefunded storage, and locked the hub", async () => {
     expect(report.locked).toBe(true);
-    expect(Object.keys(report.steps)).toEqual(["deploy_and_init", "register_hub_at_token", "set_settler", "set_checkout_key", "fund_settler_storage", "register_receipt_key", "lock"]);
+    expect(Object.keys(report.steps)).toEqual(["deploy_and_init", "register_hub_at_token", "set_settler", "set_checkout_key", "fund_settler_storage", "register_receipt_key", "accept_checkout", "lock"]);
     expect(Object.values(report.steps).every((s) => s !== "planned" && s !== "skipped" && s !== "left to the settler")).toBe(true);
     expect((await root.getAccount(hub.id)).codeHash).toBe(report.codeHash);
     expect((await root.getAccessKeys(hub.id)).keys).toHaveLength(0);
-    expect(await chain.config()).toEqual({ admin: admin.id, pendingAdmin: null, token: token.id, network: NETWORK });
+    expect(await chain.config()).toEqual({ admin: admin.id, pendingAdmin: null, token: token.id, network: NETWORK, minPayment: DEFAULT_MIN_PAYMENT });
+    // The node accepted the checkout role itself; nothing is left proposed.
+    expect(report.checkoutAccepted).toBe(true);
+    expect(await reader.pendingCheckout()).toBeNull();
     expect(await chain.isSettler(node.id)).toBe(true);
     expect(await chain.isRegistered(hub.id)).toBe(true);
     expect(reader.readOnly).toBe(true);

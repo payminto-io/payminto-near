@@ -114,6 +114,22 @@ export const acceptAdminTx = (hub: AccountId): WalletTx => ({
   actions: [call("accept_admin", {}, 30n, ONE_YOCTO)],
 });
 
+/**
+ * The settler named by the admin's `set_checkout_key` takes the checkout role, for exactly the proposed key. Signed by
+ * the settler account itself with a full-access key: the hub requires exactly one yoctoNEAR. Until it does, no checkout
+ * payment draws on its storage balance.
+ */
+export const acceptCheckoutTx = (hub: AccountId, key: PublicKey): WalletTx => ({
+  receiverId: hub,
+  actions: [call("accept_checkout", { key: toHex(publicKeyBytes(key)) }, 30n, ONE_YOCTO)],
+});
+
+/** The admin sets the smallest checkout payment the hub accepts, in token base units. At least one yoctoNEAR. */
+export const setMinPaymentTx = (hub: AccountId, amount: bigint): WalletTx => ({
+  receiverId: hub,
+  actions: [call("set_min_payment", { amount: amount.toString() }, 30n, ONE_YOCTO)],
+});
+
 export const payoutTx = (hub: AccountId, accounts: readonly AccountId[]): WalletTx => ({
   receiverId: hub,
   actions: [call("payout", { accounts: [...accounts] }, 300n, "0")],
