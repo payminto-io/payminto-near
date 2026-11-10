@@ -1,225 +1,143 @@
-/**
- * The full demo scenario, compressed: own anvil, forge deploy, in-process node on a temp *.demo.db, the three providers
- * plus the attacker endpoint on random ports, three agents (SDK, MCP, agent-as-provider), both attacks, settle, proof,
- * then the gateway act: one link paid by wallet, transfer, x402 exact and an MCP mandate agent, a refund and screening.
- */
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { portIsFree } from "../src/chain.ts";
-import { REPO_ROOT } from "../src/config.ts";
-import { checkSummary } from "../src/checks.ts";
-import { privateKeyToAccount } from "viem/accounts";
-import { AgentClient, SqliteReceiptStore } from "@payminto/sdk";
+import { checkReport } from "../src/checks.ts";
 import { loadDemoConfig } from "../src/config.ts";
-import { collectSummary, runTraffic, settle, type Summary } from "../src/scenario.ts";
-import { checkGateway, DEPOSIT_FEE, LINK_PRICE, REFUND_AMOUNT, runGatewayAct, type GatewayResult } from "../src/gateway.ts";
+import { runStory, tamper, type Report } from "../src/scenario.ts";
 import { startStack, type Stack } from "../src/stack.ts";
+import { receiptFileSchema, verifyBatch, verifyReceipt, type ReceiptFile } from "../src/verify.ts";
 
-async function freeBlock(): Promise<number> {
-  for (;;) {
-    const base = 20_000 + Math.floor(Math.random() * 30_000);
-    const ok = await Promise.all([0, 1, 2, 3].map((i) => portIsFree(base + i, "127.0.0.1")));
-    if (ok.every(Boolean)) return base;
-  }
-}
-
-const dataDir = mkdtempSync(join(tmpdir(), "payminto-demo-"));
+const dir = mkdtempSync(join(tmpdir(), "payminto-demo-"));
 let stack: Stack;
-let summary: Summary;
-let trafficFailed: unknown[];
-let gateway: GatewayResult;
+let report: Report;
 
 beforeAll(async () => {
-  const cfg = loadDemoConfig({
-    DEMO_CALLS: "60",
-    DEMO_CONCURRENCY: "8",
-    DEMO_NODE_PORT: "0",
-    DEMO_PROVIDER_BASE_PORT: String(await freeBlock()),
-    DEMO_OFFLINE: "1",
-    DEMO_DATA_DIR: dataDir,
-    DEMO_HSP_COSIGN_TIMEOUT_SEC: "10",
-  });
-  const t0 = Date.now();
-  stack = await startStack(cfg);
-  const traffic = await runTraffic(stack);
-  trafficFailed = traffic.failed;
-  const s = await settle(stack);
-  summary = await collectSummary(stack, traffic, s, t0);
-  gateway = await runGatewayAct(stack);
-});
+  // A quarter of the calls: the same acts and the same checks, fast enough for every test run.
+  stack = await startStack(loadDemoConfig({ DEMO_DATA_DIR: dir }, ["--scale", "0.25"]));
+  report = await runStory(stack);
+}, 60_000);
 
 afterAll(async () => {
   await stack?.stop();
-  rmSync(dataDir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
 });
 
-describe("pnpm demo scenario (compressed)", () => {
-  it("did first-run setup, saved the dashboard logins, and the recovery key stopped working", async () => {
-    const saved = JSON.parse(readFileSync(stack.logins.file, "utf8")) as { logins: Array<{ email: string; password: string }> };
-    expect(saved.logins.map((l) => l.email)).toEqual(["owner@demo.local", "admin@northwind.demo.local"]);
-    expect(statSync(stack.logins.file).mode & 0o077).toBe(0);
-    for (const l of saved.logins) {
-      const r = await fetch(`${stack.nodeUrl}/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: l.email, password: l.password }) });
-      expect(r.status).toBe(200);
-    }
-    const refused = await fetch(`${stack.nodeUrl}/v1/merchants`, { headers: { authorization: `Bearer ${stack.cfg.adminToken}` } });
-    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("RECOVERY_KEY_DISABLED");
-    const info = (await (await fetch(`${stack.nodeUrl}/v1/info`)).json()) as { network: { rpc_url: string } };
-    expect(info.network.rpc_url).toBe(stack.rpc.rpcUrl);
+describe("the demo story on the simulated hub", () => {
+  it("passes every check", () => {
+    const failed = checkReport(report).filter((c) => !c.ok);
+    expect(failed).toEqual([]);
   });
 
-  it("passes every demo check", () => {
-    expect(trafficFailed).toEqual([]);
-    expect(checkSummary(summary, { expectedCalls: 60 })).toEqual([]);
+  it("shows each refusal with the rule that fired and who enforced it", () => {
+    const seen = report.refusals.map((r) => `${r.rule}:${r.enforcedBy}`);
+    expect(seen).toEqual(
+      expect.arrayContaining(["PAYEE_NOT_ALLOWED:agent", "PAYEE_NOT_ALLOWED:node", "PAYEE_BLOCKED:agent", "PAYEE_BLOCKED:node", "PAYEE_NEEDS_APPROVAL:agent", "REPEAT_REQUEST:agent", "NET_EXPOSURE:node", "HOURLY_CAP:node"]),
+    );
   });
 
-  it("clears every call in one netted batch with fewer transfers than calls", () => {
-    expect(summary.calls).toBe(60);
-    expect(summary.batches).toHaveLength(1);
-    expect(summary.batches[0]).toMatchObject({ status: "confirmed", reconciled: true, calls: 60 });
-    expect(summary.transfersOnchain).toBeGreaterThan(0);
-    expect(summary.transfersOnchain).toBeLessThan(summary.calls);
-    expect(summary.compression).toBeCloseTo(60 / summary.transfersOnchain);
-    expect(summary.net).toBeLessThanOrEqual(summary.gross);
-    expect(summary.gas.used).toBeGreaterThan(0n);
-    expect(summary.gas.used).toBeLessThan(summary.gas.naive);
+  it("shows the payee check from the node and the chain: an unlisted payee it allows, a lookalike it blocks, a warned payee that waits for the owner", () => {
+    const { unlisted, lookalike, approval } = report.payeeCheck;
+    expect(unlisted).toMatchObject({ onChain: { exists: true, registeredWithToken: true }, node: { verdict: "allow" } });
+    expect(lookalike).toMatchObject({ onChain: { exists: false }, node: { verdict: "block" }, wallet: { rule: "PAYEE_BLOCKED", enforcedBy: "agent" }, walletSigned: 0n, nodePosition: 0n, nodeRecord: { rule: "PAYEE_BLOCKED", signedByNode: true } });
+    expect(lookalike.node!.signals).toEqual(expect.arrayContaining(["account_missing", "lookalike_payee"]));
+    expect(lookalike.positionAfter).toBe(lookalike.positionBefore);
+    expect(approval).toMatchObject({ onChain: { exists: true, registeredWithToken: false }, node: { verdict: "warn", signals: ["token_unregistered"] }, first: { rule: "PAYEE_NEEDS_APPROVAL", retry: { kind: "approval" } }, approvedAtNode: { decision: "approve", signals: ["token_unregistered"] }, paid: { bookedAtNode: true }, withdrawn: true, again: { rule: "PAYEE_NEEDS_APPROVAL" }, waitingAgain: true });
+    expect([approval.positionBefore, approval.positionWhileWaiting, approval.positionAfterPaid, approval.positionAfterAgain]).toEqual([0n, 0n, approval.price, approval.price]);
   });
 
-  it("gross equals the planned mix at SPEC prices", () => {
-    const p = stack.cfg.plan;
-    const pr = stack.cfg.prices;
-    const quotes = BigInt(p.treasuryMarket + p.tradingMarket + p.briefs * p.briefQuotes);
-    const scans = BigInt(p.treasuryRisk + p.tradingRisk + p.briefs * p.briefScans);
-    expect(summary.gross).toBe(quotes * pr.market + scans * pr.risk + BigInt(p.briefs) * pr.writer);
+  it("clears more than it moves, in fewer transfers than calls", () => {
+    expect(report.settlement.net).toBeLessThan(report.settlement.gross);
+    expect(report.payout.transfers).toBeLessThan(report.paidCalls);
+    expect(report.simulated).toBe(true);
   });
 
-  it("denies both attacks twice: in the agent before signing, and at the node with the rule recorded", () => {
-    expect(summary.denials.map((d) => d.rule).sort()).toEqual(["PAYEE_NOT_ALLOWED", "PER_CALL_CAP"]);
-    expect(summary.denials.find((d) => d.rule === "PAYEE_NOT_ALLOWED")?.ruleText).toBe("Payee is not on the mandate allowlist");
-    const injection = summary.attacks.find((a) => a.via === "mcp")!;
-    expect(injection).toMatchObject({ agent: "Trading Agent", agentRule: "PAYEE_NOT_ALLOWED", nodeRule: "PAYEE_NOT_ALLOWED", compromisedLocalRule: null });
-    expect(injection.toolText).toMatch(/^Payment denied by mandate rule PAYEE_NOT_ALLOWED/);
-    expect(summary.attacks.find((a) => a.via === "sdk")).toMatchObject({ agent: "Treasury Agent", agentRule: "PER_CALL_CAP", nodeRule: "PER_CALL_CAP", compromisedLocalRule: null });
-  });
-
-  // Regression for "FAIL no PER_CALL_CAP denial recorded" / "ACCEPTED - this should never happen": a second runtime of the
-  // Treasury key that does not share its receipt store refuses locally (POSITION_UNVERIFIED, the Writer payee already has
-  // a position), never reaches the node, and must be reported as such rather than as accepted.
-  it("reports a compromised runtime that refused locally as untested, never as accepted", async () => {
-    const isolated = new AgentClient({
-      chainId: stack.cfg.chainId,
-      hub: stack.hub,
-      nodeUrl: stack.nodeUrl,
-      account: privateKeyToAccount(stack.cfg.keys.treasury),
-      mandateId: stack.mandates.treasury,
-      enforcePolicy: false,
-    });
-    const res = await isolated.fetch(`${stack.services.writer}/v1/deep-dive`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    expect(res.status).toBe(402);
-    expect(((await res.json()) as { error: { code: string; details: { enforcedBy: string } } }).error).toMatchObject({
-      code: "POSITION_UNVERIFIED",
-      details: { enforcedBy: "agent" },
-    });
-    const overCap = summary.attacks.find((a) => a.via === "sdk")!;
-    const problems = checkSummary({ ...summary, attacks: summary.attacks.map((a) => (a === overCap ? { ...a, nodeRule: null, compromisedLocalRule: "POSITION_UNVERIFIED" } : a)) }, { expectedCalls: 60 });
-    expect(problems).toEqual(["over the per-call cap: the compromised client refused locally with POSITION_UNVERIFIED, so the node was never tested"]);
-  });
-
-  it("wraps every net transfer as an accepted, co-signed HSP payment", () => {
-    expect(summary.hsp).toHaveLength(summary.transfersOnchain);
-    for (const h of summary.hsp) expect(h).toMatchObject({ status: "ACCEPT", cosigned: true });
-  });
-
-  it("keeps the books at zero, the hub empty, and proves a call on chain", () => {
-    expect(summary.trialBalance).toMatchObject({ balanced: true, balance: "0" });
-    expect(summary.hubBalance).toBe(0n);
-    expect(summary.proof?.verifiedOnchain).toBe(true);
-    expect(summary.mcpProof?.verified).toBe(true);
-    expect(summary.marketDataSource).toMatch(/deterministic fallback/);
-  });
-
-  it("onboards the Research Writer with an EIP-2612 permit: the agent sends no transaction at all", async () => {
-    expect(summary.gasless).toMatchObject({ label: "Research Writer", transactions: 0 });
-    expect(await stack.rpc.pub.getTransactionCount({ address: stack.addresses.writer })).toBe(stack.gasless.txBefore);
-  });
-
-  it("uses a disposable database", () => {
-    expect(stack.dbPath).toMatch(/\.demo\.db$/);
-    expect(stack.dbPath.startsWith(dataDir)).toBe(true);
-  });
-
-  it("keeps every agent's receipts and signed positions in a durable, disposable store", () => {
-    for (const path of Object.values(stack.receiptStores)) {
-      expect(path).toMatch(/\.receipts\.demo\.db$/);
-      expect(path.startsWith(dataDir)).toBe(true);
-    }
-    expect(stack.treasury.receipts.all().length).toBeGreaterThan(0);
-    const reopened = new SqliteReceiptStore(stack.receiptStores.treasury);
-    try {
-      expect(reopened.all().length).toBe(stack.treasury.receipts.all().length);
-      const signed = [...reopened.signedPositions(stack.mandates.treasury).values()];
-      expect(signed.length).toBeGreaterThan(0);
-    } finally {
-      reopened.close();
-    }
+  it("moves earned credit into escrow without raising the cap", () => {
+    expect(report.fundFromCredit).toMatchObject({ owner: "acme.testnet", capUnchanged: true });
+    expect(report.fundFromCredit!.escrowRise).toBe(report.fundFromCredit!.amount);
   });
 });
 
-describe("gateway act", () => {
-  it("passes every gateway check", () => {
-    expect(checkGateway(gateway)).toEqual([]);
+describe("the checks themselves", () => {
+  it("fail when an invariant breaks", () => {
+    const broken: Report = { ...report, settleOwn: { ...report.settleOwn, credited: report.settleOwn.expected + 1n }, solvent: false, solvencyError: "broken" };
+    const failed = checkReport(broken).filter((c) => !c.ok).map((c) => c.name);
+    expect(failed).toEqual(["settle_own credited exactly what the node never settled, with the node's acceptance checked against the hub", "the hub is solvent: balance = escrow + credits + in flight"]);
   });
 
-  it("pays one link four ways, each split exactly by the Northwind fee plan", () => {
-    const by = Object.fromEntries(gateway.payments.map((p) => [p.method, p]));
-    // 0.5 % + 0.01 USDC of 2.00 is 0.02; the deposit adds a 0.05 fee the customer pays and the platform receives.
-    for (const m of ["wallet", "x402", "voucher"]) expect(by[m]).toMatchObject({ status: "paid", amountDue: LINK_PRICE, fee: 20_000n, net: 1_980_000n });
-    expect(by.deposit).toMatchObject({ status: "paid", amountDue: LINK_PRICE + DEPOSIT_FEE.fee_fixed, fee: 70_000n, net: 1_980_000n });
-    expect(by.voucher!.batchId).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(gateway.balances.merchantDelta).toBe(4n * 1_980_000n - REFUND_AMOUNT);
-    expect(gateway.balances.platformDelta).toBe(130_000n);
-    expect(gateway.mcp.toolText).toMatch(/^Paid 2\.00 USDC to Northwind Data, of which 0\.02 USDC platform fee/);
+  it("fail when settle_own takes a voucher the node never accepted, or when the hub pays for storage", () => {
+    const names = (r: Report) => checkReport(r).filter((c) => !c.ok).map((c) => c.name);
+    expect(names({ ...report, guards: { ...report.guards, ownerToSelf: "SETTLED" } })).toEqual(["an owner's self-signed voucher with no node acceptance is refused by settle_own"]);
+    expect(names({ ...report, guards: { ...report.guards, ownerToAccomplice: "SETTLED" } })).toEqual(["an owner's self-signed voucher with no node acceptance is refused by settle_own"]);
+    expect(names({ ...report, guards: { ...report.guards, datedAfterRevoke: "SETTLED" } })).toEqual(["a voucher signed by the agent key after the revoke cannot be settled"]);
+    expect(names({ ...report, guards: { ...report.guards, leakedKeyAlone: "BAD_ACCEPTANCE" } })).toEqual(["a voucher signed by the agent key after the revoke cannot be settled"]);
+    const STORAGE = "storage for the batch was charged to the settler's prepaid balance, not to the hub";
+    expect(names({ ...report, storage: { ...report.storage, charged: 0n } })).toEqual([STORAGE]);
+    // On a real chain: the hub account grew by more than the settler paid for, or the hub's own balance fell.
+    const charged = 5_000n * 10n ** 19n;
+    const real = { ...report.storage, charged, hubBytesGrown: 5_000, hubOwnChange: 0n };
+    expect(names({ ...report, storage: real })).toEqual([]);
+    expect(names({ ...report, storage: { ...real, hubBytesGrown: 5_001 } })).toEqual([STORAGE]);
+    expect(names({ ...report, storage: { ...real, hubOwnChange: -1n } })).toEqual([STORAGE]);
+    expect(names({ ...report, storage: { ...report.storage, receiptKeyOnHub: false } })).toEqual(["the node's receipt key is registered on the hub"]);
+    expect(names({ ...report, settleOwn: { ...report.settleOwn, checkedAgainst: "declared-keys" } })).toEqual(["settle_own credited exactly what the node never settled, with the node's acceptance checked against the hub"]);
   });
 
-  it("verifies every webhook and records the screening refusal", () => {
-    expect(gateway.webhooks.received.length).toBeGreaterThan(5);
-    expect(gateway.webhooks.received.every((w) => w.verified)).toBe(true);
-    expect(gateway.screening).toMatchObject({ httpStatus: 403, code: "SCREENING_REFUSED", rule: "PAYER_DENIED", recorded: true });
-    expect(gateway.refund).toMatchObject({ status: "succeeded", payoutTransactions: 0 });
+  it("fail when the payee check is missing from the story, or lets a payment through", () => {
+    const names = (r: Report) => checkReport(r).filter((c) => !c.ok).map((c) => c.name);
+    const pc = report.payeeCheck;
+    const NOT_ALLOWED = "PAYEE_NOT_ALLOWED fired for an unlisted payee the payee check has nothing against, in the wallet and at the node";
+    const BLOCKED = "PAYEE_BLOCKED stopped a lookalike of an allowed payee: the wallet signed nothing, the node refused a guard-off runtime, and no position moved";
+    const WAITS = "PAYEE_NEEDS_APPROVAL held a warned payee until the owner approved it on the node, the same call was then paid, and it waited again once the approval was withdrawn";
+    // The old failure on a real chain: the unlisted payee did not exist, so the node blocked it before the list could.
+    expect(names({ ...report, payeeCheck: { ...pc, unlisted: { ...pc.unlisted, onChain: { exists: false, registeredWithToken: false }, node: { verdict: "block", signals: ["account_missing"], notChecked: [] } } } })).toEqual([NOT_ALLOWED]);
+    expect(names({ ...report, payeeCheck: { ...pc, lookalike: { ...pc.lookalike, walletSigned: 2_000n } } })).toEqual([BLOCKED]);
+    expect(names({ ...report, payeeCheck: { ...pc, lookalike: { ...pc.lookalike, positionAfter: pc.lookalike.positionBefore + 1n } } })).toEqual([BLOCKED]);
+    expect(names({ ...report, payeeCheck: { ...pc, lookalike: { ...pc.lookalike, nodeRecord: null } } })).toEqual([BLOCKED]);
+    expect(names({ ...report, payeeCheck: { ...pc, approval: { ...pc.approval, positionWhileWaiting: pc.approval.price } } })).toEqual([WAITS]);
+    expect(names({ ...report, payeeCheck: { ...pc, approval: { ...pc.approval, again: null, waitingAgain: false } } })).toEqual([WAITS]);
+    expect(names({ ...report, payeeCheck: { ...pc, approval: { ...pc.approval, paid: null } } })).toEqual([WAITS]);
+  });
+
+  it("the story read real refusals from the hub", () => {
+    expect(report.guards).toEqual({ ownerToSelf: "PAYEE_IS_OWNER", ownerToAccomplice: "ACCEPTANCE_KEY_UNKNOWN", leakedKeyAlone: "ACCEPTANCE_KEY_UNKNOWN", datedAfterRevoke: "ACCEPTANCE_TOO_LATE", escrowUntouched: true });
+    expect(report.storage.charged).toBeGreaterThan(0n);
+    expect(report.storage.receiptKeyOnHub).toBe(true);
+    expect(report.settleOwn).toMatchObject({ checkedAgainst: "hub", unsettleable: 0, replayRefused: true });
+  });
+
+  it("refuse a sandbox label that names a public network, and an unlocked hub", () => {
+    const sandbox: Report = { ...report, simulated: false, label: "SANDBOX (a local NEAR node)", hub: { accessKeys: 0, codeHash: "abc", expectedCodeHash: "abc" } };
+    expect(checkReport(sandbox).filter((c) => !c.ok)).toEqual([]);
+    expect(checkReport({ ...sandbox, label: "SANDBOX on testnet" }).filter((c) => !c.ok).map((c) => c.name)).toEqual(["chain is labeled"]);
+    const unlocked = checkReport({ ...sandbox, hub: { accessKeys: 1, codeHash: "abc", expectedCodeHash: "abc" } });
+    expect(unlocked.filter((c) => !c.ok).map((c) => c.name)).toEqual(["the hub is locked and runs the committed hub.wasm"]);
   });
 });
 
-describe("MCP server over stdio (the Claude Desktop / Claude Code path)", () => {
-  it("boots from env, reads the budget and proves a settled call", async () => {
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [join(REPO_ROOT, "apps", "mcp", "src", "main.ts")],
-      env: {
-        PATH: process.env.PATH ?? "",
-        NODE_URL: stack.nodeUrl,
-        CHAIN_ID: "31337",
-        RPC_URL: stack.rpc.rpcUrl,
-        HUB_ADDRESS: stack.hub,
-        AGENT_KEY: stack.cfg.keys.trading,
-        MANDATE_ID: stack.mandates.trading,
-        // A second process of the Trading Agent: it shares the in-process wallet's receipt store.
-        RECEIPT_STORE_PATH: stack.receiptStores.trading,
-      },
-      stderr: "ignore",
-    });
-    const client = new Client({ name: "stdio-test", version: "1" });
-    await client.connect(transport);
-    try {
-      const budget = (await client.callTool({ name: "get_budget", arguments: {} })) as { content: Array<{ text: string }> };
-      expect(budget.content[0]!.text).toMatch(/^Mandate 0x[0-9a-f]{64}\. Spent \d+\.\d+ USDC\. Remaining /);
-      const proof = (await client.callTool({ name: "prove_receipt", arguments: { callId: summary.proof!.callId } })) as { content: Array<{ text: string }> };
-      expect(proof.content[0]!.text).toMatch(/Proven on chain \(settled by the clearing node, node-signed, verifyReceipt\): true/);
-    } finally {
-      await client.close();
-    }
+describe("the receipt verifier on the receipt file the story wrote", () => {
+  const load = (): ReceiptFile => receiptFileSchema.parse(JSON.parse(readFileSync(report.verifier.receiptPath!, "utf8")));
+  const failedOf = async (f: ReceiptFile) => (await verifyReceipt(stack.hub.chain, f)).lines.filter((l) => l.ok === false).map((l) => l.what);
+  const PATH = "the Merkle path folds from this receipt's leaf to the stored root (computed here)";
+  const HUB_VIEW = "the hub's own verify_receipt view agrees";
+
+  it("proves the genuine file from the hub alone", async () => {
+    const r = await verifyReceipt(stack.hub.chain, load());
+    expect(r.ok).toBe(true);
+    expect(r.lines.filter((l) => l.ok === true)).toHaveLength(8);
+  });
+
+  it("rejects a changed amount, a broken path, another batch, another operator and another hub", async () => {
+    const f = load();
+    expect(await failedOf(tamper(f))).toEqual(["the voucher signature verifies against the Budget's agent key on chain", PATH, HUB_VIEW]);
+    expect(await failedOf({ ...f, proof: f.proof.slice(1) })).toEqual([PATH, HUB_VIEW]);
+    expect(await failedOf({ ...f, batchId: "ab".repeat(32) })).toEqual([`batch ${"ab".repeat(32)} is stored on the hub`, HUB_VIEW]);
+    expect(await failedOf({ ...f, operator: "someone-else.testnet" })).toEqual(["the batch was settled by the Budget's own settler"]);
+    expect(await failedOf({ ...f, hub: "other-hub.testnet" })).toEqual(["the receipt names this hub and network"]);
+  });
+
+  it("reports a stored batch, and fails on a missing one", async () => {
+    expect((await verifyBatch(stack.hub.chain, load().batchId)).ok).toBe(true);
+    expect((await verifyBatch(stack.hub.chain, "ab".repeat(32))).ok).toBe(false);
   });
 });

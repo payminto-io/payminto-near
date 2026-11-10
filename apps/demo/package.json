@@ -3,27 +3,31 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Three paid provider services, agents and the scripted judge demo for Payminto Clearing",
+  "description": "The scripted Payminto story: owners, agents, refusals, a netted batch, payouts, proofs and settle_own, with a checks block, on a simulated hub or a local near-sandbox",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
     "demo": "node src/cli.ts run",
-    "demo:stage": "node src/cli.ts stage",
+    "demo:stage": "node src/cli.ts run",
+    "verify:near": "node src/verify-cli.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p .",
-    "fund:testnet": "node --disable-warning=ExperimentalWarning scripts/fund-testnet.ts"
+    "test:sandbox": "PAYMINTO_SANDBOX=1 vitest run test/sandbox.test.ts",
+    "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@payminto/chain": "workspace:*",
     "@payminto/mcp": "workspace:*",
     "@payminto/models": "workspace:*",
     "@payminto/node": "workspace:*",
+    "@payminto/payee-check": "workspace:*",
     "@payminto/protocol": "workspace:*",
     "@payminto/sdk": "workspace:*",
+    "@scure/base": "2.4.0",
     "hono": "^4.13.13",
-    "viem": "^2.57.10",
+    "near-kit": "0.20.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

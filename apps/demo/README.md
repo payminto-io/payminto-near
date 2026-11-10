@@ -1,191 +1,141 @@
-# Payminto Clearing demo
+# Payminto demo
 
-Three paid services, three agents and the scripted live demo, on the real stack: ClearingHub, the Clearing Node, the SDK paywall, `AgentClient` and the MCP server.
-The build contract is `docs/SPEC.md` section 8.
-
-## One command
+One command runs the whole Payminto story and ends with a checks block.
+It runs on a simulated hub in a few seconds, or on a real NEAR runtime: a fresh near-sandbox node started for the run.
 
 ```sh
-pnpm install
-pnpm demo
+pnpm demo                          # simulated hub, about 190 paid calls, a few seconds
+pnpm demo --chain sandbox          # a fresh local near-sandbox node, the same story, about 70 seconds
+pnpm demo --chain sandbox --keep   # the same, then the sandbox stays up for pnpm verify:near until Ctrl-C
+pnpm verify:near --rpc-url <url> --hub <account> --receipt <receipt.json>   # check a receipt yourself
 ```
 
-It starts its own anvil on a free port, deploys with `forge script script/DeployLocal.s.sol`, starts the Clearing Node in-process on a fresh `*.demo.db`, registers and serves the providers, mints test USDC, opens three mandates on chain, runs about 500 paid calls at concurrency 24, settles, and prints a summary.
-The summary shows calls, gross, net, on-chain transfers decoded from the tx receipts, the compression ratio, settlement gas versus a measured one-transfer-per-call baseline, every denial with its rule, HSP status per transfer, a Merkle proof checked on chain with `verifyReceipt`, the trial balance, and the dashboard URL.
-Then the gateway act runs (local only, about 11 s): the operator creates the merchant Northwind Data with a 0.5 % + 0.01 USDC plan and a 0.05 USDC deposit fee the customer pays, and one 2.00 USDC link is paid by a person with a wallet signature, a person by plain transfer, a plain x402 agent with `payExact`, and an MCP mandate agent with two vouchers settled in the next batch.
-A gasless refund and a screening refusal follow, and the gateway summary shows each payment's amount, fee, net, status and tx, the platform fees earned, the webhooks delivered and verified, and a proof check.
-Its checks: every payment paid, fees equal `computeFees`, merchant and platform balance deltas equal the fee breakdowns, forwarders, router and hub at zero, every webhook verified, and the screening decision recorded.
-In stage mode it is step 8, after the clearing steps.
-It exits non-zero if any check fails.
-Ctrl-C stops the node, providers and anvil; anvil also runs under a watchdog that stops it if the demo process dies.
+Both modes run the same acts and the same checks, and the exit code is 0 only when every check passes.
+Nothing in either mode touches testnet or mainnet, moves real funds, or creates accounts outside the run.
 
-## Stage mode
+## Simulated hub: `pnpm demo`
 
-```sh
-pnpm demo:stage
-```
+Do `pnpm demo`.
+See every line that shows chain state labeled SIMULATED: the hub is an in-memory model of the contract with the same rules and refusal codes.
+See `25 of 25 checks passed` at the end, a few seconds after the start.
+This mode needs nothing but Node.js 22.18 or newer, and it is what CI runs.
 
-Same stack, paced (about 14 calls per second, `DEMO_STAGE_PACE`), advancing one demo step per Enter: mandate, agents buying with the two attacks, netting preview, settle (click Settle now in the dashboard, or press Enter in the terminal), batch with HSP status, a judge-picked call proven on chain, and the books.
-If port 3000 is taken, set `DEMO_DASHBOARD_PORT` (for example 3010) and start the dashboard with `-p 3010`; the node then accepts that origin.
-Node and providers keep running afterwards so the dashboard stays live; Ctrl-C stops everything.
-Start the dashboard in a second terminal with the URL the demo prints, for example:
+## Sandbox: `pnpm demo --chain sandbox`
 
-```sh
-NEXT_PUBLIC_NODE_URL=http://localhost:8787 NEXT_PUBLIC_RPC_URL=<the printed RPC URL> pnpm --filter dashboard dev
-```
+Do `pnpm demo --chain sandbox`.
+See the label SANDBOX: a local NEAR node (near-sandbox 2.14.0) that the demo starts on 127.0.0.1, and stops when it ends.
+See a transaction hash for every on-chain step, then `26 of 26 checks passed` after about 100 seconds.
 
-The demo completes first-run setup itself (the dev admin token is the setup code) and signs in as the platform owner `owner@demo.local`, like a person would.
-Stage mode prints the generated password once; both logins (the owner and `admin@northwind.demo.local`) are saved in `dashboard-logins.json` in the run directory.
-After setup the admin token (the recovery key) no longer works, so the demo's own operator calls use the owner's session.
+What happens, in order, all as real transactions on the sandbox:
 
-The optional MCP command it prints never contains a key: it reads the Trading Agent key from `PAYMINTO_TRADING_AGENT_KEY` (anvil dev account #3 on the local chain).
+1. Do nothing, see section 0: the sandbox root creates the hub, admin, token, node, owner and seller accounts, each with its own key.
+   The lookalike account of section 7 is never created, so the chain itself says it does not exist.
+   The token account deploys `contracts-near/out/mock_ft.wasm`, a mock NEP-141 that stands in for USDC in the sandbox only.
+2. See `packages/chain/scripts/deploy-hub.ts` run as its own process: it deploys `contracts-near/out/hub.wasm`, registers the hub at the token, sets the settler and the checkout key, prefunds the node's storage balance, and locks the hub by deleting every key on its account.
+   See the hub's code hash, which is the sha256 of the committed `hub.wasm`, and `0 access keys: locked`.
+3. See the node account add 2 NEAR to its own storage balance with `fund_storage`, and register its receipt key with `register_receipt_key`, both built by `fundStorageTx` and `registerReceiptKeyTx` in `packages/chain/src/actions.ts`.
+   The hub never pays for the storage a batch writes, and `settle_own` takes a voucher only with an acceptance signed by a registered key.
+   See the node account add a function-call key that can call only `settle_batch` and `payout` on the hub.
+   The clearing node runs with that key and builds its own `NearRpcChain` from `RPC_URL` and `OPERATOR_KEY`, as it does in production.
+4. See each owner mint mock USDC, `open_budget` and `ft_transfer_call` into escrow from its own wallet, through the wallet action builders in `packages/chain/src/actions.ts`.
+5. See the same acts as the simulated story: paid calls over HTTP 402, the refusals, one netted batch settled by the node, the payee check, `fund_from_credit` from Acme's wallet, the node's payout through `POST /v1/payouts`, receipt proofs, and `settle_own` from the scan seller's exported vouchers after the node stops.
+   In section 4, see the storage line: the batch's bytes came out of the node's prepaid storage balance, the hub account grew by exactly that many bytes, and the hub's own NEAR balance changed by 0.
+   In section 7, see the payee check read accounts this run created on the sandbox: the lookalike blocked because the chain has no such account, and the new vendor warned because the mock token has no registration for it.
+   In section 8, see the seller's `settle_own` carry the node's acceptance, and then see the hub refuse vouchers the node never accepted.
+   Acme's owner signs its whole escrow to itself with its agent key and gets `PAYEE_IS_OWNER`, and to an accomplice with an acceptance it signed itself and gets `ACCEPTANCE_KEY_UNKNOWN`.
+   Initech revokes its Budget, and a voucher signed with its agent key afterwards gets `ACCEPTANCE_KEY_UNKNOWN`, and `ACCEPTANCE_TOO_LATE` even with the node's own signature dated one second after the revoke.
+6. See section 9: `pnpm verify:near` runs as a separate process with no node and no keys, proves `receipt.json`, and rejects `receipt.tampered.json`, a copy with the amount raised by one.
 
-### Recording a film (auto mode)
+Every check reads its facts from the hub through a `NearRpcChain` that holds no key: Budgets, batches and their transaction status, credits, token balances, the Merkle root, the node's receipt keys and storage balance, the hub account's storage and NEAR balance, the hub's answers to the refused `settle_own` calls, solvency and the hub's access keys.
+Calls and refusals are what the agents saw over HTTP, and nothing is read from the node's database.
+The sandbox-only check confirms that the hub is locked and runs the committed `hub.wasm`.
 
-`DEMO_STAGE_AUTO=1` advances every step on a timer, so the terminal can be filmed without touching the keyboard (Enter still skips ahead in a terminal).
-Before step 4 it holds the pre-settle state so the Netting "before" shot can be taken and Settle now clicked in the dashboard; if nobody clicks, it settles from the terminal after the delay.
-Settling from the dashboard or from the terminal plays out the same on the Netting screen.
+The demo finds the near-sandbox binary in this order: `NEAR_SANDBOX_BIN_PATH`; the copy the contract's cargo tests downloaded under `contracts-near/target`, in this checkout or, from a git worktree, in the main checkout; then near-kit's cache in `~/.near-kit/sandbox/bin`.
+If none exists, near-kit downloads near-sandbox 2.14.0 once from NEAR's release bucket, about 30 MB.
 
-| Var | Default | Meaning |
-|---|---|---|
-| `DEMO_STAGE_AUTO` | unset | `1` advances steps automatically |
-| `DEMO_STAGE_STEP_MS` | `4000` | Pause before each step in auto mode |
-| `DEMO_STAGE_SETTLE_DELAY_MS` | `20000` | Auto mode: how long step 4 waits for Settle now before settling from the terminal; `0` waits for the dashboard only |
-| `DEMO_STAGE_HOLD` | unset | `1` keeps the stack up after the last step without a terminal on stdin |
+## The payee check: section 7
 
-```sh
-# terminal 1, repo root
-DEMO_STAGE_AUTO=1 DEMO_STAGE_STEP_MS=4000 DEMO_STAGE_SETTLE_DELAY_MS=45000 DEMO_STAGE_HOLD=1 DEMO_DASHBOARD_PORT=3010 pnpm demo:stage
-# terminal 2, apps/dashboard
-NEXT_PUBLIC_NODE_URL=http://localhost:8787 npx next dev -p 3010
-```
+Before a Budget pays an account, the agent's wallet and the clearing node look at that account on chain.
+Both modes run this with the check on: the node is started with `startNode(config, { payeeCheck })`, and Globex's MCP wallet runs its guard before it signs.
+On the sandbox both read the sandbox's own RPC through the read-only reader of `@payminto/payee-check`, with no indexer, so account ages are not checked and every verdict says so.
+On the simulated hub they read the package's fake reader, which the story's wallets keep in step: an account is registered with the token once it mints or registers.
 
-In dev mode each screen compiles on its first visit; open every screen once (or `curl` it) before recording so no loading state is filmed.
+Three accounts show the three answers:
 
-## Cast
-
-| Who | Port | Price (local) | Role |
+| Account | On chain | The node's check | What the story shows |
 |---|---|---|---|
-| Market Data | 4101 | 0.002 USDC per quote | HSK, BTC and ETH quotes from CoinGecko (cached 30 s, 1.5 s timeout) with a deterministic fallback; every response has a `source` field |
-| Risk Scan | 4102 | 0.01 USDC per address | Deterministic heuristic score, labelled as such in every response |
-| Research Writer | 4103 | 0.05 USDC per brief | An agent and a provider: each brief buys 2 quotes and 1 scan with its own mandate |
-| Premium Alpha (unlisted) | 4104 | 0.02 USDC | The attacker endpoint promoted by an injected post; no mandate allows its payee |
-| Treasury Agent | - | - | Pays through `AgentClient` directly; payees Market Data, Risk Scan, Research Writer; per-call cap 0.05 USDC |
-| Trading Agent | - | - | Pays only through the MCP tools (`call_paid_service`, `prove_receipt`); payees Market Data, Risk Scan |
+| `rogue` | Exists and is registered with the token | allow | Act 3: the wallet and the node refuse it with `PAYEE_NOT_ALLOWED`, the Budget's own allowed-payee rule |
+| `5can` | Does not exist | block: `account_missing`, `lookalike_payee` of `scan` | A planted note in a paid brief says the scan service moved there. The wallet refuses with `PAYEE_BLOCKED` and signs nothing, and a guard-off runtime is refused by the node with `PAYEE_BLOCKED` |
+| `newdesk` | Exists and is not registered with the token | warn: `token_unregistered` | It is on Globex's list. The call waits with `PAYEE_NEEDS_APPROVAL`, the owner approves on the node, the same call is paid, and after the approval is withdrawn the next call waits again |
 
-The attacks run mid-traffic and are each denied twice.
-Layer 1: the agent's own SDK refuses before signing (`PAYEE_NOT_ALLOWED` for the injection, `PER_CALL_CAP` for a 0.25 USDC deep dive).
-Layer 2: the same agent key with its client guard switched off, standing in for a compromised runtime, signs anyway and the Clearing Node denies it with the same rule and records it, so it shows on the dashboard.
+Do `pnpm demo`, see section 7.
+See the node's verdict for each account, read from `GET /v1/payees/check`.
+See the wallet's refusal of the lookalike, its signed position for that payee at 0, and the node's positions for Globex's Budget unchanged.
+See the node's own signed record of the guard-off runtime's refusal, read from `GET /v1/budgets/<id>/refusals` and verified against the node's receipt key.
+See the waiting call listed by `GET /v1/budgets/<id>/payee-approvals`, the approval sent to `POST /v1/budgets/<id>/payee-approvals`, the paid call booked at the node, and the withdrawal sent to `DELETE /v1/budgets/<id>/payee-approvals/<payee>`.
+The three checks named `PAYEE_NOT_ALLOWED`, `PAYEE_BLOCKED` and `PAYEE_NEEDS_APPROVAL` read their facts from the node's routes and from the chain, never from the node's database.
 
-## Live networks
+## Check a receipt yourself: `pnpm verify:near`
 
-The same scenario runs on HashKey Chain testnet (133), Ethereum Sepolia (11155111, Circle test USDC) or HashKey Chain mainnet (177) with tiny prices (Market Data 0.0001, Risk Scan 0.0005, Research Writer 0.0025 USDC).
-`docs/TESTNET.md` is the step-by-step runbook for the two testnets: wallets, deploy, funding and the full command.
-It never deploys there: `contracts/deployments/<chainId>.json` must exist.
-It refuses to start unless every one of these holds, before touching the chain:
+Do `pnpm demo --chain sandbox --keep`.
+See the checks, then a ready-to-paste `pnpm verify:near` command with the sandbox's RPC URL, the hub account and the path of `receipt.json`.
+Do that command in another terminal.
+See each check it makes, read from the chain, and `VERIFIED` with exit code 0:
 
-- `DEMO_LIVE_NETWORK_CONFIRM=yes`.
-- The planned spend, printed first, is at or below `DEMO_MAX_SPEND_USDC` (default `1`).
-- Every key is given explicitly and none is a public anvil dev key: `DEMO_OPERATOR_KEY`, `DEMO_OWNER_KEY`, `DEMO_TREASURY_KEY`, `DEMO_TRADING_KEY`, `DEMO_WRITER_KEY`.
-- Payee wallets are given: `DEMO_MARKET_PAYEE`, `DEMO_RISK_PAYEE` (`DEMO_ROGUE_PAYEE` defaults to the dead address and is never paid).
-- `DEMO_ADMIN_TOKEN` is set, and `DEMO_RPC_URL` (or the network default) serves the declared chain.
+- the receipt names this hub and network;
+- the batch is stored on the hub, with its root, settler, gross and net;
+- the Budget is on the hub, and the batch was settled by the Budget's own settler;
+- the voucher signature verifies against the Budget's agent key as stored on chain;
+- the payee is allowed by the Budget;
+- the Merkle path folds from the receipt's leaf to the stored root, computed by the verifier itself;
+- the hub's own `verify_receipt` view agrees.
 
-Agent wallets must already hold the token; the demo approves the hub for exactly the mandate cap, never unlimited.
-The Research Writer never approves: it signs an EIP-2612 permit for its cap and the node opens its mandate with `openMandateWithPermit`, and the run checks that it sent 0 transactions.
+Do the same command with `receipt.tampered.json` instead.
+See three checks fail, `NOT VERIFIED` and exit code 1.
+Do `pnpm verify:near --rpc-url <url> --hub <account> --batch <batch id>` to see what the hub stores for one batch.
+Press Ctrl-C in the demo's terminal to stop the sandbox.
 
-```sh
-DEMO_CHAIN_ID=133 DEMO_LIVE_NETWORK_CONFIRM=yes DEMO_CALLS=100 DEMO_MAX_SPEND_USDC=0.1 \
-  DEMO_OPERATOR_KEY=... DEMO_OWNER_KEY=... DEMO_TREASURY_KEY=... DEMO_TRADING_KEY=... DEMO_WRITER_KEY=... \
-  DEMO_MARKET_PAYEE=0x... DEMO_RISK_PAYEE=0x... DEMO_ADMIN_TOKEN=... pnpm demo:stage
-```
+The verifier needs only an RPC URL, a hub account and a receipt file or batch id; `NEAR_RPC_URL` and `HUB_ACCOUNT` work in place of the flags.
+It reads the hub's network and token from the hub itself, and reports whether the hub account still has any access key.
+It exits 0 when every check passes, 1 on any mismatch, and 2 for bad arguments, an unreadable file, or a hub it cannot read.
+A proof shows that the call is in a batch root its settler committed to on chain, and that the Budget's agent key signed it.
+It does not prove delivery, or that the root covers every voucher.
 
-### Confirmations on a live network
+## Shutdown, timeouts and stalls
 
-On a public chain the node confirms at its `CONFIRM_TAG`, the safe head by default (about 10 minutes behind on 133, one to two epochs on Sepolia).
-After settling, the demo waits until every batch is confirmed and reconciled before it reads gross and net, proves a receipt or checks HSP statuses, printing each status change; the wait is sized from the chain's measured safe-head lag.
-`DEMO_CONFIRM_TAG` passes a tag to the node: `latest` is the testnet recording setting, and the plan and summary say "at the latest head (testnet demo setting)" whenever it is on.
+The demo stops the node and the sandbox on success, on failure, on Ctrl-C and on the overall timeout, and a second Ctrl-C kills the sandbox at once.
+The sandbox runs in its own process group with its output in `sandbox.log` in the run directory, never in a pipe.
+Each sandbox is recorded under the OS temp directory, so a run that was killed outright has its sandbox stopped by the next run.
+The overall timeout is 120 seconds for the simulated hub and 600 seconds for the sandbox, and `--timeout <seconds>` changes it.
+When it passes, the demo prints `TIMEOUT`, the last step it reached and where the sandbox log is, then shuts down and exits with code 3.
+While the story runs, the demo watches block production and prints a warning if the sandbox produces no block for 15 seconds.
+Every sandbox transaction and view has its own deadline, because near-kit's RPC client sets none and Node's fetch would otherwise wait 300 seconds per attempt.
 
-### Gateway act on a live network
+## Data
 
-`DEMO_GATEWAY=1` runs the gateway act on a live network too, with funded testnet wallets instead of minted ones and about a hundredth of the local amounts: a 0.02 USDC link, a 0.0005 USDC deposit fee, 0.5 % + 0.0001 USDC platform fee, and a 0.005 USDC refund.
-Its payers' spend (four payments of the link, one with the deposit fee) counts towards the planned spend and `DEMO_MAX_SPEND_USDC`.
-Every role needs its own key, none a public dev key or another role's:
+Each run writes a disposable directory under `apps/demo/data` (git-ignored), or under `DEMO_DATA_DIR`.
+Every database in it ends in `.demo.db` and passes the node's reset guard before it is opened.
+The directory also holds the scan seller's voucher store (`scan.vouchers.json`) and its export for `settle_own`, each voucher with the node's acceptance, `receipt.json` and `receipt.tampered.json`, and in sandbox mode `sandbox.log`.
+The sandbox's own chain data lives in a temporary directory that is deleted when the sandbox stops.
 
-| Var | Role |
-|---|---|
-| `DEMO_STORE_PAYOUT_KEY` | The platform's own store, the seeded first business; it also sells the AI skill when `DEMO_AI=1` |
-| `DEMO_PLATFORM_FEES_KEY` | The platform fee wallet |
-| `DEMO_NORTHWIND_PAYOUT_KEY` | Northwind Data's payout: signs the payout proof and the gasless refund |
-| `DEMO_HUMAN_PAYER_KEY` | A person paying by wallet signature (sends no transaction) |
-| `DEMO_DEPOSIT_PAYER_KEY` | A person paying by plain transfer (the only payer that needs gas) |
-| `DEMO_X402_AGENT_KEY` | An x402 agent paying with `exact` |
-| `DEMO_MANDATE_AGENT_KEY` | An MCP mandate agent paying with vouchers (onboarded with a permit) |
-| `DEMO_FLAGGED_KEY` | A wallet on the deny list, refused by screening |
-| `DEMO_PUBLIC_CHECKOUT_URL` | A public https origin; the node runs the gateway |
-| `DEMO_WEBHOOK_URL` | Optional public https receiver; without it the webhook checks are skipped, because the node refuses private webhook targets on public chains |
+## Options
 
-`pnpm --filter @payminto/demo fund:testnet <chainId> --gateway --yes` funds the payers from the operator.
-The act also fetches the reconciliation report (JSON and CSV) for its time range and checks it holds the four paid payments, their net, the refund and a ledger that matches.
-Every transaction of the act is listed with its explorer link at the end of its summary.
+| Flag | Variable | Default | Meaning |
+|---|---|---|---|
+| `--chain fake\|sandbox` | `DEMO_CHAIN` | `fake` | The simulated hub, or a fresh local near-sandbox node |
+| `--scale <n>` | `DEMO_SCALE` | `1` | Multiplies the calls in each act |
+| `--timeout <seconds>` | `DEMO_TIMEOUT_SEC` | `120` or `600` | Deadline for the whole run |
+| `--keep` | `DEMO_KEEP=1` | off | Sandbox only: keep the sandbox up after the checks until Ctrl-C |
+| | `NEAR_SANDBOX_BIN_PATH` | | The near-sandbox binary to use |
 
-## AI agents act
-
-`DEMO_AI=1` adds a last act (step 9 in stage mode) with real AI agents on the same stack, after the gateway act.
-Each business brings its own model key, so model costs land on that business's own provider account.
-
-What it does and checks:
-- Each business that takes part adds an AI connection with its own key (`POST /v1/ai/connections`), and the node verifies it and seals it in the database.
-- An ops agent runs in the node's run worker against a business's real data (locally Northwind Data after the gateway act) and must call at least one merchant tool.
-- The seeded first business sells a paid AI skill, "HashKey market brief", at `/v1/skills/market-brief` for the Research Writer's price.
-- An AI buyer agent, the real `payminto-agent run` runtime in its own process with the wallet MCP server, spends from the Treasury Agent's mandate under a ceiling of two briefs.
-  It must find the skill in the directory and pay for it exactly once with a voucher.
-- The batch settles, and the skill call's receipt is proven on chain with `verifyReceipt`; settlement transactions are printed as explorer links.
-
-| Var | Default | Meaning |
-|---|---|---|
-| `DEMO_AI` | unset | `1` turns the act on |
-| `DEMO_AI_PROVIDER` | `openai` | `openai`, `anthropic`, `google`, `openai_compatible` or `replicate` |
-| `DEMO_AI_MODEL` | `gpt-5-mini` for OpenAI | The model both agents use (`claude-haiku-5-5`, `gemini-2.5-flash` and `deepseek-ai/deepseek-v3.1` on Replicate for the others; required for `openai_compatible`) |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `REPLICATE_API_TOKEN` | unset | The provider's key; `DEMO_AI_API_KEY` overrides it and is the key for `openai_compatible`; Replicate needs no base URL |
-| `DEMO_AI_BASE_URL` | unset | Required for `openai_compatible`; a server on this machine may run without a key |
-| `DEMO_MERCHANT_PAYOUT` | unset | Live networks: the wallet of the business that sells the skill (never a demo key's wallet) |
-| `DEMO_PUBLIC_CHECKOUT_URL` | unset | Live networks: a public https origin, because the node turns the gateway on for the act |
-
-The key is never printed: the plan shows the provider, the model and the key's last four characters.
-Each run seals it with a fresh `AGENT_SECRETS_KEY`, so it is unreadable once the run's database is gone.
-On a live network the skill call and the ceiling count against `DEMO_MAX_SPEND_USDC`, and the Treasury Agent must hold the extra.
-
-Cost: one run makes about seven model turns (two for the ops agent, one for the skill, three or four for the buyer), roughly 10,000 input and 1,000 output tokens; with `gpt-5-mini` that is well under one US cent.
-
-Rehearsing without a key: `node scripts/scripted-model.ts` starts a scripted OpenAI-compatible stand-in on this machine and prints its `DEMO_AI_BASE_URL`; it is never a real model.
-
-```sh
-DEMO_AI=1 OPENAI_API_KEY=sk-... pnpm demo
-DEMO_AI=1 DEMO_AI_PROVIDER=openai_compatible DEMO_AI_BASE_URL=http://127.0.0.1:<port>/v1 DEMO_AI_MODEL=scripted-demo-model pnpm demo
-```
-
-## Other knobs
-
-| Var | Default | Meaning |
-|---|---|---|
-| `DEMO_CALLS` | `500` | Target paid calls (split into the scenario mix) |
-| `DEMO_CONCURRENCY` | `24` | Parallel callers |
-| `DEMO_NODE_PORT` | `8787` | Node port; falls back to a free port (and says so) when busy |
-| `DEMO_PROVIDER_BASE_PORT` | `4101` | Providers use this port and the next three |
-| `DEMO_RPC_URL` | own anvil | Use an existing chain instead |
-| `DEMO_OFFLINE` | unset | `1` skips the live price source |
-| `DEMO_DATA_DIR` | `apps/demo/data` | Each run gets `run-<time>/` with `clearing-<chainId>.demo.db` and `node.log` |
-
-## Data safety
-
-Every run uses a new database whose name ends in `.demo.db`, checked with the node's own `assertDisposableTarget` guard before the node starts.
-`forge script DeployLocal` writes the shared `contracts/deployments/31337.json`; the demo restores that file's previous content and keeps its own copy in the run directory, so other local sessions are not disturbed.
+Exit codes: 0 every check passed, 1 a check failed or the run broke, 2 a configuration error, 3 the timeout passed, 130 interrupted.
 
 ## Tests
 
 ```sh
-pnpm --filter @payminto/demo test
+pnpm --filter @payminto/demo test           # fast: the simulated story, the checks, the verifier, the reaper
+pnpm --filter @payminto/demo test:sandbox   # about 70 seconds: the story on near-sandbox
 ```
 
-`test/demo.test.ts` runs the whole scenario compressed to 60 calls against its own anvil and asserts the summary: one confirmed, reconciled batch with fewer transfers than calls, gross equal to the planned mix, both attacks denied in the agent and at the node with the right rules, every transfer an accepted co-signed HSP payment, trial balance zero, hub empty, a proof verified on chain, and the MCP server over stdio.
-`test/config.test.ts` covers the live-network safety guard.
+The fast suite runs the story at a quarter of the calls, asserts that every check passes and that the checks fail when an invariant breaks, and runs the verifier against the receipt the story wrote, genuine and tampered.
+The sandbox suite runs only with `PAYMINTO_SANDBOX=1`, which `test:sandbox` sets, and asserts every check, steady block production, and that no sandbox process is left.

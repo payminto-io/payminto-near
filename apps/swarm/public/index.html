@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Payminto swarm - GPU hours bought together, live</title>
+    <meta name="description" content="Buyer agents pool demand for GPU hours, sellers bid sealed, and Payminto clears every delivered unit and settles the net." />
+    <link rel="icon" href="data:," />
+    <script>
+      // Set the theme before the first paint: ?theme=dark, then the saved choice, then the system setting.
+      (function () {
+        var q = new URLSearchParams(location.search).get("theme");
+        var saved = null;
+        try {
+          saved = localStorage.getItem("payminto-swarm-theme");
+        } catch (e) {}
+        var dark = q ? q === "dark" : saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="/swarm.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap">
+        <div class="brand"><span class="name">Payminto</span><span class="sub">Group-buying swarm</span></div>
+        <div class="top-right">
+          <span class="badge outline" id="chain-badge" title="Where the hub runs">Connecting</span>
+          <button type="button" class="btn outline sm" id="theme" aria-label="Switch between light and dark">Dark</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="intro">
+        <h1>GPU hours, bought together and paid per unit</h1>
+        <p class="lede" id="lede">
+          You are watching buyer agents pool their demand for GPU hours and seller agents compete for it with sealed bids. Payminto pays the winner one signed
+          voucher per delivered unit, then settles everything in a few transfers.
+        </p>
+      </section>
+
+      <section class="panel" aria-label="Playback">
+        <div class="playback">
+          <div class="state" id="state"><span class="livedot"></span><b>Waiting for the run to start</b></div>
+          <div class="buttons">
+            <button type="button" class="btn outline sm" id="replay" aria-label="Replay from the start" disabled>Replay</button>
+            <button type="button" class="btn outline sm" id="pause" disabled>Pause</button>
+            <label class="muted" for="speed">Speed</label>
+            <select class="btn outline sm" id="speed" aria-label="Replay speed">
+              <option value="1">1x</option>
+              <option value="4" selected>4x</option>
+              <option value="16">16x</option>
+            </select>
+          </div>
+          <div class="scrub">
+            <input type="range" id="scrub" min="0" max="0" value="0" step="1" aria-label="Position in the run" disabled />
+            <span class="count num" id="count">0 of 0 events</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel clearing" aria-labelledby="clearing-title">
+        <div class="panel-head">
+          <div class="titles">
+            <h2 id="clearing-title">Gross cleared against net moved</h2>
+            <p id="clearing-desc">Every paid Call adds to the gross. What actually moves is only each account's net position.</p>
+          </div>
+          <div class="tags" id="clearing-tags"></div>
+        </div>
+        <div id="clearing"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="legend-title">
+        <div class="panel-head">
+          <div class="titles">
+            <h2 id="legend-title">How to read a bid</h2>
+            <p>Sellers bid without seeing each other. First everyone publishes a hash, then everyone opens it.</p>
+          </div>
+        </div>
+        <div class="pad legend">
+          <div>
+            <span><span class="badge secondary" data-icon="lock">Sealed</span></span>
+            <p>Only the hash of the bid is public. Nobody, the coordinator included, can read the price yet.</p>
+          </div>
+          <div>
+            <span><span class="badge info" data-icon="check">Revealed</span></span>
+            <p>The seller opened its bid on time and it matches its hash. It can win.</p>
+          </div>
+          <div>
+            <span><span class="badge void" data-icon="ban">Void</span></span>
+            <p>Opened late, never opened, or not matching its hash. It cannot win and does not set the price.</p>
+          </div>
+          <div>
+            <span><span class="badge default" data-icon="award">Winner</span></span>
+            <p>The lowest valid bid. Every buyer pays the second-lowest valid price, per delivered unit.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="rounds" id="rounds" aria-label="Rounds">
+        <div class="panel"><div class="pad empty">No round is open yet. The first one appears here as soon as the run starts.</div></div>
+      </section>
+
+      <section class="panel" aria-labelledby="agents-title">
+        <div class="panel-head">
+          <div class="titles">
+            <h2 id="agents-title">Agents and their Budgets</h2>
+            <p id="agents-desc">Every agent is its own NEAR sub-account with its own key and its own Budget on the hub.</p>
+          </div>
+          <div class="filters" id="agent-filters" role="group" aria-label="Show agents">
+            <button type="button" class="chip" data-f="all" aria-pressed="true">All</button>
+            <button type="button" class="chip" data-f="buyer" aria-pressed="false">Buyers</button>
+            <button type="button" class="chip" data-f="seller" aria-pressed="false">Sellers</button>
+            <button type="button" class="chip" data-f="refused" aria-pressed="false">Refused</button>
+          </div>
+        </div>
+        <div class="pad rows agents" id="agents"><p class="empty">The agents appear when the run starts.</p></div>
+      </section>
+
+      <div class="two">
+        <section class="panel" aria-labelledby="settle-title">
+          <div class="panel-head">
+            <div class="titles">
+              <h2 id="settle-title">Who received what</h2>
+              <p>After the rounds, the clearing node settles one batch on the hub and pays each net creditor once.</p>
+            </div>
+            <div class="tags" id="settle-tags"></div>
+          </div>
+          <div class="pad" id="settlement"><p class="empty">Nothing is settled yet. Payments so far are signed vouchers the clearing node has accepted.</p></div>
+        </section>
+
+        <section class="panel" aria-labelledby="checks-title">
+          <div class="panel-head">
+            <div class="titles">
+              <h2 id="checks-title">Measured and checked</h2>
+              <p>Counts and amounts from this run, and the invariants the run must hold.</p>
+            </div>
+            <div class="tags" id="checks-tags"></div>
+          </div>
+          <div class="pad" id="checks"><p class="empty">The table and the checks appear when the run ends.</p></div>
+        </section>
+      </div>
+
+      <p class="site-foot">
+        The rules are in <code>apps/swarm/RULES.md</code>. Strategies are scripts and no model is called. The coordinator is a service: its fairness is checkable from each
+        round file, not enforced by a contract. A Proof shows a Call is in a settled batch and that the buyer's key signed it, not that GPU work was done.
+      </p>
+    </main>
+
+    <dialog class="proof" id="proof" aria-labelledby="proof-title">
+      <div class="proof-head">
+        <h2 id="proof-title">Proof of one Call</h2>
+        <button type="button" class="ico" id="proof-close" aria-label="Close"></button>
+      </div>
+      <div class="proof-body" id="proof-body"></div>
+    </dialog>
+
+    <script src="/swarm.js"></script>
+  </body>
+</html>

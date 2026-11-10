@@ -1,0 +1,14 @@
+{
+  "seed": 51,
+  "buyers": 20,
+  "sellers": 5,
+  "rounds": 3,
+  "dataHosts": 4,
+  "sellerStrategies": { "truthful": 1, "shading": 1, "late": 1, "withhold": 1, "underdeliver": 1, "mismatch": 0 },
+  "buyerStrategies": { "steady": 18, "capped": 1, "thin": 1 },
+  "reserveUnitPrice": "0.70",
+  "storage": { "every": 2, "price": "0.06" },
+  "data": { "every": 4, "price": "0.08" },
+  "demand": { "min": 2, "max": 6 },
+  "sellerCost": { "min": "0.38", "max": "0.52" }
+}

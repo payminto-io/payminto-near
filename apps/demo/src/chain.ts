@@ -1,206 +1,149 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
-import { dirname, join } from "node:path";
-import { promisify } from "node:util";
-import {
-  createPublicClient,
-  createWalletClient,
-  defineChain,
-  getAddress,
-  fallback,
-  http,
-  type Account,
-  type Address,
-  type Chain,
-  type Hex,
-  type PublicClient,
-  type Transport,
-  type WalletClient,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { localAnvil, mockStablecoinAbi, networkFor } from "@payminto/protocol";
-import { REPO_ROOT } from "./config.ts";
+import { FakeChain } from "@payminto/chain/fake";
+import type { NearReader } from "@payminto/payee-check";
+import { FakeNearReader } from "@payminto/payee-check/fake";
+import type { Acceptance, AccountId, BudgetTerms, Chain, Claim, Id32, Network, PublicKey, TxHash } from "@payminto/protocol";
+import type { ChainKind } from "./config.ts";
+import { FAKE_NAMES, type DemoNames } from "./names.ts";
+import { freePort } from "./ports.ts";
+import type { SandboxStats } from "./sandbox/process.ts";
+import { newNearSecretKey, type Signers } from "./sandbox/near.ts";
 
-const run = promisify(execFile);
-
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const port = (srv.address() as { port: number }).port;
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
-function canBind(port: number, host: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = createServer();
-    srv.unref();
-    srv.once("error", () => resolve(false));
-    srv.listen(port, host, () => srv.close(() => resolve(true)));
-  });
-}
+/** Kept for code written against the simulated stack; a run's own names are `DemoHub.names`. */
+export const HUB: AccountId = FAKE_NAMES.hub;
+export const TOKEN: AccountId = FAKE_NAMES.token;
+export const OPERATOR: AccountId = FAKE_NAMES.operator;
+export const NETWORK: Network = "near:sandbox";
 
 /**
- * Whether nothing listens on the port. Without a host it probes both 127.0.0.1 and 0.0.0.0: macOS lets a wildcard
- * bind succeed next to a loopback-only listener (a Docker port forward, say), so one probe alone misses it.
+ * What the owners and sellers in the story do from their own wallets. On a real chain each of these is a transaction
+ * the account signs; the node never holds those keys.
  */
-export async function portIsFree(port: number, host?: string): Promise<boolean> {
-  if (host) return canBind(port, host);
-  return (await canBind(port, "127.0.0.1")) && (await canBind(port, "0.0.0.0"));
+export interface DemoWallets {
+  /** Test tokens for an account. */
+  fund(account: AccountId, amount: bigint): Promise<void>;
+  /** NEP-145 registration at the token, so the account can receive payouts. */
+  register(account: AccountId): Promise<void>;
+  /** `open_budget` signed by the owner, then `ft_transfer_call` into escrow. */
+  openBudget(owner: AccountId, terms: BudgetTerms, escrow: bigint): Promise<Id32>;
+  /** `settle_own` signed by the payee, with the node's acceptance of that call: the escape hatch when the node is gone. */
+  settleOwn(payee: AccountId, claim: Claim, acceptance: Acceptance): Promise<TxHash>;
+  /** `revoke_budget` signed by the owner. */
+  revokeBudget(owner: AccountId, budgetId: Id32): Promise<TxHash>;
+  /** `fund_from_credit` signed by the owner: earned hub credit becomes escrow of the owner's own Budget. */
+  fundFromCredit(owner: AccountId, budgetId: Id32, amount: bigint): Promise<TxHash>;
 }
 
-export type Rpc = {
-  rpcUrl: string;
+/** What the hub account itself shows on chain. Null on the simulated hub, which has no accounts or code. */
+export type HubFacts = { accessKeys: number; codeHash: string; expectedCodeHash: string };
+
+/**
+ * The hub account's NEAR side: the bytes of storage it uses, and its own balance, which is its NEAR less what that
+ * storage locks and less the storage balance it holds for the node. If `ownYocto` falls, the hub paid for something.
+ */
+export type HubNear = { storageBytes: number; ownYocto: bigint };
+
+/** The chain one demo run uses. */
+export type DemoHub = {
+  kind: ChainKind;
+  /** Printed wherever chain state is shown, so simulated data is never mistaken for NEAR. */
+  label: string;
+  names: DemoNames;
+  /** The read side: what the story's verifiers and the checks read. On sandbox it holds no key at all. */
   chain: Chain;
-  pub: PublicClient<Transport, Chain>;
-  wallet(key: Hex): WalletClient<Transport, Chain, Account>;
+  /** Handed to the node. Undefined means the node builds its own NearRpcChain from `nodeEnv`, as in production. */
+  nodeChain: Chain | undefined;
+  /** Extra node configuration, for example RPC_URL and OPERATOR_KEY. */
+  nodeEnv: Record<string, string>;
+  /** The JSON-RPC a verifier uses, or null for the simulated hub. */
+  rpcUrl: string | null;
+  /**
+   * What the payee check reads accounts with. On sandbox it is the package's read-only RPC reader on the sandbox's own
+   * endpoint, so every signal is a fact of that chain. On the simulated hub it is the package's fake reader, kept in
+   * step with what the story's wallets do there.
+   */
+  payeeReader: NearReader;
+  wallets: DemoWallets;
+  /** The hub's solvency invariant: token balance equals escrow plus credits plus in-flight payouts. Throws if broken. */
+  solvency(): Promise<void>;
+  facts(): Promise<HubFacts | null>;
+  /** Null on the simulated hub, which has no NEAR accounts. */
+  near(): Promise<HubNear | null>;
+  /** Block production while the story ran, or null for the simulated hub. */
+  stats(): SandboxStats | null;
+  /**
+   * Sandbox only: the sandbox root account and the key holders of this run, so a caller can create more local accounts
+   * (the swarm creates its agents' sub-accounts with the root's key, `signers.get(root).secretKey`).
+   */
+  sandbox?: { root: AccountId; signers: Signers };
+  close(): Promise<void>;
 };
 
-export function rpcFor(chainId: number, rpcUrl: string): Rpc {
-  const base = chainId === 31337 ? localAnvil : networkFor(chainId).chain;
-  const chain = defineChain({ ...base, rpcUrls: { default: { http: [rpcUrl] } } });
-  // Live chains: the given RPC first, then the network's other public RPCs. Public endpoints drop requests ("fetch
-  // failed"), and one dropped read must not end a run that has already spent testnet funds.
-  const urls = chainId === 31337 ? [rpcUrl] : [...new Set([rpcUrl, ...base.rpcUrls.default.http])];
-  const transport = urls.length > 1 ? fallback(urls.map((u) => http(u, { retryCount: 3, timeout: 20_000 })), { retryCount: 2 }) : http(rpcUrl, { retryCount: 3, timeout: 20_000 });
-  const pub = createPublicClient({ chain, transport, pollingInterval: chainId === 31337 ? 100 : 1_000 });
-  return { rpcUrl, chain, pub, wallet: (key: Hex) => createWalletClient({ account: privateKeyToAccount(key), chain, transport }) };
-}
-
-export type AnvilProcess = { rpcUrl: string; port: number; stop(): Promise<void> };
+export type HubOptions = {
+  /** The run's disposable directory: the sandbox log goes here. */
+  runDir: string;
+  /** The node's acceptance and checkout public key: the hub's checkout key, and the receipt key the node registers. */
+  checkoutKey: PublicKey;
+  say?: (line: string) => void;
+};
 
 /**
- * Starts a fresh anvil under a shell watchdog: if this process dies for any reason (even SIGKILL), the watchdog notices
- * within a second and stops anvil, so no orphan survives. Without `port`, anvil binds port 0 and reports the port it
- * got ("Listening on ..."), so two runs started at once can never share one anvil (a probe-then-bind port could be
- * taken by another run's anvil in between, and this run would then talk to that one).
+ * The simulated hub: an in-memory model of the contract with the same rules and refusal codes. `receiptKey` is the key
+ * the node signs acceptances with; the node's account registers it, as on a real hub, so sellers can use `settle_own`.
  */
-export async function startAnvil(opts: { port?: number; blockTime?: number } = {}): Promise<AnvilProcess> {
-  const args = ["--port", String(opts.port ?? 0), ...(opts.blockTime ? ["--block-time", String(opts.blockTime)] : [])];
-  const script = `anvil ${args.join(" ")} & A=$!; trap 'kill $A 2>/dev/null' EXIT INT TERM; while kill -0 ${process.pid} 2>/dev/null && kill -0 $A 2>/dev/null; do sleep 1; done`;
-  const proc: ChildProcess = spawn("sh", ["-c", script], { stdio: ["ignore", "pipe", "ignore"] });
-  const exited = new Promise<void>((r) => proc.once("exit", () => r()));
-  /** Resolves once the watchdog (and with it anvil) has exited, at most ~3 s. */
-  const stop = async () => {
-    if (proc.exitCode === null && !proc.killed) proc.kill("SIGTERM");
-    await Promise.race([exited, new Promise((r) => setTimeout(r, 3_000).unref())]);
+export function fakeHub(receiptKey?: PublicKey): DemoHub {
+  const names = FAKE_NAMES;
+  const chain = new FakeChain({ hub: names.hub, token: names.token, network: NETWORK, operator: names.operator });
+  // The settler is allowlisted with its settlement storage prepaid, then registers its receipt key.
+  chain.addSettler(names.operator);
+  if (receiptKey) void chain.registerReceiptKey(names.operator, receiptKey);
+  // The accounts the payee check can see. Every owner and seller exists, each with its own key, and none is registered
+  // with the token until its wallet mints or registers below. The lookalike `mirror` does not exist, as on the sandbox.
+  const payeeReader = new FakeNearReader({ [names.token]: { codeHash: "simulated-token-code", fullAccessKeys: 0 }, [names.hub]: { codeHash: "simulated-hub-code", fullAccessKeys: 0, registeredWith: [names.token] } });
+  const { mirror, ...sellers } = names.sellers;
+  for (const account of new Set([names.operator, ...Object.values(names.owners), ...Object.values(sellers)])) payeeReader.set(account, {});
+  payeeReader.accounts.delete(mirror);
+  const registered = (account: AccountId) => void payeeReader.set(account, { ...payeeReader.accounts.get(account), registeredWith: [names.token] });
+  return {
+    kind: "fake",
+    label: "SIMULATED (in-memory model of the hub, not NEAR)",
+    names,
+    chain,
+    nodeChain: chain,
+    // Never used: the simulated hub signs nothing. The node still requires a well-formed key.
+    nodeEnv: { OPERATOR_KEY: newNearSecretKey() },
+    rpcUrl: null,
+    payeeReader,
+    wallets: {
+      fund: async (account, amount) => {
+        chain.mint(account, amount);
+        registered(account);
+      },
+      register: async (account) => {
+        chain.register(account);
+        registered(account);
+      },
+      openBudget: async (owner, terms, escrow) => {
+        const id = chain.openBudget(owner, terms);
+        if (escrow > 0n) chain.depositBudget(owner, id, escrow);
+        return id;
+      },
+      settleOwn: (payee, claim, acceptance) => chain.settleOwn(payee, claim, acceptance),
+      revokeBudget: (owner, id) => chain.revokeBudget(owner, id),
+      fundFromCredit: (owner, id, amount) => chain.fundFromCredit(owner, id, amount),
+    },
+    solvency: async () => chain.solvency(),
+    facts: async () => null,
+    near: async () => null,
+    stats: () => null,
+    close: async () => {},
   };
-  let port: number;
-  try {
-    port = await listeningPort(proc, 15_000);
-  } catch (err) {
-    await stop();
-    throw new Error(`anvil did not start${opts.port ? ` on port ${opts.port}` : ""} (is foundry installed? try: anvil --version): ${(err as Error).message}`);
-  }
-  const rpcUrl = `http://127.0.0.1:${port}`;
-  const pub = createPublicClient({ transport: http(rpcUrl, { retryCount: 0 }) });
-  for (let i = 0; ; i++) {
-    try {
-      await pub.getChainId();
-      break;
-    } catch {
-      if (proc.exitCode !== null || i > 150) {
-        await stop();
-        throw new Error(`anvil did not answer on port ${port}`);
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  return { rpcUrl, port, stop };
 }
 
-/** The port from anvil's "Listening on 127.0.0.1:PORT" line; its later output is drained so the pipe never fills. */
-export function listeningPort(proc: ChildProcess, timeoutMs: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    let buf = "";
-    const done = (err: Error | null, port?: number) => {
-      clearTimeout(timer);
-      proc.stdout!.off("data", onData);
-      proc.off("exit", onExit);
-      proc.stdout!.on("data", () => {});
-      if (err) reject(err);
-      else resolve(port!);
-    };
-    const onData = (d: Buffer) => {
-      buf = (buf + d.toString("utf8")).slice(-4096);
-      const m = /Listening on \S*?:(\d+)/.exec(buf);
-      if (m) done(null, Number(m[1]));
-    };
-    const onExit = () => done(new Error("anvil exited before listening"));
-    const timer = setTimeout(() => done(new Error(`no "Listening on" line within ${timeoutMs} ms`)), timeoutMs);
-    proc.stdout!.on("data", onData);
-    proc.once("exit", onExit);
-  });
+export async function createHub(kind: ChainKind, opts?: HubOptions): Promise<DemoHub> {
+  if (kind === "fake") return fakeHub(opts?.checkoutKey);
+  if (!opts) throw new Error("a sandbox hub needs a run directory and the node's checkout key");
+  const { sandboxHub } = await import("./sandbox/hub.ts");
+  return sandboxHub(opts);
 }
 
-const DeployLock = join(REPO_ROOT, "contracts", "cache", "payminto-deploy-local.lock");
-
-/**
- * One forge run at a time across processes: parallel runs would compile into the same out/ and cache/ and write the
- * same broadcast file. A lock older than two minutes is a crashed run's and is taken over.
- */
-async function withDeployLock<T>(fn: () => Promise<T>): Promise<T> {
-  mkdirSync(dirname(DeployLock), { recursive: true });
-  for (let i = 0; ; i++) {
-    try {
-      closeSync(openSync(DeployLock, "wx"));
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - statSync(DeployLock).mtimeMs > 120_000) rmSync(DeployLock, { force: true });
-      } catch {
-        // gone already: retry
-      }
-      if (i > 3_000) throw new Error(`timed out waiting for ${DeployLock}`);
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    rmSync(DeployLock, { force: true });
-  }
-}
-
-/**
- * Deploys ClearingHub, MockStablecoin and the gateway contracts with `forge script script/DeployLocal.s.sol` (anvil
- * only). The script writes this run's own file under contracts/deployments/local/ (DEPLOY_LOCAL_OUT), never the shared
- * deployments/31337.json that other local sessions rely on; the result is copied into this run's directory.
- */
-export async function forgeDeployLocal(rpcUrl: string, deployerKey: Hex, runDeploymentsDir: string): Promise<{ hub: Address; token: Address; blockNumber: number }> {
-  const rel = `deployments/local/${process.pid}-${randomBytes(6).toString("hex")}.json`;
-  const out = join(REPO_ROOT, "contracts", rel);
-  let fresh: string;
-  try {
-    await withDeployLock(() =>
-      run("forge", ["script", "script/DeployLocal.s.sol", "--rpc-url", rpcUrl, "--broadcast", "--private-key", deployerKey], {
-        cwd: join(REPO_ROOT, "contracts"),
-        maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, FOUNDRY_DISABLE_NIGHTLY_WARNING: "1", DEPLOY_LOCAL_OUT: rel },
-      }),
-    );
-    fresh = readFileSync(out, "utf8");
-  } catch (err) {
-    const e = err as { stderr?: string; message: string };
-    throw new Error(`forge DeployLocal failed: ${(e.stderr ?? e.message).split("\n").slice(-6).join("\n")}`);
-  } finally {
-    rmSync(out, { force: true });
-  }
-  mkdirSync(runDeploymentsDir, { recursive: true });
-  writeFileSync(join(runDeploymentsDir, "31337.json"), fresh);
-  const d = JSON.parse(fresh) as { clearingHub: string; token: string; blockNumber: number };
-  return { hub: getAddress(d.clearingHub), token: getAddress(d.token), blockNumber: d.blockNumber };
-}
-
-export async function mintLocal(rpc: Rpc, minterKey: Hex, token: Address, to: Address, amount: bigint): Promise<void> {
-  const hash = await rpc.wallet(minterKey).writeContract({ address: token, abi: mockStablecoinAbi, functionName: "mint", args: [to, amount] });
-  const r = await rpc.pub.waitForTransactionReceipt({ hash });
-  if (r.status !== "success") throw new Error(`mint reverted in ${hash}`);
-}
+export { freePort };
