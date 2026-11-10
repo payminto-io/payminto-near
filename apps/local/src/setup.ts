@@ -6,12 +6,14 @@
  *   2. a business with a payout account, proven with a NEP-413 signature by that account;
  *   3. a person for that business, invited by the owner and accepting the invite;
  *   4. an API key the business Admin creates, and a payment link made with it through the SDK's GatewayClient;
+ *   4b. the business's NEAR account for payments from other chains (NEAR Intents, simulated), proven with a NEP-413
+ *       signature, and the any-chain checkout turned on, with a second link for the returned-deposit walkthrough;
  *   5. the paid services (see services.ts);
  *   6. three Budgets, each opened and funded on chain by its owner and then registered with the node.
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, writeFileSync } from "node:fs";
-import type { AccountId, Id32, Network, Policy, PublicKey, WalletTx } from "@payminto/protocol";
+import { intentsPayoutProofRequest, type AccountId, type Id32, type IntentsPayout, type Network, type Policy, type PublicKey, type WalletTx } from "@payminto/protocol";
 import { GatewayClient, OwnerClient, signPayoutProof, type PayoutSigner } from "@payminto/sdk";
 import { USDC, type LocalAccounts, type RoleKey } from "./accounts.ts";
 import type { AgentDesk } from "./agents.ts";
@@ -60,6 +62,8 @@ export type SetupResult = {
   gateway: GatewayClient;
   merchant: { id: string; name: string; payout: AccountId };
   link: { id: string; slug: string; url: string; title: string; amount: string };
+  /** The any-chain checkout: the business's NEAR account for it, and the link of the returned-deposit walkthrough. */
+  anyChain: { account: AccountId; link: { id: string; slug: string; url: string; title: string; amount: string } };
   budgets: Record<OwnerKey, BudgetSeed>;
 };
 
@@ -159,6 +163,20 @@ export async function runSetup(o: {
   const link = await gateway.links.create({ title: "Bag of beans, 250 g", description: "Single origin, roasted this week.", amount: linkAmount, collect_email: false });
   say(`   API key ${key.id} created by the business Admin; with it the SDK created the payment link "${link.title}" for 4.50 USDC: ${link.url}`);
 
+  // 4b. Payments from other chains (NEAR Intents, simulated here). The business proves its NEAR account with a NEP-413
+  //     message signed by that account, as the dashboard's wallet step does; the account registered itself with the
+  //     token when it was created, so every check passes and the Admin can turn the method on.
+  const anyAccount = accounts.by.anychain.accountId;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const req = intentsPayoutProofRequest(merchant.id, anyAccount, timestamp, { settlementNetwork: "near:mainnet (simulated)", hub: o.hub });
+  const signed = await o.signer.signMessage(anyAccount, req.message, req.recipient, req.nonce);
+  const anyPayout = await admin.request<IntentsPayout>("PUT", "/v1/merchant/intents-payout", { account: anyAccount, proof: { timestamp, public_key: signed.publicKey, signature: signed.signature } }, scope);
+  if (!anyPayout.verified) throw new Error(`the any-chain payout account did not pass its checks: ${JSON.stringify(anyPayout.checks)}`);
+  await admin.request("PUT", `/v1/merchants/${merchant.id}/methods`, { methods: [{ method: "oneclick", enabled: true }] }, scope);
+  const anyLinkAmount = (2n * USDC).toString();
+  const anyLink = await gateway.links.create({ title: "Gift card, 2 USDC (any-chain returned-deposit demo)", description: "Pay it from another chain and send too little: NEAR Intents returns the deposit.", amount: anyLinkAmount, collect_email: false });
+  say(`   ${anyAccount} proved it is ${merchant.name}'s account for payments from other chains (NEAR Intents, simulated), and the Admin turned the method on; second link: ${anyLink.url}`);
+
   // 5. Paid services.
   const services = await o.registerServices(owner);
   for (const s of services) say(`   Paid service ${s.name} (${s.id}), ${Number(s.priceAtomic) / 1e6} USDC per call, paid to ${s.payee}.`);
@@ -190,7 +208,7 @@ export async function runSetup(o: {
     }),
   );
 
-  return { logins, owner, admin, gateway, merchant: { id: merchant.id, name: merchant.name, payout }, link: { id: link.id, slug: link.slug, url: link.url, title: link.title, amount: linkAmount }, budgets };
+  return { logins, owner, admin, gateway, merchant: { id: merchant.id, name: merchant.name, payout }, link: { id: link.id, slug: link.slug, url: link.url, title: link.title, amount: linkAmount }, anyChain: { account: anyAccount, link: { id: anyLink.id, slug: anyLink.slug, url: anyLink.url, title: anyLink.title, amount: anyLinkAmount } }, budgets };
 }
 
 type OutboxEmail = { to?: string; to_email?: string; subject?: string; body?: string; text?: string; link?: string; url?: string };

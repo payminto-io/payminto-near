@@ -13,6 +13,7 @@
     "@hono/node-server": "^2.1.5",
     "@payminto/chain": "workspace:*",
     "@payminto/demo": "workspace:*",
+    "@payminto/near-addons": "workspace:*",
     "@payminto/node": "workspace:*",
     "@payminto/protocol": "workspace:*",
     "@payminto/relayer": "workspace:*",
