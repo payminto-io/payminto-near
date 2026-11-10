@@ -7,6 +7,8 @@ import {
   MAX_CLAIMS,
   settleDeadline,
   sha256Text,
+  verifyDigest,
+  voucherDigest,
   type AccountId,
   type Claim,
   type Id32,
@@ -51,7 +53,7 @@ export type SettleResult =
   | { skipped: string; dropped?: DroppedClaim[]; sellerSettled?: SellerSettlementJson[] };
 
 /** Something only the operator can resolve. Logged as an error, emitted as `operator.alert`, and counted for paging. */
-export type OperatorAlert = { kind: "batch_mismatch" | "seller_settled_uncleared" | "settled_position_behind"; message: string } & Record<string, string | number | null>;
+export type OperatorAlert = { kind: "batch_mismatch" | "seller_settled_uncleared" | "settled_position_behind" | "claim_signature_invalid"; message: string } & Record<string, string | number | null>;
 
 /** How one batch send ended. `stale`: the hub refused it because a settled position moved under it; rebuild and retry. */
 type ChunkOutcome = { kind: "confirmed"; batchId: Id32 } | { kind: "stale" } | { kind: "failed" };
@@ -64,6 +66,9 @@ type ChunkOutcome = { kind: "confirmed"; batchId: Id32 } | { kind: "stale" } | {
 export const MAX_STALE_REBUILDS = 3;
 
 const pairKey = (budgetId: Id32, payee: AccountId) => `${budgetId}:${payee}`;
+
+/** Why a claim is left out of a batch when its voucher signature fails the hub's rule (`verifyDigest`). */
+export const BAD_CLAIM_SIGNATURE = "the voucher signature fails the hub's ed25519 rule";
 
 /** Unique per node and attempt. It cannot be derived from the root, because every leaf commits to the batch id. */
 export function batchIdOf(hub: AccountId, network: string, operator: AccountId, seq: number, nonce: string): Id32 {
@@ -316,6 +321,7 @@ export class SettlementService {
         if (!m) drop(c, "budget is not open on chain");
         else if (now > settleDeadline(m)) drop(c, "budget is past its settlement deadline");
         else if (unresolved) drop(c, unresolved);
+        else if (!this.#signedForHub(c, m.agentPk)) drop(c, BAD_CLAIM_SIGNATURE);
       }
 
       let stale = false;
@@ -488,6 +494,29 @@ export class SettlementService {
       });
     }
     return row;
+  }
+
+  /**
+   * The hub's own signature rule, applied to a claim before it goes into a batch: the hub refuses a whole batch for one
+   * voucher that fails `env::ed25519_verify`. Checked against the agent key the hub holds. Intake applies the same rule,
+   * so a claim fails here only if it was accepted before the node used it, or its stored signature changed since; the
+   * operator is told once per claim, and the claim stays accepted.
+   */
+  #signedForHub(c: Candidate, agentPk: PublicKey): boolean {
+    const { hub, network } = this.#chain;
+    if (verifyDigest(agentPk, voucherDigest(hub, network, toClaim(c)), c.agentSig)) return true;
+    this.#alert(
+      {
+        kind: "claim_signature_invalid",
+        message: "a claim's voucher signature fails the hub's ed25519 rule; it is left out of every batch",
+        budgetId: c.budgetId,
+        payee: c.payee,
+        cumulative: c.cumulative.toString(),
+        agentPk,
+      },
+      `claimsig:${c.budgetId}:${c.payee}:${c.cumulative}`,
+    );
+    return false;
   }
 
   /** Drops every claim of an owner whose escrow cannot cover its net debit, until the rest of the batch is fundable. */

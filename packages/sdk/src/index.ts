@@ -38,7 +38,7 @@ export {
   type VoucherStore,
   type VoucherExport,
 } from "./voucher-store.ts";
-export { OwnerClient, type OwnerClientOptions, type CreateBudgetArgs } from "./owner.ts";
+export { CreateBudgetError, OwnerClient, type OwnerClientOptions, type CreateBudgetArgs } from "./owner.ts";
 export { paywall, parseDenial, type Paywall, type PaywallOptions, type PaidContext, type PaywallCheck } from "./paywall.ts";
 export { NodeApiError, NodeHttp, type NodeInfo, type Position } from "./node-api.ts";
 export { callIdOf, cleanText, computeRequestHash, revokeDigest, revokeMessage, KeyedMutex } from "./util.ts";

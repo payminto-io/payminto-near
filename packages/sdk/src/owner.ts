@@ -1,4 +1,5 @@
 import {
+  agentKeyRefusal,
   budgetIdOf,
   budgetTermsToJson,
   depositBudgetTx,
@@ -44,6 +45,20 @@ export type CreateBudgetArgs = {
   salt?: Id32;
 };
 
+/**
+ * A Budget the SDK refuses to build, with a rule code in the node's refusal style. `WEAK_AGENT_KEY`: the agent key is
+ * small-order or non-canonical, so anyone could sign vouchers for it without its secret (internal audit F3); the node
+ * refuses to register such a Budget with the same code.
+ */
+export class CreateBudgetError extends Error {
+  readonly code: "WEAK_AGENT_KEY";
+  constructor(code: "WEAK_AGENT_KEY", message: string) {
+    super(message);
+    this.name = "CreateBudgetError";
+    this.code = code;
+  }
+}
+
 /** Covers the Budget record and the storage reserved for `settle_own`. The hub refunds the excess. */
 export const DEFAULT_OPEN_BUDGET_DEPOSIT = "100000000000000000000000"; // 0.1 NEAR in yoctoNEAR
 
@@ -75,6 +90,8 @@ export class OwnerClient {
     if (a.cap <= 0n) throw new Error("cap must be positive");
     if (!(a.validForSeconds > 0)) throw new Error("validForSeconds must be positive");
     if (BigInt(a.policy.perCallCap) > a.cap) throw new Error("policy.perCallCap exceeds cap");
+    const weak = agentKeyRefusal(a.agentPk);
+    if (weak) throw new CreateBudgetError(weak.code, weak.message);
     const terms: BudgetTerms = {
       owner: this.owner,
       agentPk: a.agentPk,

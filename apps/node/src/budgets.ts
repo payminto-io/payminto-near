@@ -1,4 +1,5 @@
 import {
+  agentKeyRefusal,
   budgetIdOf,
   budgetTermsToJson,
   canonicalPayees,
@@ -65,6 +66,9 @@ export class BudgetService {
     if (cap <= 0n) throw new ApiError(400, "INVALID_BUDGET", "cap must be positive");
     if (m.validUntil <= BigInt(Date.now())) throw new ApiError(400, "INVALID_BUDGET", "budget already expired");
     if (m.settler !== this.#chain.operator) throw new ApiError(400, "WRONG_SETTLER", `budget.settler must be this node's account ${this.#chain.operator}`);
+    // The hub v1 takes any 32 bytes as agent_pk; a key anyone can sign for is refused here, before anything is read or written.
+    const weak = agentKeyRefusal(m.agentPk);
+    if (weak) throw new ApiError(400, weak.code, weak.message, { agentPk: m.agentPk });
     let payees: string[];
     try {
       payees = canonicalPayees(m.payees);

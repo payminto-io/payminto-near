@@ -17,7 +17,7 @@ import {
   type Sig64,
 } from "@payminto/protocol";
 import type { ChainClient } from "./chain.ts";
-import { DEFAULT_FUNDS_MAX_AGE_MS } from "./config.ts";
+import { DEFAULT_FUNDS_MAX_AGE_MS, DEFAULT_NEW_PAYEE_LIMITS, type NewPayeeLimits } from "./config.ts";
 import type { Database } from "./db/database.ts";
 import { ApiError } from "./errors.ts";
 import type { EventBus } from "./events.ts";
@@ -96,6 +96,8 @@ export class VoucherService {
    * revoke outlives this age.
    */
   readonly #fundsMaxAgeMs: number;
+  /** NEW_PAYEE_MIN_AMOUNT and NEW_PAYEES_PER_HOUR: what a Budget may make this node's settler pay for in new pairs. */
+  readonly #newPayees: NewPayeeLimits;
   /**
    * Runs inside the transaction that records a new refusal (decision 8: the refusal webhook goes out through the outbox
    * with it). A replay folded into an existing row within the dedup window does not run it again.
@@ -117,6 +119,8 @@ export class VoucherService {
     denialDedupSec?: number;
     /** Oldest funds snapshot a call may be decided on, in milliseconds. Default: DEFAULT_FUNDS_MAX_AGE_MS. */
     fundsMaxAgeMs?: number;
+    /** Limits on payees new to a Budget. Default: DEFAULT_NEW_PAYEE_LIMITS. */
+    newPayees?: NewPayeeLimits;
   }) {
     this.#db = deps.db;
     this.#store = deps.store;
@@ -129,6 +133,7 @@ export class VoucherService {
     this.#clockMs = deps.clockMs ?? (() => Date.now());
     this.#denialDedupSec = deps.denialDedupSec ?? 60;
     this.#fundsMaxAgeMs = deps.fundsMaxAgeMs ?? DEFAULT_FUNDS_MAX_AGE_MS;
+    this.#newPayees = deps.newPayees ?? DEFAULT_NEW_PAYEE_LIMITS;
   }
 
   /** Unix seconds: the node-attested timestamp of a call, and the unit of every rolling window. */
@@ -306,6 +311,16 @@ export class VoucherService {
     const out = db.tx((): AcceptResult | null => {
       const m = this.#store.budget(v.budgetId);
       const position = m ? this.#store.position(m.id, v.payee) : { cumulative: 0n, settled: 0n };
+      // Payees this Budget paid for the first time after `since`: the first call of each payee, in the order they came.
+      const firstCallsSince = (since: number, limit: number, offset: number) =>
+        db.all<{ first: number }>(
+          "SELECT first FROM (SELECT MIN(timestamp) AS first FROM calls WHERE budget_id = ? GROUP BY payee) WHERE first > ? ORDER BY first LIMIT ? OFFSET ?",
+          m!.id,
+          since,
+          limit,
+          offset,
+        );
+      const isNewPayee = m !== null && position.cumulative === 0n && position.settled === 0n;
       const spentSince = (sec: number) => BigInt(db.get<{ s: string }>("SELECT bigsum(amount) AS s FROM calls WHERE budget_id = ? AND timestamp > ?", m!.id, now - sec)!.s);
       const funds = m ? this.#store.budgetFunds(m.id) : null;
       // When enough of a rolling window has passed for a refused call to fit. Read only to build a refusal's hint. A
@@ -331,6 +346,10 @@ export class VoucherService {
                 since,
                 q.leave - 1,
               );
+        if (q.window === "newPayees") {
+          const first = firstCallsSince(since, 1, q.leave - 1)[0];
+          return first ? first.first + q.seconds - now : null;
+        }
         return nth ? nth.timestamp + q.seconds - now : null;
       };
       const decision = evaluateVoucher({
@@ -372,6 +391,15 @@ export class VoucherService {
         funds,
         fundsAgeMs: funds ? this.#clockMs() - funds.refreshedAt : 0,
         fundsMaxAgeMs: this.#fundsMaxAgeMs,
+        newPayee: {
+          isNew: isNewPayee,
+          lastHour:
+            isNewPayee && this.#newPayees.maxPerHour > 0
+              ? db.get<{ n: number }>("SELECT COUNT(*) AS n FROM (SELECT MIN(timestamp) AS first FROM calls WHERE budget_id = ? GROUP BY payee) WHERE first > ?", m!.id, now - 3_600)!.n
+              : 0,
+          minFirstAmount: this.#newPayees.minFirstAmount,
+          maxPerHour: this.#newPayees.maxPerHour,
+        },
       });
 
       const positionAfter = (cumulative: bigint): PositionJson => ({

@@ -113,6 +113,7 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
       log: log.child({ component: "vouchers" }),
       denialDedupSec: config.denials.dedupWindowSec,
       fundsMaxAgeMs: config.fundsMaxAgeMs,
+      ...(config.newPayees ? { newPayees: config.newPayees } : {}),
       clockMs,
     });
     const budgets = new BudgetService({ db, store, chain, events, log: log.child({ component: "budgets" }) });

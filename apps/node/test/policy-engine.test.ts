@@ -37,6 +37,15 @@ function ctx(over: Partial<VoucherContext> = {}): VoucherContext {
 const withBudget = (b: Partial<NonNullable<VoucherContext["budget"]>>) => ctx({ budget: { ...ctx().budget!, ...b } });
 const withPolicy = (p: Partial<NonNullable<VoucherContext["budget"]>["policy"]>) => withBudget({ policy: { ...ctx().budget!.policy, ...p } });
 
+/** A first call to a payee this Budget has never paid, under the node's new-payee limits (min 1,000, 5 per hour). */
+const newPayee = (limits: Partial<NonNullable<VoucherContext["newPayee"]>> = {}, over: Partial<VoucherContext> = {}) =>
+  ctx({
+    position: 0n,
+    voucher: { ...ctx().voucher, cumulative: 1_000n },
+    newPayee: { isNew: true, lastHour: 0, minFirstAmount: 1_000n, maxPerHour: 5, ...limits },
+    ...over,
+  });
+
 /** The rules the engine decides: every node rule but the two of the payee check, which runs before it (test/payee-check.test.ts). */
 type EngineRule = Exclude<NodeDenialRule, PayeeCheckRule>;
 
@@ -56,6 +65,8 @@ const breakers: Record<EngineRule, () => VoucherContext> = {
   DAILY_CAP: () => ctx({ spentLast24h: 49_500n }),
   TOTAL_CAP: () => withBudget({ cap: 5_500n }),
   NET_EXPOSURE: () => ctx({ funds: { escrow: 5_500n, credit: 0n } }),
+  NEW_PAYEE_MIN_AMOUNT: () => newPayee({ minFirstAmount: 1_001n }),
+  NEW_PAYEE_RATE: () => newPayee({ lastHour: 5 }),
 };
 
 describe("evaluateVoucher", () => {
@@ -316,5 +327,64 @@ describe("policy hash", () => {
     expect(policyHash(old)).toBe(policyHash({ ...old, hourlyCap: "0", maxRepeatsPerRequest: 0 }));
     expect(policyHash(old)).not.toBe(policyHash({ ...old, hourlyCap: "5" }));
     expect(canonicalPolicy(old)).toBe('{"dailyCap":"2","hourlyCap":"0","maxCallsPerMinute":0,"maxRepeatsPerRequest":0,"perCallCap":"1","purpose":"p"}');
+  });
+});
+
+describe("new payees (audit F4: every first settlement of a pair costs the settler permanent hub storage)", () => {
+  const refused = (c: VoucherContext) => {
+    const d = evaluateVoucher(c);
+    if (d.ok) throw new Error("expected a refusal");
+    return d;
+  };
+
+  it("accepts a first payment at exactly the minimum, and a new payee while the hour has room", () => {
+    expect(evaluateVoucher(newPayee()).ok).toBe(true);
+    expect(evaluateVoucher(newPayee({ lastHour: 4 })).ok).toBe(true);
+  });
+
+  it("never applies either limit to a payee this Budget has paid before", () => {
+    expect(evaluateVoucher(ctx({ newPayee: { isNew: false, lastHour: 99, minFirstAmount: 10n ** 9n, maxPerHour: 1 } })).ok).toBe(true);
+  });
+
+  it("refuses a first payment below the minimum, for good: the same call never passes", () => {
+    const d = refused(newPayee({ minFirstAmount: 1_001n }));
+    expect(d.rule).toBe("NEW_PAYEE_MIN_AMOUNT");
+    expect(d.refusal).toMatchObject({ rule: "NEW_PAYEE_MIN_AMOUNT", attemptedAmount: "1000", retry: { kind: "never" } });
+    expect(d.details).toEqual({ payee: PAYEE, amount: "1000", minFirstAmount: "1001" });
+  });
+
+  it("checks the minimum against the whole request on its first voucher, and not on the later ones", () => {
+    // A split payment of 1,000 to the merchant and 50 to the platform fee is one first payment of 1,050.
+    expect(evaluateVoucher(newPayee({ minFirstAmount: 1_050n }, { requestAmount: 1_050n, requestPart: 0 })).ok).toBe(true);
+    expect(refused(newPayee({ minFirstAmount: 1_051n }, { requestAmount: 1_050n, requestPart: 0 })).rule).toBe("NEW_PAYEE_MIN_AMOUNT");
+    // The fee voucher (part 1) pays the operator's own fee account: the request already passed the minimum.
+    const fee = newPayee(
+      { minFirstAmount: 1_051n },
+      { provider: { payee: PAYEE, priceAtomic: 50n }, voucher: { ...ctx().voucher, amount: 50n, cumulative: 50n }, requestAmount: 50n, requestPart: 1 },
+    );
+    expect(evaluateVoucher(fee).ok).toBe(true);
+  });
+
+  it("refuses a new payee once the hour's quota of new payees is used, and says when one leaves the window", () => {
+    const asked: WindowQuery[] = [];
+    const d = refused(newPayee({ lastHour: 5 }, { waitFor: (q) => (asked.push(q), 1_234) }));
+    expect(d.rule).toBe("NEW_PAYEE_RATE");
+    expect(d.message).toBe(DENIAL_RULES.NEW_PAYEE_RATE);
+    expect(asked).toEqual([{ window: "newPayees", seconds: 3_600, leave: 1 }]);
+    expect(d.refusal.retry).toEqual({ kind: "after", seconds: 1_234 });
+    expect(d.details).toEqual({ payee: PAYEE, newPayeesLastHour: 5, maxNewPayeesPerHour: 5 });
+    // Without a lookup the hint is the whole hour, which is always long enough.
+    expect(refused(newPayee({ lastHour: 7 })).refusal.retry).toEqual({ kind: "after", seconds: 3_600 });
+  });
+
+  it("says never when the Budget expires before a slot frees up", () => {
+    const d = refused(newPayee({ lastHour: 5 }, { waitFor: () => 1_800, budget: { ...ctx().budget!, validUntilMs: BigInt(NOW + 600) * 1000n } }));
+    expect(d.rule).toBe("NEW_PAYEE_RATE");
+    expect(d.refusal.retry).toEqual({ kind: "never" });
+  });
+
+  it("is off when a limit is 0 or the node passes none", () => {
+    expect(evaluateVoucher(newPayee({ minFirstAmount: 0n, maxPerHour: 0, lastHour: 10_000 })).ok).toBe(true);
+    expect(evaluateVoucher({ ...newPayee(), newPayee: undefined }).ok).toBe(true);
   });
 });

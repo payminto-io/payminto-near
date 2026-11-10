@@ -280,6 +280,8 @@ Errors name the variable and never print its value.
 | `PAYOUT_INTERVAL_SEC` | `300` | Scheduled payouts of hub credit; `0` pays only on `POST /v1/payouts` |
 | `FUNDS_REFRESH_SEC` | `30` | How often escrow and credit are re-read for Budgets with unsettled spend |
 | `FUNDS_MAX_AGE_MS` | `10000` | The oldest hub snapshot (escrow, credit, revoked or not) a call may be decided on, from 500 to 60000. An older one is read again first, and if the hub cannot be read the call is refused with `NET_EXPOSURE` and a short retry |
+| `NEW_PAYEE_MIN_AMOUNT` | `1000` | The least first payment from a Budget to a payee it has never paid, in atomic token units (`1000` is 0.001 USDC); a smaller one is refused with `NEW_PAYEE_MIN_AMOUNT`. The first settlement of each (Budget, payee) pair makes your settler pay permanent hub storage, about 3 milliNEAR, whatever the amount. `0` disables it |
+| `NEW_PAYEES_PER_HOUR` | `20` | How many payees one Budget may pay for the first time in a rolling hour; past it the call is refused with `NEW_PAYEE_RATE` and the seconds until a slot frees. A Budget with a payee list has at most 16 payees, so only a Budget open to any payee can reach it. `0` disables it |
 | `RATE_LIMIT_PROVIDER_RPS`, `RATE_LIMIT_PROVIDER_BURST` | `200`, `1000` | Token bucket per provider key on `POST /v1/vouchers`; `0` rps disables it |
 | `RATE_LIMIT_IP_RPS`, `RATE_LIMIT_IP_BURST` | `100`, `1000` | Token bucket per client IP for requests without a credential |
 | `RATE_LIMIT_UNSIGNED_RPS`, `RATE_LIMIT_UNSIGNED_BURST` | `5`, `50` | Token bucket for vouchers not signed by their Budget's agent key, per provider key, and per client IP on the public pay routes. They get a plain error and are never recorded as refusals; past the bucket the answer is 429 |

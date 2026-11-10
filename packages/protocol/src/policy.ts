@@ -54,6 +54,13 @@ export const DENIAL_RULES = {
   STALE_CUMULATIVE: "Voucher cumulative does not extend the latest accepted voucher",
   PRICE_MISMATCH: "Voucher amount does not match the provider price",
   NET_EXPOSURE: "Unsettled spending of this Budget would exceed its escrow",
+  /**
+   * A node limit, not a Budget rule: the first payment from a Budget to a payee is below the node's NEW_PAYEE_MIN_AMOUNT.
+   * Its settlement would make the node's settler pay permanent hub storage for the new (Budget, payee) pair.
+   */
+  NEW_PAYEE_MIN_AMOUNT: "A first payment to a payee new to this Budget is below this node's minimum",
+  /** A node limit, not a Budget rule: this Budget already paid NEW_PAYEES_PER_HOUR payees for the first time in the last hour. */
+  NEW_PAYEE_RATE: "This Budget has paid too many new payees in the last hour",
   /** The payee check judged the payee as block (a missing account, a lookalike of an allowed payee, several reports), or the owner denied it. */
   PAYEE_BLOCKED: "The payee check blocks this payee, so nothing is paid to it",
   /** The payee check judged the payee as warn and the Budget's owner has not approved it. */
