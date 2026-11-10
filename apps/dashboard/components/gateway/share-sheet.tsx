@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { CopyAction } from "@/components/checkout/parts";
 import { CodeBlock, Segmented } from "./kit";
+import { EmbedSnippet } from "./embed-snippet";
 
 /** What the samples name: the server the agent trusts and the hub it clears on, from `/v1/info`, and the link's price. */
 export type AgentSnippetContext = { network?: string | null; hub?: string | null; nodeUrl?: string | null; amount?: string | null };
@@ -181,17 +182,14 @@ export function ShareSheet({ link, open, onOpenChange }: { link: PaymentLink; op
                 </span>
                 <p className="text-xs text-muted-foreground">{merchant.data?.brand_color ? "In your brand color" : "Set a brand color in Settings to match your site"}</p>
               </div>
-              {(
-                [
-                  ["Button", button.html],
-                  ["Inline frame", `<iframe src="${url}" title="${link.title.replace(/"/g, "&quot;")}" width="100%" height="720" style="border:0"></iframe>`],
-                ] as const
-              ).map(([label, code]) => (
-                <div key={label} className="flex flex-col gap-1.5">
-                  <p className="text-sm font-medium">{label}</p>
-                  <CodeBlock code={code} label={label} copy={<CopyAction value={code} label="Copy" className="h-7 px-2 text-xs" />} />
-                </div>
-              ))}
+              <div className="flex flex-col gap-1.5">
+                <p className="text-sm font-medium">Pay button with a popup checkout</p>
+                <EmbedSnippet link={link} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <p className="text-sm font-medium">Plain link, no script</p>
+                <CodeBlock code={button.html} label="Plain link" copy={<CopyAction value={button.html} label="Copy" className="h-7 px-2 text-xs" />} />
+              </div>
             </>
           )}
         </div>
