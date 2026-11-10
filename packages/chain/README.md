@@ -27,10 +27,12 @@ A small-order key lets anyone forge signatures with no secret, so the node and t
   The client never retries a write or re-signs it with a new nonce, and operator writes run one at a time.
 - A hub panic becomes `ChainError` with its code (`hubErrorOf` does the mapping).
   Anything else becomes `NearRpcError` with a `kind` (`read_only`, `rejected`, `failed`, `timeout`, `unavailable`, `invalid_response`), the transaction hash when one exists, and `outcomeUnknown` when a sent transaction may still land.
-- `settle` is safe to call again with the same arguments: the hub refuses a known batch id with `BATCH_EXISTS` and changes nothing, so after an `outcomeUnknown` error read `batch(batchId)` or call `settle` again and treat `BATCH_EXISTS` as "the first one landed".
+- `settle` is safe to call again with the same arguments: the hub refuses a batch id this settler already used with `BATCH_EXISTS` and changes nothing, so after an `outcomeUnknown` error read `batch(batchId, operator)` or call `settle` again and treat `BATCH_EXISTS` as "the first one landed".
+- Batch ids belong to their settler on hub v2, so `batch(id, settler)` and `verifyReceipt(batchId, settler, fields, proof)` take the settler, on `Chain`, `NearRpcChain`, `FakeChain` and `NearReader` alike.
+  A verifier that has only a receipt reads the settler from the Budget: `settle_batch` takes only Budgets that name the caller.
 - `readTimeoutMs` (default 15 s) and `writeTimeoutMs` (default 60 s) bound each call.
 - `txState(hash, sender?)` looks the transaction up with the operator as sender unless another sender is given.
-- Extra reads beyond `Chain`: `config()`, `totals()`, `isSettler(account)` and `checkoutSettler()`.
+- Extra reads beyond `Chain`: `config()` (with `pendingAdmin`), `totals()`, `isSettler(account)` and `checkoutSettler()`.
 - `receiptKeys(settler)` and `storageOf(account)` are part of `Chain`: the keys a settler registered for signing acceptances, and the NEAR an account has prepaid for storage.
   A node reads both at startup, and sellers read the first before they rely on `settle_own`.
 - `settle` attaches `30 + 2 * claims` Tgas.
@@ -42,10 +44,10 @@ A small-order key lets anyone forge signatures with no secret, so the node and t
 A read-only client for browsers and verifiers, with no keys, no near-kit and no Node built-ins.
 It posts JSON-RPC `query` with `call_function` at `finality: "final"` through `fetch`, and aborts each request after `timeoutMs` (default 10 s).
 
-- `batch(id)`, `payments(ids)` and `verifyReceipt(batchId, fields, proof)` return `{ value, blockHeight, blockHash }`, so a page can show which final block it read.
+- `batch(id, settler)`, `payments(ids)` and `verifyReceipt(batchId, settler, fields, proof)` return `{ value, blockHeight, blockHash }`, so a page can show which final block it read.
 - `txState(hash, sender)` reads the `tx` method without waiting and answers `unknown`, `pending`, `final` or `failed` with the hub code.
 - `view(contract, method, args)` is the general call behind them.
-- `checkReceiptOnChain(reader, { network, batchId, fields, proof })` rebuilds the leaf and root locally, reads the stored root, asks the hub's `verify_receipt`, and is verified only when both agree.
+- `checkReceiptOnChain(reader, { network, settler, batchId, fields, proof })` rebuilds the leaf and root locally, reads the stored root, asks the hub's `verify_receipt`, and is verified only when both agree.
 - Errors are `NearReadError` with a `kind`: `timeout`, `unavailable`, `not_found`, `contract_error` (with `hubCode`) or `invalid_response`.
 - `PUBLIC_RPC_URLS` holds the public testnet and mainnet endpoints as defaults.
 
@@ -109,11 +111,13 @@ struct BudgetPreimage {
     settler: String,
     cap: u128,
     valid_until: u64,         // Unix ms
-    payees: Vec<String>,      // sorted by bytes, unique, at most 16; empty means any payee
+    payees: Vec<String>,      // sorted by bytes, unique, at most 16; empty for a Budget with allow_any_payee
     policy_hash: [u8; 32],
     salt: [u8; 32],
 }
 ```
+
+`allow_any_payee` and `max_payees` are terms of `open_budget` but not part of the id: the hub accepts the flag only with an empty list, so the list fixes it.
 
 Receipt leaf is `sha256(0x00 || borsh(ReceiptPreimage))`.
 
@@ -180,7 +184,10 @@ The preimage starts with ASCII letters, so it can be mistaken neither for a Bors
 The hub charges for the bytes a call really writes and never pays for them itself.
 `vectors/storage.json` pins the sizes, and the contract's tests write each record and measure it against that file.
 `FakeChain` uses the same sizes, so a settler with no storage balance is refused there exactly as on chain.
-`maxSettleBatchStorageCost(claims)` is an upper bound for sizing a prefund or an alert, never the charge itself.
+On hub v2 the owner prepays its Budget's settlement storage at `open_budget`: `PAIR_BYTES` (332) per payee slot, one slot per listed payee or `maxPayees` (default `DEFAULT_MAX_PAYEES`, 16) for a Budget open to any payee (`payeeSlots`, `storageReserveBytes`).
+`openBudgetStorageCost(terms)` is the record, `REVOKE_BYTES` and that reserve.
+A settler pays only for its own batch records, receipt keys and checkout payments, so `maxSettleBatchStorageCost(batches)` is the cost of that many batch records of a 64-character settler, for sizing a prefund or an alert, never the charge itself.
+A credit entry records who paid for it (`CreditFunder`: a settler, a Budget or nobody) and returns its bytes there when it is removed.
 
 ## Merkle tree
 
@@ -195,36 +202,38 @@ The hub charges for the bytes a call really writes and never pays for them itsel
 ## Hub rules that `FakeChain` models
 
 - `open_budget` sets `cap`, and deposits raise only `escrow`.
-  A payee list that names the hub or the token is `INVALID_BUDGET`.
+  A payee list that names the hub or the token is `INVALID_BUDGET`, and so are an empty list without `allow_any_payee`, `max_payees` outside 1 to 256 (`MAX_ANY_PAYEES`), and an agent key that is of small order or not canonical (`publicKeyProblem`; the hub does not detect a key that is not a point at all).
 - `settle_batch` panics with a code from `HUB_ERRORS` as the start of the message, and the RPC client maps that code onto `ChainError`.
-- Check order is settler allowlist, replayed batch id, `MAX_CLAIMS`, then per claim: known Budget, Budget settler is the caller, one Budget per owner, inside the settlement deadline, payee not the hub or the token (`RESERVED_ACCOUNT`), payee allowed, signature, not stale, cap.
-- Then `ZERO_GROSS`, `NET_MISMATCH`, `INSUFFICIENT_ESCROW` for each net debtor, and finally `INSUFFICIENT_STORAGE` if the settler's storage balance cannot pay for what the batch writes.
+- Check order is settler allowlist, replayed batch id for this settler, `MAX_CLAIMS`, then per claim: known Budget, Budget settler is the caller, one Budget per owner, inside the settlement deadline, payee not the hub or the token (`RESERVED_ACCOUNT`), payee allowed, signature, not stale, signed amount within the cumulative step (`AMOUNT_ABOVE_STEP`), cap.
+- Then `ZERO_GROSS`, `NET_MISMATCH`, `INSUFFICIENT_ESCROW` for each net debtor, `INSUFFICIENT_RESERVE` if a Budget's reserve cannot pay for its new payees, and finally `INSUFFICIENT_STORAGE` if the settler's storage balance cannot pay for the batch record.
 - A claim with `cumulative <= settled` is `STALE_VOUCHER`.
 - Claims apply in order, so a later claim for the same pair is measured against the earlier one.
 - Netting parties are the Budget owner account and the payee account.
 - `expected_net` is sorted by account bytes and omits zero entries, as `{ account, debit, credit }`, with exactly one of the two positive.
 - `net` on the batch is the sum of credits, which is the cash that moves.
 - Net creditors gain `credits`, including a Budget owner who nets positive.
-- Settlement closes after `min(valid_until + 3 days, revoked_at + 24 hours)` (`settleDeadline`), and `reclaim` opens after that.
+- Settlement closes after `min(valid_until + 3 days, revoked_at + 24 hours)` (`settleDeadline`), and `reclaim` and `prune` open after that.
+- `revoke_budget` checks `NOT_OWNER`, `ALREADY_REVOKED`, then `BUDGET_NOT_OPEN` after `valid_until`.
+- `prune(owner, id, payees)` checks `NOT_OWNER`, `TOO_MANY_ACCOUNTS` (100), `TOO_EARLY`, then removes the Budget's settled entries for those payees and empties its reserve, which the hub refunds to the owner.
 - `settle_own` applies no offset and debits the full delta from escrow.
   It needs the node's acceptance of the claim.
-  Its check order is: caller is the payee (`NOT_PAYEE`), known Budget, payee is not the Budget's owner (`PAYEE_IS_OWNER`), inside the settlement deadline, `RESERVED_ACCOUNT`, payee allowed, signature, not stale, the acceptance key is a receipt key of the Budget's settler (`ACCEPTANCE_KEY_UNKNOWN`), the acceptance signature covers this claim (`BAD_ACCEPTANCE`), the acceptance is dated no later than the Budget's revoke and expiry (`ACCEPTANCE_TOO_LATE`), cap, escrow, and `INSUFFICIENT_DEPOSIT` for storage beyond the Budget's reserve.
+  Its check order is: known Budget, caller is the payee (`NOT_PAYEE`), payee is not the Budget's owner (`PAYEE_IS_OWNER`), inside the settlement deadline, `RESERVED_ACCOUNT`, payee allowed, signature, not stale, `AMOUNT_ABOVE_STEP`, the acceptance key is a receipt key of the Budget's settler (`ACCEPTANCE_KEY_UNKNOWN`), the acceptance signature covers this claim (`BAD_ACCEPTANCE`), the acceptance is dated no later than the Budget's revoke and expiry (`ACCEPTANCE_TOO_LATE`), cap, escrow, and `INSUFFICIENT_DEPOSIT` for storage beyond the Budget's reserve.
 - The acceptance time test is `timestampS * 1000 <= min(revokedAt, validUntil)`, so the second of the revoke still settles and the next one does not.
-- `register_receipt_key` needs exactly one yoctoNEAR, then checks `NOT_SETTLER`, `RECEIPT_KEY_EXISTS`, `TOO_MANY_RECEIPT_KEYS` (4 keys), and `INSUFFICIENT_STORAGE`.
+- `register_receipt_key` checks `NOT_SETTLER`, exactly one yoctoNEAR (`ONE_YOCTO_REQUIRED`), `INVALID_KEY`, `RECEIPT_KEY_EXISTS`, `TOO_MANY_RECEIPT_KEYS` (4 keys), and `INSUFFICIENT_STORAGE`.
   Keys are never removed, and a settler taken off the allowlist keeps its keys.
-- `fund_storage` checks `ZERO_AMOUNT`, then `INSUFFICIENT_DEPOSIT` when a first deposit does not cover the balance entry.
-  `withdraw_storage` needs exactly one yoctoNEAR, then checks `ZERO_AMOUNT` and `INSUFFICIENT_STORAGE`.
+- `fund_storage` checks `ZERO_AMOUNT`, `RESERVED_ACCOUNT` for the hub and the token, then `INSUFFICIENT_DEPOSIT` when a first deposit does not cover the balance entry.
+  `withdraw_storage` needs exactly one yoctoNEAR (`ONE_YOCTO_REQUIRED`), then checks `ZERO_AMOUNT` and `INSUFFICIENT_STORAGE`.
 - A `budget` deposit from anyone but the owner, or to a revoked or expired Budget, is refunded in full.
 - A checkout payment is refunded in full when the merchant is the hub or the token, and when the checkout settler's storage balance cannot pay for it.
   On chain the second case is an `INSUFFICIENT_STORAGE` panic, which the token resolves as the same refund.
 - `payout` is capped at 10 accounts, skips unregistered accounts and accounts with no credit, and restores credit if the transfer fails.
-  A credit entry left empty is removed, and its storage goes back to the settler that paid for it.
-- `fund_from_credit` needs exactly one yoctoNEAR, then checks in order: `ZERO_AMOUNT`, `UNKNOWN_BUDGET`, `NOT_OWNER`, `BUDGET_NOT_OPEN` (revoked, or past `valid_until`), `INSUFFICIENT_CREDIT`.
+  A credit entry left empty is removed, and its storage goes back to whoever paid for it: the Budget's reserve or the settler's balance.
+- `fund_from_credit` checks in order: `UNKNOWN_BUDGET`, `NOT_OWNER`, exactly one yoctoNEAR (`ONE_YOCTO_REQUIRED`), `ZERO_AMOUNT`, `BUDGET_NOT_OPEN` (revoked, or past `valid_until`), `INSUFFICIENT_CREDIT`.
   It moves the caller's credit into that Budget's escrow, never its cap, and moves no tokens.
 
 `FakeChain.addSettler(account)` also prepays 10 NEAR of storage for that settler, so tests that are not about storage need no setup.
 Pass a second argument of `0n` to model a settler that has not prepaid.
-Admin calls, `set_settler` and `set_checkout_key`, are test controls there, and their deposits are not modelled.
+Admin calls, `set_settler` and `set_checkout_key`, are test controls there, and their deposits are not modelled; `propose_admin` and `accept_admin` are not modelled at all.
 
 Solvency invariant: token balance equals the sum of escrow, credits and in-flight payouts, checked by `FakeChain.solvency()`.
 
@@ -232,14 +241,18 @@ Solvency invariant: token balance equals the sum of escrow, credits and in-fligh
 
 `src/actions.ts` is the reference for argument names and JSON shapes.
 
-- `open_budget({ terms: { agent_pk, settler, cap, valid_until, payees, policy_hash, salt } })`.
+- `open_budget({ terms: { agent_pk, settler, cap, valid_until, payees, policy_hash, salt, allow_any_payee, max_payees } })`.
+  `budgetTermsArgs` sets `allow_any_payee` for an empty list and `max_payees` from `terms.maxPayees` (default 16), or 0 for a listed Budget.
 - `ft_transfer_call` `msg` is `{"budget":{"budget_id":"<Id32>"}}` or `{"payment":{"payment_id","merchant","amount","expiry_ms","signature"}}`.
 - `settle_batch({ batch_id, root, claims, expected_net })`, where each claim is `{ budget_id, payee, amount, cumulative, request_hash, signature }`.
 - `settle_own({ claim, acceptance })`, where `acceptance` is `{ node_key, timestamp_s, signature }`: the receipt key as 64 hex characters, Unix seconds as a decimal string, and the signature as 128 hex characters.
   Built by `settleOwnTx(hub, claim, acceptance, storageDeposit?)`.
 - `revoke_budget({ budget_id })`, `reclaim({ budget_id })` and `payout({ accounts })`.
+- `prune({ budget_id, payees })` by the owner after the settlement deadline, built by `pruneTx`.
+- `propose_admin({ new_admin })` by the admin with at least one yoctoNEAR (`proposeAdminTx`), and `accept_admin()` by the proposed account with exactly one yoctoNEAR (`acceptAdminTx`).
 - `fund_from_credit({ budget_id, amount })` with one yoctoNEAR attached, built by `fundFromCreditTx`.
 - `register_receipt_key({ key })` with one yoctoNEAR attached, signed by the settler account, built by `registerReceiptKeyTx`.
 - `fund_storage({ account })` with the amount attached, built by `fundStorageTx`, and `withdraw_storage({ amount })` with one yoctoNEAR attached, built by `withdrawStorageTx`.
 - `set_settler({ account, allowed })` and `set_checkout_key({ key, settler })`, signed by the admin with a deposit that covers the entry.
-- Views: `receipt_keys({ settler })`, `storage_of({ account })`, `checkout_key()` and `checkout_settler()`.
+- Views: `receipt_keys({ settler })`, `storage_of({ account })`, `checkout_key()`, `checkout_settler()`, `batch({ settler, batch_id })`, `verify_receipt({ settler, batch_id, fields, proof })`, and `config()` with `pending_admin`.
+  The Budget view carries `storage_reserve_bytes` (a decimal string) and `allow_any_payee`.

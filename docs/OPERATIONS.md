@@ -423,12 +423,14 @@ The settler's storage balance:
 | Top it up | `fund_storage({ account })`, with the NEAR attached as the deposit | Anyone may fund any account; `fundStorageTx` in `packages/chain/src/actions.ts` builds it |
 | Take the unused part back | `withdraw_storage({ amount })`, with exactly one yoctoNEAR | Only the account itself, so it needs the node account's full-access key; `withdrawStorageTx` builds it |
 
-When the balance cannot pay for a batch, the hub refuses the whole batch with `INSUFFICIENT_STORAGE` and changes nothing.
+In hub v2 the settler's balance pays only for the settler's own batch records, receipt keys and checkout payments.
+The `settled` and credit entries of a Budget's payees come from the storage reserve the Budget's owner prepaid at `open_budget`, 332 bytes per payee the Budget can pay.
+When the balance cannot pay for a batch record, the hub refuses the whole batch with `INSUFFICIENT_STORAGE` and changes nothing.
 Settlement stops until the balance is topped up, and the same batch then settles.
-One full batch of 100 claims to new 64-character payees can cost 0.36913 NEAR, which is the minimum the startup check asks for.
-Measured on a sandbox (a local NEAR node), a batch of 100 one-unit claims to 100 new payees wrote 22,841 bytes and took exactly 0.22841 NEAR from the settler's balance, and the hub's own balance did not change.
-In the `pnpm demo --chain sandbox` run for this page, the one batch of 183 calls took 0.01029 NEAR (1,029 bytes) from the node's balance, and the hub's own NEAR balance changed by 0.
-Storage that a `credits` entry frees when it is paid out goes back to the balance of the settler that paid for it.
+When a Budget's reserve cannot pay for its new payees in a batch, the hub refuses the whole batch with `INSUFFICIENT_RESERVE`: that Budget already paid as many distinct payees as its owner prepaid for.
+A batch record of a 64-character settler is 281 bytes (0.00281 NEAR), and the startup check asks for the records of 100 batches, 0.281 NEAR.
+Measured on a sandbox (a local NEAR node), a batch of 100 one-unit claims to 100 new 64-character payees took 33,200 bytes from the Budget's reserve and one batch record from the settler's balance, and the hub's own balance did not change.
+Storage that a `credits` entry frees when it is paid out goes back to whoever paid for it: the Budget's reserve for a settlement, or the checkout settler's balance for a checkout payment.
 
 ## 13. The payee check
 
