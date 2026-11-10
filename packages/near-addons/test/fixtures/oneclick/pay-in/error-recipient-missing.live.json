@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "source": "POST https://1click.chaindefuser.com/v0/quote",
+    "recorded": "2026-11-10",
+    "live": true,
+    "note": "recipient is a named .near account that does not exist on mainnet. Addresses are clearly fake; no deposit address was created."
+  },
+  "request": {
+    "dry": true,
+    "swapType": "EXACT_OUTPUT",
+    "slippageTolerance": 10,
+    "originAsset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "amount": "5000000",
+    "refundTo": "0x1111111111111111111111111111111111111111",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "payminto-nonexistent-merchant-xyz.near",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-10T15:49:42.000Z"
+  },
+  "status": 400,
+  "body": {
+    "message": "Internal server error",
+    "correlationId": "52263a97-8580-4557-9bf3-306916ce82c4",
+    "timestamp": "2026-11-10T15:19:49.528Z",
+    "path": "/v0/quote"
+  }
+}

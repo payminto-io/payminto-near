@@ -19,6 +19,7 @@ import { ApiError } from "../errors.ts";
 import { nowIso } from "../store.ts";
 import type { Gateway } from "./index.ts";
 import type { MerchantRow } from "./merchants.ts";
+import { reconciliationOf, type QuoteRow } from "./intents.ts";
 import type { CreditRow, PaymentRow, RefundRow } from "./model.ts";
 
 /** The longest range one report covers. */
@@ -74,6 +75,8 @@ export function chargedFees(p: Pick<PaymentRow, "amount_due" | "amount_paid" | "
   return { fee, platform, method: fee - platform, net: paid - fee };
 }
 
+const decimalOf2 = (v: string, decimals: number) => decimalOf(BigInt(v), decimals);
+
 /** One RFC 4180 cell with formulas neutralized (shared with the dashboard's demo data). */
 export const csvCell = reportCsvCell;
 
@@ -117,7 +120,9 @@ export class ReconciliationReports {
         ...args,
       ),
     );
-    const rows = payments.map((p) => this.#row(p, credits.get(p.id) ?? [], refunds.get(p.id) ?? [], screened.get(p.id) ?? []));
+    // Any-chain quotes that delivered: where the money came from (only with INTENTS_CHECKOUT on; the table exists anyway).
+    const quotes = group(db.all<QuoteRow>(`SELECT q.* FROM intents_quotes q JOIN payments p ON p.id = q.payment_id WHERE ${IN_RANGE} AND q.status = 'confirmed' ORDER BY q.created_at, q.rowid`, ...args));
+    const rows = payments.map((p) => this.#row(p, credits.get(p.id) ?? [], refunds.get(p.id) ?? [], screened.get(p.id) ?? [], quotes.get(p.id) ?? []));
     return {
       object: "reconciliation_report",
       merchant_id: m.id,
@@ -144,9 +149,18 @@ export class ReconciliationReports {
     return out;
   }
 
-  #row(p: PaymentRow & Record<string, unknown>, credits: Array<CreditRow & { batch_tx: string | null }>, refunds: RefundRow[], rules: Array<{ rule: string }>): ReconciliationRow {
+  #row(
+    p: PaymentRow & Record<string, unknown>,
+    credits: Array<CreditRow & { batch_tx: string | null }>,
+    refunds: RefundRow[],
+    rules: Array<{ rule: string }>,
+    quotes: QuoteRow[],
+  ): ReconciliationRow {
     const g = this.#g;
     const d = g.token.decimals;
+    const intents = reconciliationOf(quotes, decimalOf2);
+    // NEAR mainnet deliveries link to NearBlocks mainnet; the local chain of the simulated mode has no explorer.
+    const deliveryExplorer = (hash: string) => (intents?.live ? `https://nearblocks.io/txns/${hash}` : null);
     const fees = chargedFees(p);
     const refunded = sum(refunds.filter((f) => f.status === "succeeded"));
     const pending = sum(refunds.filter((f) => f.status === "pending"));
@@ -175,7 +189,7 @@ export class ReconciliationReports {
       status: p.status as PaymentStatus,
       method: (p.quote_method ?? p.method ?? null) as string | null,
       payer: p.payer as string | null,
-      currency: g.token.symbol,
+      currency: intents && p.method === "oneclick" ? intents.currency : g.token.symbol,
       ...this.#amounts(amounts),
       refunds: refunds.map((f) => ({
         id: f.id,
@@ -187,23 +201,44 @@ export class ReconciliationReports {
         explorer_url: f.tx_hash ? explorerTx(g.network, f.tx_hash) : null,
         created_at: f.created_at,
       })),
-      transactions: credits.map((c) => {
-        const tx = c.tx_hash ?? c.batch_tx ?? null;
-        return {
-          method: c.method as string,
-          amount: decimalOf(BigInt(c.amount), d),
-          amount_base_units: c.amount,
-          status: c.status,
-          tx_hash: tx,
-          explorer_url: tx ? explorerTx(g.network, tx) : null,
-          batch_id: c.batch_id,
-          call_id: c.call_id,
-          receipt_proof_url: c.call_id && this.#publicUrl ? `${this.#publicUrl}/v1/receipts/${c.call_id}/proof` : null,
-        };
-      }),
+      transactions: [
+        ...(intents?.origin_txs ?? []).map((t) => ({
+          method: "oneclick",
+          amount: decimalOf(BigInt(t.quote.deposited_amount ?? t.quote.amount_in), t.quote.origin_decimals),
+          amount_base_units: t.quote.deposited_amount ?? t.quote.amount_in,
+          status: "confirmed" as const,
+          tx_hash: t.hash,
+          explorer_url: t.explorerUrl,
+          batch_id: null,
+          call_id: null,
+          receipt_proof_url: null,
+          leg: "origin_deposit" as const,
+          origin_asset: t.quote.origin_asset,
+        })),
+        ...credits.map((c) => {
+          const tx = c.tx_hash ?? c.batch_tx ?? null;
+          const oneclick = c.method === "oneclick";
+          return {
+            method: c.method as string,
+            amount: decimalOf(BigInt(c.amount), d),
+            amount_base_units: c.amount,
+            status: c.status,
+            tx_hash: tx,
+            explorer_url: tx ? (oneclick ? deliveryExplorer(tx) : explorerTx(g.network, tx)) : null,
+            batch_id: c.batch_id,
+            call_id: c.call_id,
+            receipt_proof_url: c.call_id && this.#publicUrl ? `${this.#publicUrl}/v1/receipts/${c.call_id}/proof` : null,
+            ...(oneclick ? { leg: "near_delivery" as const } : {}),
+          };
+        }),
+      ],
       batch_ids: batchIds,
       proof_url: p.status === "paid" || p.status === "overpaid" ? `${g.ctx.checkoutBaseUrl}/receipt/${p.id}` : null,
       screening_rules: [...new Set(rules.map((x) => x.rule))],
+      settlement_network: intents ? intents.settlement_network : credits.some((c) => c.status === "confirmed") ? g.network : null,
+      origin_asset: intents?.origin_asset ?? null,
+      origin_amount: intents?.origin_amount ?? null,
+      deposit_address: intents?.deposit_address ?? null,
     };
   }
 
@@ -288,6 +323,10 @@ export class ReconciliationReports {
         receipt_proof_urls: join(row.transactions.map((x) => x.receipt_proof_url)),
         proof_url: row.proof_url,
         screening_rules: join(row.screening_rules),
+        settlement_network: row.settlement_network,
+        origin_asset: row.origin_asset,
+        origin_amount: row.origin_amount,
+        deposit_address: row.deposit_address,
       };
       lines.push(REPORT_CSV_COLUMNS.map((k) => csvCell(cells[k])).join(","));
     }

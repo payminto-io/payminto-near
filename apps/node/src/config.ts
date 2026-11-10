@@ -159,7 +159,35 @@ const envSchema = z.object({
   PAYEE_CHECK_INDEXER: z.enum(["nearblocks", "off"]).optional(),
   // Optional NearBlocks API key, sent as a bearer token. The keyless tier is rate limited.
   PAYEE_CHECK_INDEXER_KEY: z.string().min(8, "must be at least 8 characters").max(200).optional(),
+  // Any-chain checkout through NEAR Intents (docs/DEVELOPERS.md, "Any-chain checkout"). Off by default; simulated runs
+  // against the fake 1Click server; live moves real money on NEAR mainnet and is only ever turned on by the operator.
+  INTENTS_CHECKOUT: z.enum(["off", "simulated", "live"]).default("off"),
+  ONECLICK_BASE_URL: z.url().optional(),
+  // Live mode refuses any 1Click URL but the published one unless this is true.
+  ONECLICK_ALLOW_CUSTOM_URL: z.enum(["true", "false"]).default("false"),
+  ONECLICK_API_KEY: z.string().min(8, "must be at least 8 characters").max(4000).optional(),
+  // Simulated mode only: the fake server's test key. Live mode always checks quotes against the published 1Click key.
+  ONECLICK_MANAGER_PUBLIC_KEY: z.string().regex(/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,50}$/, "must be ed25519:<base58>").optional(),
+  // Where the node reads deliveries and merchant accounts: NEAR mainnet live, the local chain when simulated.
+  NEAR_MAINNET_RPC_URL: z.url().optional(),
+  // Simulated mode only: the NEP-141 that stands in for native USDC on the local chain.
+  INTENTS_USDC_CONTRACT: account.optional(),
+  // Accounts that may sign 1Click's delivery transactions (NEAR RPC needs a sender to find a transaction), comma separated.
+  INTENTS_DELIVERY_SENDERS: z.string().optional(),
+  // 1Click asset ids buyers may pay with, comma separated; default every offered origin.
+  INTENTS_ORIGINS: z.string().optional(),
+  INTENTS_SLIPPAGE_STABLE_BPS: intFromEnv(10).refine((n) => n <= 10_000, "must be <= 10000"),
+  INTENTS_SLIPPAGE_VOLATILE_BPS: intFromEnv(100).refine((n) => n <= 10_000, "must be <= 10000"),
+  INTENTS_REFERRAL: z
+    .string()
+    .regex(/^(?:[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/, "lowercase letters and digits with single - _ or . between them")
+    .max(57)
+    .default("payminto"),
 });
+
+/** The published 1Click base URL. Live mode uses it unless ONECLICK_ALLOW_CUSTOM_URL=true. */
+export const ONECLICK_LIVE_URL = "https://1click.chaindefuser.com";
+export const NEAR_MAINNET_RPC = "https://rpc.mainnet.near.org";
 
 export type Config = {
   port: number;
@@ -285,6 +313,28 @@ export type GatewayConfig = {
   /** false: webhook URLs must be https and resolve to public addresses only. */
   webhookAllowPrivate: boolean;
   watchIntervalMs: number;
+  /** The any-chain checkout (INTENTS_CHECKOUT); absent when it is off. */
+  intents?: IntentsConfig;
+};
+
+/** INTENTS_CHECKOUT=simulated|live and its settings. The node loads @payminto/near-addons only when this is present. */
+export type IntentsConfig = {
+  mode: "simulated" | "live";
+  /** The 1Click API: the published URL live, the fake server's simulated. */
+  baseUrl: string;
+  apiKey: string | null;
+  /** Null: the published 1Click manager key (always, live). Simulated: the fake server's test key. */
+  managerPublicKey: string | null;
+  /** NEAR mainnet live; the local chain the fake server delivers on, simulated. */
+  nearRpcUrl: string;
+  /** Null: native USDC on NEAR mainnet (always, live). Simulated: the local token that stands in for it. */
+  usdcContract: Address | null;
+  /** Accounts tried as the sender when reading a delivery transaction. */
+  deliverySenders: Address[];
+  /** Asset ids buyers may pay with; null for every offered origin. */
+  origins: string[] | null;
+  slippage: { stable: number; volatile: number };
+  referral: string | null;
 };
 
 export type RateLimitConfig = {
@@ -327,6 +377,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     }
   }
   const gateway = gatewayConfig(e, live, problems);
+  if (e.INTENTS_CHECKOUT !== "off" && !gateway && !problems.length) problems.push("INTENTS_CHECKOUT: the any-chain checkout belongs to the gateway; turn it on (GATEWAY_PAYOUT_ACCOUNT or GATEWAY_ENABLED=true)");
   const agents = agentsConfig(e, live, !!gateway, problems);
   // NearBlocks indexes testnet and mainnet. Asking it about a local chain would judge other people's accounts.
   if (e.PAYEE_CHECK_INDEXER === "nearblocks" && !live) problems.push(`PAYEE_CHECK_INDEXER: nearblocks has no index of ${e.NETWORK}; use off (the default there)`);
@@ -415,6 +466,7 @@ function gatewayConfig(e: z.infer<typeof envSchema>, live: boolean, problems: st
     const checkout = new URL(e.PUBLIC_CHECKOUT_URL);
     if (checkout.protocol !== "https:" || isLocalOrigin(e.PUBLIC_CHECKOUT_URL)) problems.push(`PUBLIC_CHECKOUT_URL: must be a public https origin on ${e.NETWORK}`);
   }
+  const intents = intentsConfig(e, problems);
   if (problems.length > n) return undefined;
   return {
     seedPayout: payout,
@@ -424,6 +476,66 @@ function gatewayConfig(e: z.infer<typeof envSchema>, live: boolean, problems: st
     checkoutTtlSec: e.CHECKOUT_TTL_SECONDS,
     webhookAllowPrivate: allowPrivate,
     watchIntervalMs: e.GATEWAY_WATCH_INTERVAL_MS,
+    ...(intents ? { intents } : {}),
+  };
+}
+
+/**
+ * The any-chain checkout section. Live mode is reachable only with INTENTS_CHECKOUT=live, and then refuses everything
+ * that could make a simulated quote pass as a real one: a test manager key, another 1Click URL (unless explicitly
+ * allowed), a stand-in USDC, and a plain-http RPC. Problems are appended, never thrown.
+ */
+function intentsConfig(e: z.infer<typeof envSchema>, problems: string[]): IntentsConfig | undefined {
+  const mode = e.INTENTS_CHECKOUT;
+  const simulatedOnly: Array<[string, unknown]> = [
+    ["ONECLICK_MANAGER_PUBLIC_KEY", e.ONECLICK_MANAGER_PUBLIC_KEY],
+    ["INTENTS_USDC_CONTRACT", e.INTENTS_USDC_CONTRACT],
+  ];
+  if (mode === "off") return undefined;
+  const list = (v: string | undefined) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const senders = list(e.INTENTS_DELIVERY_SENDERS);
+  for (const s of senders) if (!isAccountId(s)) problems.push("INTENTS_DELIVERY_SENDERS: every entry must be a NEAR account id");
+  const origins = list(e.INTENTS_ORIGINS);
+  // Amounts pass through as USDC base units, so the node's token must have USDC's 6 decimals.
+  if (networks[e.NETWORK]!.token.decimals !== 6) problems.push(`INTENTS_CHECKOUT: needs a 6-decimal token on ${e.NETWORK}`);
+  if (mode === "live") {
+    for (const [name, v] of simulatedOnly) if (v !== undefined) problems.push(`${name}: only for INTENTS_CHECKOUT=simulated; live mode always uses the published 1Click key and native USDC`);
+    const base = e.ONECLICK_BASE_URL ?? ONECLICK_LIVE_URL;
+    if (!base.startsWith("https:")) problems.push("ONECLICK_BASE_URL: must be https in live mode");
+    else if (base.replace(/\/+$/, "") !== ONECLICK_LIVE_URL && e.ONECLICK_ALLOW_CUSTOM_URL !== "true") problems.push(`ONECLICK_BASE_URL: live mode uses ${ONECLICK_LIVE_URL}; set ONECLICK_ALLOW_CUSTOM_URL=true to use another`);
+    const rpc = e.NEAR_MAINNET_RPC_URL ?? NEAR_MAINNET_RPC;
+    if (!rpc.startsWith("https:")) problems.push("NEAR_MAINNET_RPC_URL: must be https in live mode");
+    return {
+      mode,
+      baseUrl: base.replace(/\/+$/, ""),
+      apiKey: e.ONECLICK_API_KEY ?? null,
+      managerPublicKey: null,
+      nearRpcUrl: rpc,
+      usdcContract: null,
+      deliverySenders: senders,
+      origins: origins.length ? origins : null,
+      slippage: { stable: e.INTENTS_SLIPPAGE_STABLE_BPS, volatile: e.INTENTS_SLIPPAGE_VOLATILE_BPS },
+      referral: e.INTENTS_REFERRAL || null,
+    };
+  }
+  // Simulated: everything points at the fake server and the local chain, named explicitly.
+  if (!e.ONECLICK_BASE_URL) problems.push("ONECLICK_BASE_URL: required with INTENTS_CHECKOUT=simulated (the fake 1Click server)");
+  else if (e.ONECLICK_BASE_URL.replace(/\/+$/, "") === ONECLICK_LIVE_URL) problems.push("ONECLICK_BASE_URL: simulated mode never talks to the live 1Click API; point it at the fake server");
+  if (!e.ONECLICK_MANAGER_PUBLIC_KEY) problems.push("ONECLICK_MANAGER_PUBLIC_KEY: required with INTENTS_CHECKOUT=simulated (the fake server's test key)");
+  if (!e.NEAR_MAINNET_RPC_URL) problems.push("NEAR_MAINNET_RPC_URL: required with INTENTS_CHECKOUT=simulated (the local chain the fake server delivers on)");
+  if (!e.INTENTS_USDC_CONTRACT) problems.push("INTENTS_USDC_CONTRACT: required with INTENTS_CHECKOUT=simulated (the token the fake server delivers)");
+  if (!e.ONECLICK_BASE_URL || !e.ONECLICK_MANAGER_PUBLIC_KEY || !e.NEAR_MAINNET_RPC_URL || !e.INTENTS_USDC_CONTRACT) return undefined;
+  return {
+    mode,
+    baseUrl: e.ONECLICK_BASE_URL.replace(/\/+$/, ""),
+    apiKey: e.ONECLICK_API_KEY ?? null,
+    managerPublicKey: e.ONECLICK_MANAGER_PUBLIC_KEY,
+    nearRpcUrl: e.NEAR_MAINNET_RPC_URL,
+    usdcContract: e.INTENTS_USDC_CONTRACT,
+    deliverySenders: senders,
+    origins: origins.length ? origins : null,
+    slippage: { stable: e.INTENTS_SLIPPAGE_STABLE_BPS, volatile: e.INTENTS_SLIPPAGE_VOLATILE_BPS },
+    referral: e.INTENTS_REFERRAL || null,
   };
 }
 
@@ -511,6 +623,16 @@ export function redactedConfig(c: Config) {
           checkoutBaseUrl: c.gateway.checkoutBaseUrl,
           checkoutTtlSec: c.gateway.checkoutTtlSec,
           webhookAllowPrivate: c.gateway.webhookAllowPrivate,
+          intents: c.gateway.intents
+            ? {
+                mode: c.gateway.intents.mode,
+                baseUrl: redactUrl(c.gateway.intents.baseUrl),
+                apiKey: c.gateway.intents.apiKey ? "set" : null,
+                managerKey: c.gateway.intents.managerPublicKey ? "test" : "1click",
+                nearRpcUrl: redactUrl(c.gateway.intents.nearRpcUrl),
+                usdcContract: c.gateway.intents.usdcContract,
+              }
+            : { mode: "off" },
         }
       : null,
     payeeCheck: (() => {

@@ -13,7 +13,7 @@ import { rpc } from "./signer-near.ts";
 export const USDC = 1_000_000n;
 const YOCTO_PER_NEAR = 10n ** 24n;
 
-export type RoleKey = "platform" | "alice" | "bob" | "carol" | "seller" | "merchant" | "shopper";
+export type RoleKey = "platform" | "alice" | "bob" | "carol" | "seller" | "merchant" | "anychain" | "shopper";
 
 export type Role = {
   key: RoleKey;
@@ -33,6 +33,13 @@ export const ROLES: readonly Role[] = [
   { key: "carol", role: "Budget owner, no gas", does: "Owns the Budget of the support agent and has no NEAR for gas, so she revokes through the gas relayer", near: 2, usdc: 50n * USDC },
   { key: "seller", role: "Seller", does: "Is paid for the Risk Scan and Deep Report services and owns no Budget", near: 10, usdc: 0n },
   { key: "merchant", role: "Merchant payout", does: "The payout account of the business Northwind Coffee: checkout payments are credited to it", near: 10, usdc: 0n },
+  {
+    key: "anychain",
+    role: "Any-chain payout",
+    does: "Northwind Coffee's account for payments from other chains (NEAR Intents, simulated here): the USDC lands in it directly",
+    near: 5,
+    usdc: 0n,
+  },
   { key: "shopper", role: "Shopper", does: "Pays checkout links from a wallet", near: 10, usdc: 200n * USDC },
   { key: "platform", role: "Platform operator", does: "The treasury of whoever runs this server: it would receive platform fees under a fee plan", near: 10, usdc: 0n },
 ];
@@ -49,6 +56,11 @@ export type LocalAccounts = {
   /** The gas relayer's own account. Only the relayer service holds its key; the signer does not. */
   relayer: { accountId: AccountId; secretKey: string };
   /**
+   * The simulated 1Click solver: the fake 1Click server delivers mock USDC from it with a real ft_transfer on this chain.
+   * Only the stack holds its key; the signer does not.
+   */
+  solver: AccountId;
+  /**
    * A payee that exists on chain and never registered with the token. The node's payee check warns about it (a payout
    * could not land there yet), so a call to it waits until the Budget's owner approves the payee.
    */
@@ -57,6 +69,8 @@ export type LocalAccounts = {
 
 /** NEAR the relayer account starts with. Its balance is the most a bug in the relayer could cost. */
 const RELAYER_NEAR = 5;
+/** What the simulated solver holds to deliver any-chain payments. */
+export const SOLVER_USDC = 10_000n * USDC;
 
 /**
  * Creates the accounts under the sandbox root, registers each with the token and mints its mock USDC.
@@ -71,6 +85,7 @@ export async function createLocalAccounts(hub: DemoHub, say: (line: string) => v
   });
   const relayer = { accountId: `relayer.${root}`, secretKey: newNearSecretKey() };
   const vendor = `newvendor.${root}`;
+  const solver = `solver.${root}`;
   say(`   Local accounts under ${root}, each with its own key that exists only on this chain:`);
   // The root signs every creation, so they go one after another: one key, one nonce at a time.
   for (const a of list) {
@@ -83,11 +98,15 @@ export async function createLocalAccounts(hub: DemoHub, say: (line: string) => v
   // Its key is made and dropped: nobody signs as the new vendor here. It is deliberately not registered with the token.
   const vendorHash = await signers.built(root, `create ${vendor}`, (b) => b.createAccount(vendor).transfer(vendor, "1 NEAR").addKey(publicKeyOf(newNearSecretKey()), { type: "fullAccess" }));
   say(`     tx ${vendorHash}  ${root}: create ${vendor} (a new payee, not registered with the token, so the payee check warns about it)`);
+  const solverKey = newNearSecretKey();
+  const solverHash = await signers.built(root, `create ${solver}`, (b) => b.createAccount(solver).transfer(solver, "5 NEAR").addKey(publicKeyOf(solverKey), { type: "fullAccess" }));
+  signers.add(solver, solverKey);
+  say(`     tx ${solverHash}  ${root}: create ${solver} (the simulated 1Click solver: it delivers any-chain payments with a real ft_transfer; only the stack holds its key)`);
   // Each account signs for itself from here on, so these go in parallel. The mock token's mint registers the account;
   // an account that starts with no USDC registers with the token so payouts and payments can reach it.
-  await Promise.all(list.map((a) => (a.usdc > 0n ? hub.wallets.fund(a.accountId, a.usdc) : hub.wallets.register(a.accountId))));
+  await Promise.all([...list.map((a) => (a.usdc > 0n ? hub.wallets.fund(a.accountId, a.usdc) : hub.wallets.register(a.accountId))), hub.wallets.fund(solver, SOLVER_USDC)]);
   const by = Object.fromEntries(list.map((a) => [a.key, a])) as Record<RoleKey, LocalAccount>;
-  return { root, list, by, settler: hub.names.operator, relayer, vendor };
+  return { root, list, by, settler: hub.names.operator, relayer, vendor, solver };
 }
 
 /** An account's NEAR balance in yoctoNEAR, at final finality. */

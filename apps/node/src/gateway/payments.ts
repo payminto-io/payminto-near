@@ -13,6 +13,7 @@ import {
   type Id32,
   type LineItem,
   type OrderCommitment,
+  type CheckoutMethod,
   type PaymentMethod,
   type PaymentStatus,
 } from "@payminto/protocol";
@@ -63,7 +64,8 @@ export type CreatePaymentInput = {
 
 export type NewCredit = {
   paymentId: string;
-  method: PaymentMethod;
+  method: CheckoutMethod;
+  /** A NEAR account, or for an any-chain credit the buyer's refund address prefixed by its chain (`base:0x12...`). */
   payer: AccountId | null;
   amount: bigint;
   txHash: string | null;
@@ -72,12 +74,14 @@ export type NewCredit = {
   recordedAtMs?: bigint | null;
   /** Voucher credits: the accepted clearing call. */
   callId?: Id32 | null;
+  /** Any-chain credits: the 1Click quote (one credit per quote). */
+  intentsQuoteId?: string | null;
   status: "pending" | "confirmed";
   /** Wallet payments can land after expiry (the hub checks block time); vouchers are refused after it. */
   mayBeLate: boolean;
 };
 
-export type PaymentFilters = { status?: PaymentStatus[]; method?: PaymentMethod[]; link_id?: string; email?: string; q?: string; refunded?: boolean; limit: number; cursor?: number };
+export type PaymentFilters = { status?: PaymentStatus[]; method?: CheckoutMethod[]; link_id?: string; email?: string; q?: string; refunded?: boolean; limit: number; cursor?: number };
 
 type Listener = (p: PaymentRow) => void;
 
@@ -154,7 +158,7 @@ export class PaymentService {
   }
 
   /** Fee breakdown for `amount` paid by `method` (null: chosen at checkout). Throws ApiError when it cannot be paid so. */
-  quote(m: MerchantRow, amount: bigint, method: PaymentMethod | null): FeeBreakdown<bigint> {
+  quote(m: MerchantRow, amount: bigint, method: CheckoutMethod | null): FeeBreakdown<bigint> {
     const plan = this.#merchants.feePlan(m.fee_plan_id);
     let terms = null;
     if (method) {
@@ -171,6 +175,10 @@ export class PaymentService {
     // The hub credits a checkout payment to the merchant in full, so the wallet rail has no way to split off a fee.
     if (method === "wallet" && q.fee_total > 0n) {
       throw new ApiError(409, "METHOD_UNAVAILABLE", "a NEAR wallet payment credits the merchant in full on chain, so it cannot carry a platform or method fee");
+    }
+    // NEAR Intents delivers straight to the merchant's own account: there is nothing to split a fee off either.
+    if (method === "oneclick" && q.fee_total > 0n) {
+      throw new ApiError(409, "METHOD_UNAVAILABLE", "a payment from another chain is delivered to the merchant in full, so it cannot carry a platform or method fee");
     }
     return q;
   }
@@ -289,7 +297,7 @@ export class PaymentService {
   }
 
   /** Re-quotes an untouched open payment for the method a person picked at checkout. */
-  requote(p: PaymentRow, method: PaymentMethod): PaymentRow {
+  requote(p: PaymentRow, method: CheckoutMethod): PaymentRow {
     if (p.quote_method === method) return p;
     const m = this.#merchants.merchant(p.merchant_id);
     const q = this.quote(m, BigInt(p.amount), method);
@@ -339,6 +347,8 @@ export class PaymentService {
       credits: this.credits(p.id).map(creditJson),
       refunds: this.#db.all<RefundRow>("SELECT * FROM refunds WHERE payment_id = ? ORDER BY created_at", p.id).map((r) => refundJson(r, this.#ctx)),
       events: this.#webhooks.timeline(p.id),
+      // Any-chain quotes with their signed 1Click responses; null when the payment has none or the rail is off.
+      intents: this.intentsOf?.(p.id) ?? null,
     };
   }
 
@@ -396,7 +406,9 @@ export class PaymentService {
         ? this.#db.get<CreditRow>("SELECT * FROM payment_credits WHERE call_id = ?", c.callId)
         : c.checkoutId
           ? this.#db.get<CreditRow>("SELECT * FROM payment_credits WHERE checkout_id = ?", c.checkoutId)
-          : undefined;
+          : c.intentsQuoteId
+            ? this.#db.get<CreditRow>("SELECT * FROM payment_credits WHERE intents_quote_id = ?", c.intentsQuoteId)
+            : undefined;
       if (existing) return { credit: existing, inserted: false };
       // Money reaching a draft makes it a real payment, announced before its credit.
       const p = this.promote(c.paymentId);
@@ -404,8 +416,8 @@ export class PaymentService {
       const late = c.mayBeLate && p.status !== "paid" && p.status !== "overpaid" && (now >= p.expires_unix || isTerminalPaymentStatus(p.status));
       const at = nowIso();
       const { lastInsertRowid } = this.#db.run(
-        `INSERT INTO payment_credits (payment_id, method, payer, amount, tx_hash, checkout_id, recorded_at_ms, call_id, status, late, created_at, confirmed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO payment_credits (payment_id, method, payer, amount, tx_hash, checkout_id, recorded_at_ms, call_id, intents_quote_id, status, late, created_at, confirmed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         c.paymentId,
         c.method,
         c.payer,
@@ -414,6 +426,7 @@ export class PaymentService {
         c.checkoutId ?? null,
         c.recordedAtMs === undefined || c.recordedAtMs === null ? null : Number(c.recordedAtMs),
         c.callId ?? null,
+        c.intentsQuoteId ?? null,
         c.status,
         late ? 1 : 0,
         at,
@@ -424,20 +437,43 @@ export class PaymentService {
     });
   }
 
-  confirmCredit(creditId: number, patch: { txHash?: string | null; batchId?: Id32 | null } = {}): void {
+  /** `amount`: what actually arrived, when it differs from the pending amount (an any-chain delivery read on NEAR). */
+  confirmCredit(creditId: number, patch: { txHash?: string | null; batchId?: Id32 | null; amount?: bigint } = {}): void {
     this.#db.tx(() => {
       const c = this.#db.get<CreditRow>("SELECT * FROM payment_credits WHERE id = ?", creditId);
       if (!c || c.status === "confirmed") return;
       this.#db.run(
-        "UPDATE payment_credits SET status = 'confirmed', confirmed_at = ?, tx_hash = COALESCE(?, tx_hash), batch_id = COALESCE(?, batch_id) WHERE id = ?",
+        "UPDATE payment_credits SET status = 'confirmed', confirmed_at = ?, tx_hash = COALESCE(?, tx_hash), batch_id = COALESCE(?, batch_id), amount = COALESCE(?, amount) WHERE id = ?",
         nowIso(),
         patch.txHash ?? null,
         patch.batchId ?? null,
+        patch.amount === undefined ? null : patch.amount.toString(),
         creditId,
       );
       this.recompute(c.payment_id);
     });
   }
+
+  /**
+   * Drops a pending credit whose money never arrived (an any-chain deposit 1Click returned or failed) and recomputes:
+   * the payment goes back to open, or to expired when its time is up. The quote row keeps the history.
+   */
+  removeCredit(creditId: number): void {
+    this.#db.tx(() => {
+      const c = this.#db.get<CreditRow>("SELECT * FROM payment_credits WHERE id = ?", creditId);
+      if (!c || c.status !== "pending") return;
+      this.#db.run("DELETE FROM payment_credits WHERE id = ?", creditId);
+      this.recompute(c.payment_id);
+    });
+  }
+
+  /** True while a checkout page is subscribed to this payment (the any-chain watcher polls faster then). */
+  hasSubscribers(paymentId: string): boolean {
+    return (this.#listeners.get(paymentId)?.size ?? 0) > 0;
+  }
+
+  /** `intents` of the payment detail; set by the gateway when the any-chain checkout is on. */
+  intentsOf: ((paymentId: string) => unknown) | null = null;
 
   /**
    * The locked step: sums confirmed credits, picks the state, and writes amount_paid, the status and the webhook outbox
@@ -453,7 +489,7 @@ export class PaymentService {
          FROM payment_credits WHERE payment_id = ?`,
         paymentId,
       )!;
-      const first = this.#db.get<{ payer: AccountId | null; method: PaymentMethod }>("SELECT payer, method FROM payment_credits WHERE payment_id = ? ORDER BY id LIMIT 1", paymentId);
+      const first = this.#db.get<{ payer: AccountId | null; method: CheckoutMethod }>("SELECT payer, method FROM payment_credits WHERE payment_id = ? ORDER BY id LIMIT 1", paymentId);
       const now = this.#clock();
       const confirmed = BigInt(agg.confirmed);
       const status = nextStatus({ status: p.status, due: BigInt(p.amount_due), confirmed, pending: agg.pending, expired: now >= p.expires_unix });

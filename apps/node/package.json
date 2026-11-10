@@ -24,6 +24,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@payminto/chain": "workspace:*",
     "@payminto/models": "workspace:*",
+    "@payminto/near-addons": "workspace:*",
     "@payminto/payee-check": "workspace:*",
     "@payminto/protocol": "workspace:*",
     "@payminto/sdk": "workspace:*",

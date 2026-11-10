@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "source": "POST https://1click.chaindefuser.com/v0/quote",
+    "recorded": "2026-11-10",
+    "live": true,
+    "note": "Bitcoin origin with 5 USDC out: below the bridge minimum. Addresses are clearly fake; no deposit address was created."
+  },
+  "request": {
+    "dry": true,
+    "swapType": "EXACT_OUTPUT",
+    "slippageTolerance": 100,
+    "originAsset": "nep141:btc.omft.near",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "amount": "5000000",
+    "refundTo": "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "1111111111111111111111111111111111111111111111111111111111111111",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-10T15:49:42.000Z"
+  },
+  "status": 400,
+  "body": {
+    "message": "Amount is too low for bridge, try at least 6165424",
+    "correlationId": "91bc256f-a3b1-43f5-bf97-8a0332f4758d",
+    "timestamp": "2026-11-10T15:19:47.308Z",
+    "path": "/v0/quote"
+  }
+}

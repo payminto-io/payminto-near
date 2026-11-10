@@ -229,6 +229,9 @@ importers:
       '@payminto/demo':
         specifier: workspace:*
         version: link:../demo
+      '@payminto/near-addons':
+        specifier: workspace:*
+        version: link:../../packages/near-addons
       '@payminto/node':
         specifier: workspace:*
         version: link:../node
@@ -315,6 +318,9 @@ importers:
       '@payminto/models':
         specifier: workspace:*
         version: link:../../packages/models
+      '@payminto/near-addons':
+        specifier: workspace:*
+        version: link:../../packages/near-addons
       '@payminto/payee-check':
         specifier: workspace:*
         version: link:../../packages/payee-check

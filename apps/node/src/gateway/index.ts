@@ -40,6 +40,10 @@ import { RefundService } from "./refunds.ts";
 import { Screening } from "./screening.ts";
 import { PaymentWatcher } from "./watcher.ts";
 import { WebhookService, type WebhookSender } from "./webhooks.ts";
+import { IntentsRail, IntentsService, IntentsWatcher, type IntentsKit } from "./intents.ts";
+import type { IntentsChainReader } from "./intents-rpc.ts";
+// Types only: erased at runtime, so the core still loads @payminto/near-addons only through server.ts's dynamic import.
+import type { FetchLike as OneClickFetch } from "@payminto/near-addons/intents";
 import type { PaymentRequiredV2, VoucherRequirement } from "./x402-wire.ts";
 
 const MAX_X402_TIMEOUT_SEC = 300;
@@ -59,6 +63,11 @@ export type GatewayDeps = {
   /** NEAR RPC reads the `Chain` seam does not carry; null on the in-memory test chain. */
   accessKeys: AccessKeyReader | null;
   txs: TxReader | null;
+  /**
+   * The any-chain checkout, when INTENTS_CHECKOUT is not off: @payminto/near-addons/intents as loaded by server.ts with a
+   * dynamic import, and the NEAR reader of the chain the USDC lands on.
+   */
+  intents?: { kit: IntentsKit; reader: IntentsChainReader; fetch?: OneClickFetch } | null;
   /** Test seams. */
   clock?: () => number;
   webhookSender?: WebhookSender;
@@ -89,6 +98,9 @@ export class Gateway {
   readonly wallet: WalletRail;
   /** Checkout rails by method. The wallet rail is built in; the add-ons layer may register more (any-chain checkout). */
   readonly rails = new Map<string, CheckoutRail>();
+  /** The any-chain checkout (`oneclick`); null with INTENTS_CHECKOUT=off. */
+  readonly intents: IntentsService | null;
+  readonly intentsWatcher: IntentsWatcher | null;
   readonly accessKeys: AccessKeyReader | null;
   readonly #vouchers: VoucherService;
   readonly #payouts: PayoutService;
@@ -120,6 +132,29 @@ export class Gateway {
     this.screening = new Screening({ db: d.db, clock: d.clock });
     this.keys = new ApiKeyService(d.db, this.ctx.livemode);
     this.idempotency = new Idempotency(d.db, d.clock);
+    if (d.config.intents && d.intents) {
+      this.intents = new IntentsService({
+        config: d.config.intents,
+        kit: d.intents.kit,
+        reader: d.intents.reader,
+        ...(d.intents.fetch ? { fetch: d.intents.fetch } : {}),
+        db: d.db,
+        payments: this.payments,
+        merchants: this.merchants,
+        webhooks: this.webhooks,
+        log: d.log.child({ component: "intents" }),
+        hub: d.chain.hub,
+        clock: this.#clock,
+      });
+      this.intentsWatcher = new IntentsWatcher(this.intents, d.log.child({ component: "intents" }));
+      this.rails.set("oneclick", new IntentsRail(this.intents));
+      this.merchants.listIntentsMethod();
+      const intents = this.intents;
+      this.payments.intentsOf = (id) => intents.paymentIntents(id);
+    } else {
+      this.intents = null;
+      this.intentsWatcher = null;
+    }
     this.watcher = new PaymentWatcher({
       db: d.db,
       chain: d.chain,
@@ -162,6 +197,8 @@ export class Gateway {
       this.#timers.push(t);
     };
     every(intervals.watchMs, "checkout watcher", () => this.watcher.tick());
+    const intentsWatcher = this.intentsWatcher;
+    if (intentsWatcher) every(Math.min(intervals.watchMs, 5_000), "any-chain watcher", () => intentsWatcher.tick());
     every(1_000, "webhooks", () => this.webhooks.tick());
     every(5_000, "payment expiry", async () => this.payments.expireDue());
     every(5_000, "refund confirmation", () => this.refunds.tick());
@@ -173,7 +210,7 @@ export class Gateway {
     this.#stopped = true;
     for (const t of this.#timers) clearInterval(t);
     this.webhooks.onDue(null);
-    await Promise.allSettled([this.watcher.tick(), this.webhooks.tick()].map((p) => Promise.race([p, new Promise((r) => setTimeout(r, 10_000).unref())])));
+    await Promise.allSettled([this.watcher.tick(), this.webhooks.tick(), ...(this.intentsWatcher ? [this.intentsWatcher.tick()] : [])].map((p) => Promise.race([p, new Promise((r) => setTimeout(r, 10_000).unref())])));
   }
 
   now(): number {
@@ -213,6 +250,8 @@ export class Gateway {
     const methods: PaymentMethod[] = [];
     const quoted = p.quote_method === "wallet" || (p.quote_method === null && this.#quotes(m, BigInt(p.amount), "wallet")) || (p.status === "open" && p.amount_paid === "0" && this.#quotes(m, BigInt(p.amount), "wallet"));
     if (quoted && this.payments.credits(p.id).length === 0) methods.push("wallet");
+    // The any-chain rail is an add-on, so `oneclick` is not a core PaymentMethod; the wire carries it all the same.
+    if (this.intents?.availability(p, m).available) methods.push("oneclick" as PaymentMethod);
     return methods;
   }
 
@@ -262,9 +301,11 @@ export class Gateway {
       network: this.network,
       hub: this.chain.hub,
       token: this.token,
-      method: p.quote_method,
+      method: p.quote_method as PaymentMethod | null,
       methods,
       wallet,
+      // The any-chain checkout: null when INTENTS_CHECKOUT is off.
+      intents: this.intents ? this.intents.checkout(p) : null,
       success_url: p.success_url,
       tx_hash: lastConfirmed?.tx_hash ?? p.wallet_tx_hash ?? null,
       order_hash: p.order_hash,
@@ -305,7 +346,7 @@ export class Gateway {
   #publicMethods(m: MerchantRow, l: LinkRow) {
     return this.merchants
       .methods(m.id)
-      .filter((r) => r.enabled === 1 && (r.method === "wallet" || r.method === "voucher"))
+      .filter((r) => r.enabled === 1 && (r.method === "wallet" || r.method === "voucher" || (r.method === "oneclick" && !!this.intents?.verified(m))))
       .map((r) => {
         const customer = r.bearer === "customer";
         let quote: { amount: string; surcharge: string; amount_due: string } | null = null;

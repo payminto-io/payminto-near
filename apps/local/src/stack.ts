@@ -7,6 +7,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import type { Server } from "node:http";
 import { createHub, type DemoHub } from "@payminto/demo";
@@ -14,6 +15,7 @@ import { createLogger, loadConfig, startNode, type ClearingNode } from "@paymint
 import { keypairFromSeed, type Id32, type PublicKey } from "@payminto/protocol";
 import type { Hono } from "hono";
 import { createLogger as createRelayerLogger, loadConfig as loadRelayerConfig, startRelayer, type RunningRelayer } from "@payminto/relayer";
+import { FakeOneClick } from "@payminto/near-addons/intents/fake-server";
 import { createLocalAccounts, drainNear, type LocalAccounts } from "./accounts.ts";
 import { runActivity, type ActivityResult } from "./activity.ts";
 import { AgentDesk } from "./agents.ts";
@@ -27,7 +29,7 @@ import { assertSandboxOnly, createSignerApp } from "./signer.ts";
 import { chainIdOf, nearBackend, rpc } from "./signer-near.ts";
 import { runSetup, signerClient, type SetupResult, type SignerClient } from "./setup.ts";
 
-export type Urls = { dashboard: string; node: string; signer: string; services: string; remote: string; relayer: string; rpc: string };
+export type Urls = { dashboard: string; node: string; signer: string; services: string; remote: string; relayer: string; rpc: string; oneclick: string };
 
 export type Stack = {
   opts: LocalOptions;
@@ -45,6 +47,8 @@ export type Stack = {
   setup: SetupResult;
   activity: ActivityResult | null;
   dashboard: DashboardProcess | null;
+  /** The fake 1Click server of the simulated any-chain checkout; its deliveries are real transfers on this chain. */
+  oneclick: FakeOneClick;
   /** Calls back once when a part of the stack dies on its own. */
   onCrash(cb: (what: string, detail: string) => void): void;
   stop(): Promise<void>;
@@ -114,6 +118,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       remote: `http://127.0.0.1:${ports.services}/`,
       relayer: `http://127.0.0.1:${ports.relayer}`,
       rpc: "",
+      oneclick: "",
     };
     // The dashboard is reached as localhost; 127.0.0.1 is the same page for a person who types it.
     const dashboardOrigins = [urls.dashboard, `http://127.0.0.1:${ports.dashboard}`];
@@ -146,6 +151,36 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     const rpcUrl = hub.rpcUrl;
 
     const accounts = await createLocalAccounts(hub, say);
+
+    // ---- 1b. The fake 1Click server (NEAR Intents, simulated). It never talks to the live API. A delivery is a real
+    //      ft_transfer of mock USDC from the local solver account to the merchant's account, so the node's delivery
+    //      check reads a real transaction on this chain.
+    const oneclickLog: WriteStream = createWriteStream(join(paths.logs, "oneclick-fake.log"), { flags: "a" });
+    cleanups.push(() => new Promise<void>((r) => oneclickLog.end(() => r())));
+    const signers = hub.sandbox.signers;
+    const oneclick = new FakeOneClick({
+      stepMs: check ? 300 : 2_000,
+      refundAfterMs: check ? 600 : 20_000,
+      log: (line) => void oneclickLog.write(`${new Date().toISOString()} ${line}\n`),
+      accountExists: async (id) => {
+        try {
+          await rpc(rpcUrl, "query", { request_type: "view_account", finality: "final", account_id: id });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      deliver: async ({ recipient, amount }) => {
+        const txHash = await signers.built(accounts.solver, `deliver ${amount} to ${recipient}`, (b) =>
+          b.functionCall(hub.names.token, "ft_transfer", { receiver_id: recipient, amount: amount.toString(), memo: "NEAR Intents delivery (simulated)" }, { gas: "30 Tgas", attachedDeposit: 1n }),
+        );
+        oneclickLog.write(`${new Date().toISOString()} delivered ${amount} to ${recipient} in tx ${txHash}\n`);
+        return { txHash };
+      },
+    });
+    urls.oneclick = await oneclick.listen(0);
+    cleanups.push(() => oneclick.close());
+    say(`   NEAR Intents (simulated): a fake 1Click server on ${urls.oneclick}, signing with a public test key; ${accounts.solver} delivers its mock USDC on this chain.`);
 
     // ---- 2. The clearing node: the real node, its real NearRpcChain, the gateway on, a database that passes the guard.
     assertLocalDatabase(paths.db);
@@ -197,6 +232,13 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       // hits it; on one machine there is nobody to keep out.
       AUTH_RATE_LIMIT_PER_MIN: "600",
       LOG_LEVEL: "info",
+      // The any-chain checkout, simulated: the fake 1Click server, its test key, and this chain standing in for mainnet.
+      INTENTS_CHECKOUT: "simulated",
+      ONECLICK_BASE_URL: urls.oneclick,
+      ONECLICK_MANAGER_PUBLIC_KEY: oneclick.managerPublicKey,
+      NEAR_MAINNET_RPC_URL: rpcUrl,
+      INTENTS_USDC_CONTRACT: hub.names.token,
+      INTENTS_DELIVERY_SENDERS: accounts.solver,
       ...hub.nodeEnv,
     });
     let node: ClearingNode;
@@ -347,6 +389,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       setup,
       activity,
       dashboard,
+      oneclick,
       onCrash: (cb) => void crashListeners.push(cb),
       stop,
     };
