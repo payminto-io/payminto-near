@@ -30,6 +30,7 @@ pub const NOT_BUDGET_SETTLER: &str = "NOT_BUDGET_SETTLER";
 pub const NOT_OWNER: &str = "NOT_OWNER";
 pub const NOT_PAYEE: &str = "NOT_PAYEE";
 pub const NOT_PENDING_ADMIN: &str = "NOT_PENDING_ADMIN";
+pub const NOT_PENDING_CHECKOUT: &str = "NOT_PENDING_CHECKOUT";
 pub const NOT_SELF: &str = "NOT_SELF";
 pub const NOT_SETTLER: &str = "NOT_SETTLER";
 pub const ONE_BUDGET_PER_OWNER: &str = "ONE_BUDGET_PER_OWNER";
@@ -43,6 +44,7 @@ pub const STALE_VOUCHER: &str = "STALE_VOUCHER";
 pub const TOO_EARLY: &str = "TOO_EARLY";
 pub const TOO_MANY_ACCOUNTS: &str = "TOO_MANY_ACCOUNTS";
 pub const TOO_MANY_CLAIMS: &str = "TOO_MANY_CLAIMS";
+pub const TOO_MANY_PAYEES: &str = "TOO_MANY_PAYEES";
 pub const TOO_MANY_RECEIPT_KEYS: &str = "TOO_MANY_RECEIPT_KEYS";
 pub const UNKNOWN_BUDGET: &str = "UNKNOWN_BUDGET";
 pub const ZERO_AMOUNT: &str = "ZERO_AMOUNT";
@@ -79,6 +81,7 @@ pub const ALL: &[&str] = &[
     NOT_OWNER,
     NOT_PAYEE,
     NOT_PENDING_ADMIN,
+    NOT_PENDING_CHECKOUT,
     NOT_SELF,
     NOT_SETTLER,
     ONE_BUDGET_PER_OWNER,
@@ -92,6 +95,7 @@ pub const ALL: &[&str] = &[
     TOO_EARLY,
     TOO_MANY_ACCOUNTS,
     TOO_MANY_CLAIMS,
+    TOO_MANY_PAYEES,
     TOO_MANY_RECEIPT_KEYS,
     UNKNOWN_BUDGET,
     ZERO_AMOUNT,

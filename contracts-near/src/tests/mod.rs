@@ -5,6 +5,7 @@
 mod audit;
 mod auth;
 mod events;
+mod preaudit;
 mod review;
 mod scenarios;
 mod v2;
@@ -289,6 +290,17 @@ impl Harness {
         self.token_balance = token_balance;
         self.assert_solvent();
         message
+    }
+
+    /// The checkout under `key`, as a deployment sets it up: the admin proposes the node as checkout settler, and the
+    /// node accepts. The minimum payment is lowered to one base unit, so tests can use small amounts.
+    pub fn enable_checkout(&mut self, key: &SigningKey) {
+        self.ctx(admin(), plenty());
+        self.hub.set_checkout_key(pk(key), node());
+        self.ctx(node(), 1);
+        self.hub.accept_checkout(pk(key));
+        self.ctx(admin(), 1);
+        self.hub.set_min_payment(U128(1));
     }
 
     /// The batch the node settled under `batch_id`.

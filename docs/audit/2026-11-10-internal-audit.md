@@ -33,6 +33,7 @@ The most serious defect is not in the Rust arithmetic but in the signature rule 
 Status update, 2026-11-10: hub v2 (`contracts-near/out/hub.wasm` sha256 `cf978c32...bcd3f`, code hash `EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx`) fixes F3 to F8 on chain; F1 and F2 are fixed off-chain.
 Each proof of concept above is ported to `contracts-near/src/tests/audit.rs` and asserts the fixed behaviour; the tests for F3 to F7 fail against hub v1.
 Of the hardening items in section 2, hub v2 does 6, 7, 9, 12, 13, 14 and 15, does 8 without proof of possession, does 10 through `prune` (batch records are kept), and does the settler half of 11; binding the acceptance text to hub and network is not done, because the Budget id already commits both.
+Status update, 2026-11-11: an independent pre-audit of hub v2 ([2026-11-11-hub-v2-pre-audit.md](2026-11-11-hub-v2-pre-audit.md)) led to a fix round (code hash `H8NHZwWQPwgdYCku8kUR7AqcnbvY28BQGaRU5LhuARFN`), in which F4's checkout half is now bounded too: the checkout settler must accept the role itself, and the hub refunds checkout payments below a minimum of 10,000 base units.
 The findings below are unchanged from the review.
 
 ### Items checked and found correct

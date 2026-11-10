@@ -54,7 +54,13 @@ fn every_state_change_logs_its_event() {
     h.own(claim(&a, S, &key, 5, 15));
     assert_eq!(
         only(&h, "claim_settled_by_payee"),
-        json!({ "budget_id": a.to_hex(), "payee": S, "cumulative": "15", "amount": "5" })
+        json!({
+            "budget_id": a.to_hex(),
+            "payee": S,
+            "cumulative": "15",
+            "amount": "5",
+            "storage_reserve_bytes": h.budget(&a).storage_reserve_bytes.0.to_string()
+        })
     );
     note(&h);
 
@@ -114,9 +120,20 @@ fn every_state_change_logs_its_event() {
     h.ctx(admin(), plenty());
     h.hub.set_checkout_key(pk(&checkout_key), node());
     assert_eq!(
+        only(&h, "checkout_key_proposed"),
+        json!({ "key": pk(&checkout_key).to_hex(), "settler": "node.test" })
+    );
+    note(&h);
+    h.ctx(node(), 1);
+    h.hub.accept_checkout(pk(&checkout_key));
+    assert_eq!(
         only(&h, "checkout_key_set"),
         json!({ "key": pk(&checkout_key).to_hex(), "settler": "node.test" })
     );
+    note(&h);
+    h.ctx(admin(), 1);
+    h.hub.set_min_payment(U128(1));
+    assert_eq!(only(&h, "min_payment_set"), json!({ "amount": "1" }));
     note(&h);
 
     let expiry = h.now_ms + DAY;

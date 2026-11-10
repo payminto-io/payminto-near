@@ -33,6 +33,10 @@ import {
   withdrawStorageTx,
   buildReceiptTree,
   fundFromCreditTx,
+  acceptCheckoutTx,
+  setMinPaymentTx,
+  DEFAULT_MIN_PAYMENT,
+  MAX_VALID_UNTIL_MS,
   type Acceptance,
   type BudgetTerms,
   type Claim,
@@ -482,34 +486,46 @@ describe("settle_own", () => {
     expect(await c.creditOf(S)).toBe(10n);
   });
 
-  it("draws new storage from the Budget's prepaid reserve, then from the payee's deposit", async () => {
+  it("draws every new payee from the Budget's prepaid reserve, up to the payees it declared", async () => {
     const c = setup();
     const id = c.openBudget(A, terms(A, agentA, { cap: 1_000_000n }));
     c.depositBudget(A, id, 1_000n);
     expect(c.storageReserve(id)).toBe(16 * PAIR_BYTES);
-    // While the reserve holds a whole pair, the credit entry is the Budget's; after that the payee helps pay.
-    let i = 0;
-    for (;;) {
-      const payee = `p${String(i++).padStart(2, "0")}.testnet`;
+    for (let i = 0; i < 16; i++) {
+      const payee = `p${String(i).padStart(2, "0")}.testnet`;
       const reserve = c.storageReserve(id);
-      const funder = reserve >= PAIR_BYTES ? { budget: id } : null;
-      const need = storageBytes.settled(payee) + storageBytes.credit(payee, funder);
-      if (reserve < need) break;
       const v = claim(id, payee, agentA, 1n, 1n);
       await c.settleOwn(payee, v, accept(c, v));
-      expect(c.storageReserve(id)).toBe(reserve - need);
+      expect(c.storageReserve(id)).toBe(reserve - storageBytes.settled(payee) - storageBytes.credit(payee, { budget: id }));
     }
-    expect(i).toBeGreaterThan(16);
-    const left = c.storageReserve(id);
-    const owed = storageCost(storageBytes.settled("pxx.testnet") + storageBytes.credit("pxx.testnet", null) - left);
+    expect((await c.budget(id))!.payeesPaid).toBe(16);
+    // One payee more than the owner declared is refused, whatever it attaches.
     const extra = claim(id, "pxx.testnet", agentA, 1n, 1n);
-    expect(await code(c.settleOwn("pxx.testnet", extra, accept(c, extra), owed - 1n))).toBe("INSUFFICIENT_DEPOSIT");
-    expect(c.storageReserve(id)).toBe(left);
-    await c.settleOwn("pxx.testnet", extra, accept(c, extra), owed);
-    expect(c.storageReserve(id)).toBe(0);
+    expect(await code(c.settleOwn("pxx.testnet", extra, accept(c, extra), 10n ** 24n))).toBe("TOO_MANY_PAYEES");
     // A repeat payee writes nothing new, so it needs no deposit.
-    const again = claim(id, "pxx.testnet", agentA, 1n, 2n);
-    await c.settleOwn("pxx.testnet", again, accept(c, again));
+    const again = claim(id, "p00.testnet", agentA, 1n, 2n);
+    await c.settleOwn("p00.testnet", again, accept(c, again));
+    c.solvency();
+  });
+
+  it("P1: a credit entry the reserve cannot cover is paid by the payee alone, and one it covers is the Budget's", async () => {
+    const c = setup();
+    const long = "7".padStart(64, "0");
+    const id = c.openBudget(A, terms(A, agentA, { cap: 1_000_000n, payees: [long] }));
+    c.depositBudget(A, id, 1_000n);
+    c.register(long);
+    await settle(c, [claim(id, long, agentA, 1n, 1n)], { [id]: A });
+    expect(c.storageReserve(id)).toBe(0);
+    await c.payout([long]);
+    // The credit entry's bytes came back, so the payee's own settlement is paid from the reserve again, for the Budget.
+    expect(c.storageReserve(id)).toBe(storageBytes.credit(long, { budget: id }));
+    const v = claim(id, long, agentA, 1n, 2n);
+    await c.settleOwn(long, v, accept(c, v));
+    expect(c.storageReserve(id)).toBe(0);
+    await c.payout([long]);
+    expect(c.storageReserve(id)).toBe(storageBytes.credit(long, { budget: id }));
+    // And the node's next batch still settles: no byte leaked.
+    await settle(c, [claim(id, long, agentA, 1n, 3n)], { [id]: A });
     c.solvency();
   });
 
@@ -523,7 +539,7 @@ describe("settle_own", () => {
 describe("storage is never paid by the hub", () => {
   it("F4: settle_batch charges each Budget's reserve for its new pairs and the settler for its batch record only", async () => {
     const c = setup();
-    const id = c.openBudget(A, terms(A, agentA));
+    const id = c.openBudget(A, terms(A, agentA, { maxPayees: 20 }));
     c.depositBudget(A, id, 100n);
     const payees = Array.from({ length: 20 }, (_, i) => `payee-${i}.testnet`);
     const before = await c.storageOf(NODE);
@@ -542,7 +558,7 @@ describe("storage is never paid by the hub", () => {
     c.solvency();
   });
 
-  it("F4: a Budget that runs out of reserve fails the whole batch with INSUFFICIENT_RESERVE", async () => {
+  it("F4 and P4: a Budget cannot pay more distinct payees than it declared, and the whole batch fails with TOO_MANY_PAYEES", async () => {
     const c = setup();
     const id = c.openBudget(A, terms(A, agentA, { maxPayees: 1 }));
     c.depositBudget(A, id, 100n);
@@ -550,7 +566,7 @@ describe("storage is never paid by the hub", () => {
     await settle(c, [claim(id, long(1), agentA, 1n, 1n)], { [id]: A });
     expect(c.storageReserve(id)).toBe(0);
     const batchId = nextId();
-    expect(await code(settle(c, [claim(id, long(2), agentA, 1n, 1n)], { [id]: A }, batchId))).toBe("INSUFFICIENT_RESERVE");
+    expect(await code(settle(c, [claim(id, long(2), agentA, 1n, 1n)], { [id]: A }, batchId))).toBe("TOO_MANY_PAYEES");
     expect(await c.batch(batchId, NODE)).toBeNull();
     expect(await c.settledOf(id, long(2))).toBe(0n);
     // A payee the Budget already pays costs nothing new.
@@ -729,6 +745,8 @@ describe("checkout payments", () => {
     const c = setup();
     const key = kp(50);
     c.setCheckoutKey(key.publicKey);
+    // These tests use small amounts; the hub's default minimum is 10 000 base units.
+    c.setMinPayment(1n);
     return { c, key };
   }
   const terms2 = (over = {}) => ({ paymentId: nextId(), merchant: S, amount: 25n, expiryMs: T0 + 1000n, ...over });
@@ -785,6 +803,73 @@ describe("checkout payments", () => {
     expect(c.ftTransferCall(A, 7n, "not json").refunded).toBe(7n);
     expect(await c.creditOf(S)).toBe(25n);
     c.solvency();
+  });
+});
+
+describe("hub v2 pre-audit fixes", () => {
+  const payMsg = (key: Keypair, amount: bigint, id = nextId()) => {
+    const t = { paymentId: id, merchant: S, amount, expiryMs: T0 + 1000n };
+    return JSON.stringify({
+      payment: { payment_id: t.paymentId, merchant: t.merchant, amount: t.amount.toString(), expiry_ms: t.expiryMs.toString(), signature: signDigest(key.secretKey, checkoutDigest(HUB, NET, t)) },
+    });
+  };
+
+  it("P2: the admin only proposes a checkout settler; the settler accepts the proposed key with one yoctoNEAR", async () => {
+    const c = setup();
+    const key = kp(50);
+    c.addSettler("node2.testnet");
+    c.setCheckoutKey(key.publicKey, "node2.testnet", { accept: false });
+    expect(c.pendingCheckout()).toEqual({ key: key.publicKey, settler: "node2.testnet" });
+    // Until the settler accepts, every payment is refunded and its storage balance is untouched.
+    const balance = await c.storageOf("node2.testnet");
+    expect(c.ftTransferCall(A, 20_000n, payMsg(key, 20_000n)).refunded).toBe(20_000n);
+    expect(await c.storageOf("node2.testnet")).toBe(balance);
+    expect(await code(c.acceptCheckout(NODE, key.publicKey))).toBe("NOT_PENDING_CHECKOUT");
+    expect(await code(c.acceptCheckout("node2.testnet", key.publicKey, 0n))).toBe("ONE_YOCTO_REQUIRED");
+    expect(await code(c.acceptCheckout("node2.testnet", kp(51).publicKey))).toBe("NOT_PENDING_CHECKOUT");
+    await c.acceptCheckout("node2.testnet", key.publicKey);
+    expect(c.pendingCheckout()).toBeNull();
+    expect(c.ftTransferCall(A, 20_000n, payMsg(key, 20_000n)).refunded).toBe(0n);
+    // A settler taken off the allowlist takes no more payments.
+    c.removeSettler("node2.testnet");
+    expect(c.ftTransferCall(A, 20_000n, payMsg(key, 20_000n)).refunded).toBe(20_000n);
+    c.solvency();
+  });
+
+  it("P5: payments below the minimum are refunded; the default is 10 000 base units", () => {
+    const c = setup();
+    const key = kp(50);
+    c.setCheckoutKey(key.publicKey);
+    expect(c.minPayment).toBe(DEFAULT_MIN_PAYMENT);
+    expect(DEFAULT_MIN_PAYMENT).toBe(10_000n);
+    expect(c.ftTransferCall(A, 9_999n, payMsg(key, 9_999n)).refunded).toBe(9_999n);
+    expect(c.ftTransferCall(A, 10_000n, payMsg(key, 10_000n)).refunded).toBe(0n);
+    expect(() => c.setMinPayment(0n)).toThrow(/ZERO_AMOUNT/);
+    c.solvency();
+  });
+
+  it("P8: the hub or the token as settler, and a validUntil not in milliseconds, are refused", () => {
+    const c = setup();
+    for (const settler of [HUB, c.token]) expect(() => c.openBudget(A, terms(A, agentA, { settler }))).toThrow(/INVALID_BUDGET/);
+    expect(() => c.openBudget(A, terms(A, agentA, { validUntil: T0 * 1_000_000n }))).toThrow(/INVALID_BUDGET/);
+    expect(() => c.openBudget(A, terms(A, agentA, { validUntil: MAX_VALID_UNTIL_MS + 1n }))).toThrow(/INVALID_BUDGET/);
+    c.openBudget(A, terms(A, agentA, { validUntil: T0 + 100n * 365n * 86_400_000n }));
+  });
+
+  it("P4: settle_own counts payees too", async () => {
+    const c = setup();
+    const id = c.openBudget(A, terms(A, agentA, { maxPayees: 1 }));
+    c.depositBudget(A, id, 100n);
+    await settle(c, [claim(id, S, agentA, 1n, 1n)], { [id]: A });
+    const v = claim(id, "other.testnet", agentA, 1n, 1n);
+    expect(await code(c.settleOwn("other.testnet", v, accept(c, v), 10n ** 24n))).toBe("TOO_MANY_PAYEES");
+    expect((await c.budget(id))!).toMatchObject({ maxPayees: 1, payeesPaid: 1 });
+  });
+
+  it("builds the checkout acceptance and the minimum with the hub's method names and deposits", () => {
+    const key = kp(50);
+    expect(acceptCheckoutTx(HUB, key.publicKey).actions[0]!.params).toMatchObject({ methodName: "accept_checkout", args: { key: toHex(publicKeyBytes(key.publicKey)) }, deposit: "1" });
+    expect(setMinPaymentTx(HUB, 25_000n).actions[0]!.params).toMatchObject({ methodName: "set_min_payment", args: { amount: "25000" }, deposit: "1" });
   });
 });
 

@@ -57,6 +57,10 @@ export type Budget = {
    * payee's `settled` and credit entries come out of it, and `prune` refunds the rest. Absent when not read.
    */
   storageReserveBytes?: bigint;
+  /** The most distinct payees the Budget can ever pay: its list's length, or the declared `maxPayees`. Hub v2 and later. */
+  maxPayees?: number;
+  /** Distinct payees the Budget has paid so far. Never above `maxPayees`. Hub v2 and later. */
+  payeesPaid?: number;
 };
 
 /** The fields an agent signs for one call. `amount` and `requestHash` bind the signature to that specific call. */

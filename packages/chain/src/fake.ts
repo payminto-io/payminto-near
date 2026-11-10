@@ -1,6 +1,6 @@
 import { compareAscii } from "./bytes.ts";
 import type { Chain } from "./chain.ts";
-import { ChainError, DEFAULT_MAX_PAYEES, EXPIRY_GRACE_MS, MAX_ANY_PAYEES, MAX_CLAIMS, MAX_PAYEES, MAX_PAYOUT_ACCOUNTS, MAX_PRUNE_PAYEES, MAX_RECEIPT_KEYS } from "./constants.ts";
+import { ChainError, DEFAULT_MAX_PAYEES, DEFAULT_MIN_PAYMENT, MAX_ANY_PAYEES, MAX_CLAIMS, MAX_PAYEES, MAX_PAYOUT_ACCOUNTS, MAX_PRUNE_PAYEES, MAX_RECEIPT_KEYS, MAX_VALID_UNTIL_MS } from "./constants.ts";
 import { publicKeyProblem, verifyDigest } from "./crypto.ts";
 import { acceptanceInTime, acceptanceSignedFor, budgetIdOf, canonicalPayees, checkoutDigest, voucherDigest } from "./digest.ts";
 import { receiptLeaf, verifyMerkleProof } from "./merkle.ts";
@@ -16,6 +16,8 @@ export type FakeChainOptions = {
   operator?: AccountId;
   /** Starting block time in Unix milliseconds. Defaults to the wall clock and then only moves through `advance`. */
   nowMs?: bigint;
+  /** The hub's smallest accepted checkout payment, in token base units. Defaults to the hub's 10 000 (0.01 USDC). */
+  minPayment?: bigint;
 };
 
 export type FakeTotals = { tokenBalance: bigint; escrow: bigint; credits: bigint; inFlight: bigint };
@@ -36,7 +38,7 @@ function hubRefusesKey(key: PublicKey | Uint8Array): boolean {
 }
 
 /** Per-batch working state, committed only when every check has passed. */
-type Workspace = { settled: Map<string, bigint>; spent: Map<Id32, bigint> };
+type Workspace = { settled: Map<string, bigint>; spent: Map<Id32, bigint>; paid: Map<Id32, number> };
 
 /** Withdrawable credit, and who paid for the entry's storage and gets it back when the entry is removed. */
 type Credit = { amount: bigint; funder: CreditFunder };
@@ -59,6 +61,9 @@ export class FakeChain implements Chain {
   readonly #budgets = new Map<Id32, Budget>();
   /** Each Budget's storage reserve: bytes its owner prepaid for settlement storage and nobody has used yet. */
   readonly #reserved = new Map<Id32, number>();
+  /** Each Budget's payee limit and the distinct payees it has paid. */
+  readonly #maxPayees = new Map<Id32, number>();
+  readonly #payeesPaid = new Map<Id32, number>();
   readonly #settled = new Map<string, bigint>();
   readonly #credits = new Map<AccountId, Credit>();
   /** Keyed by settler and batch id: batch ids belong to their settler. */
@@ -74,6 +79,9 @@ export class FakeChain implements Chain {
   readonly #txs = new Map<TxHash, TxState>();
   readonly #failTransferTo = new Set<AccountId>();
   #checkout: { key: PublicKey; settler: AccountId } | null = null;
+  /** Proposed by the admin's `set_checkout_key`; active once its settler calls `accept_checkout`. */
+  #pendingCheckout: { key: PublicKey; settler: AccountId } | null = null;
+  #minPayment: bigint;
   #inFlight = 0n;
 
   constructor(o: FakeChainOptions = {}) {
@@ -82,6 +90,7 @@ export class FakeChain implements Chain {
     this.network = o.network ?? "near:testnet";
     this.operator = o.operator ?? "node.payminto.testnet";
     this.#now = o.nowMs ?? BigInt(Date.now());
+    this.#minPayment = o.minPayment ?? DEFAULT_MIN_PAYMENT;
     this.#registered.add(this.hub);
   }
 
@@ -127,11 +136,45 @@ export class FakeChain implements Chain {
     this.#settlers.delete(account);
   }
 
-  /** The admin's `set_checkout_key`: the key that signs checkout terms, and the settler whose storage balance pays for payments. */
-  setCheckoutKey(key: PublicKey, settler: AccountId = this.operator): void {
+  /**
+   * The admin's `set_checkout_key`: proposes the key that signs checkout terms and the settler whose storage balance
+   * would pay for payments. Nothing changes until that settler calls `acceptCheckout`. Pass `accept: true` to model
+   * both steps at once, as a deployment that holds the settler's key does.
+   */
+  setCheckoutKey(key: PublicKey, settler: AccountId = this.operator, o: { accept?: boolean } = { accept: true }): void {
     if (!this.#settlers.has(settler)) throw new ChainError("NOT_SETTLER", settler);
     if (hubRefusesKey(key)) throw new ChainError("INVALID_KEY", key);
-    this.#checkout = { key, settler };
+    this.#pendingCheckout = { key, settler };
+    if (o.accept) void this.acceptCheckout(settler, key);
+  }
+
+  /**
+   * `accept_checkout`: the proposed settler takes the checkout role for exactly the proposed key, with exactly one
+   * yoctoNEAR. Only then do payments draw on its storage balance.
+   */
+  async acceptCheckout(settler: AccountId, key: PublicKey, attachedYocto = 1n): Promise<TxHash> {
+    if (this.#pendingCheckout?.settler !== settler) throw new ChainError("NOT_PENDING_CHECKOUT", settler);
+    oneYocto(attachedYocto);
+    if (this.#pendingCheckout.key !== key) throw new ChainError("NOT_PENDING_CHECKOUT", `${key} was not proposed`);
+    if (!this.#settlers.has(settler)) throw new ChainError("NOT_SETTLER", settler);
+    this.#checkout = this.#pendingCheckout;
+    this.#pendingCheckout = null;
+    return this.#tx();
+  }
+
+  /** The checkout key and settler proposed and not yet accepted, as the `pending_checkout` view returns. */
+  pendingCheckout(): { key: PublicKey; settler: AccountId } | null {
+    return this.#pendingCheckout ? { ...this.#pendingCheckout } : null;
+  }
+
+  /** The admin's `set_min_payment`: the smallest checkout payment accepted, in token base units. */
+  setMinPayment(amount: bigint): void {
+    if (amount <= 0n) throw new ChainError("ZERO_AMOUNT");
+    this.#minPayment = amount;
+  }
+
+  get minPayment(): bigint {
+    return this.#minPayment;
   }
 
   /** The next token transfer to `account` fails, so the callback path runs. */
@@ -178,7 +221,8 @@ export class FakeChain implements Chain {
   openBudget(owner: AccountId, t: BudgetTerms): Id32 {
     if (t.owner !== owner) throw new ChainError("NOT_OWNER", "terms.owner must be the caller");
     if (t.cap <= 0n || t.validUntil <= this.#now) throw new ChainError("INVALID_BUDGET", "cap must be positive and validUntil in the future");
-    if (t.validUntil > 2n ** 64n - 1n - EXPIRY_GRACE_MS) throw new ChainError("INVALID_BUDGET", "validUntil is too far in the future");
+    if (t.validUntil > MAX_VALID_UNTIL_MS) throw new ChainError("INVALID_BUDGET", "validUntil is not in Unix milliseconds, or too far in the future");
+    if (this.#isReserved(t.settler)) throw new ChainError("INVALID_BUDGET", "the hub and the token cannot settle");
     if (new Set(t.payees).size > MAX_PAYEES) throw new ChainError("INVALID_BUDGET", `at most ${MAX_PAYEES} payees`);
     const payees = canonicalPayees(t.payees);
     let slots: number;
@@ -194,6 +238,8 @@ export class FakeChain implements Chain {
     if (this.#budgets.has(id)) throw new ChainError("BUDGET_EXISTS");
     this.#budgets.set(id, { id, owner, agentPk: t.agentPk, settler: t.settler, cap: t.cap, spent: 0n, escrow: 0n, validUntil: t.validUntil, revokedAt: null, payees, policyHash: t.policyHash });
     this.#reserved.set(id, slots * PAIR_BYTES);
+    this.#maxPayees.set(id, slots);
+    this.#payeesPaid.set(id, 0);
     return id;
   }
 
@@ -335,7 +381,9 @@ export class FakeChain implements Chain {
       if (prior !== undefined && prior !== c.budgetId) throw new ChainError("ONE_BUDGET_PER_OWNER", b.owner);
       ownerBudget.set(b.owner, c.budgetId);
       if (this.#now > settleDeadline(b)) throw new ChainError("BUDGET_CLOSED", b.id);
-      lines.push({ owner: b.owner, payee: c.payee, delta: this.#applyDelta(work, b, c, this.#claimDelta(work, b, c)) });
+      const delta = this.#claimDelta(work, b, c);
+      this.#countPayee(work, b, c);
+      lines.push({ owner: b.owner, payee: c.payee, delta: this.#applyDelta(work, b, c, delta) });
       if (!firstPayer.has(c.payee)) firstPayer.set(c.payee, c.budgetId);
     }
 
@@ -392,22 +440,37 @@ export class FakeChain implements Chain {
     if (this.#now > settleDeadline(b)) throw new ChainError("BUDGET_CLOSED", b.id);
     const work = this.#workspace();
     const delta = this.#claimDelta(work, b, c);
+    this.#countPayee(work, b, c);
     if (!(this.#receiptKeys.get(b.settler) ?? []).includes(acceptance.nodeKey)) throw new ChainError("ACCEPTANCE_KEY_UNKNOWN", `${acceptance.nodeKey} is not a receipt key of ${b.settler}`);
     if (!acceptanceSignedFor(c, acceptance)) throw new ChainError("BAD_ACCEPTANCE", b.id);
     if (!acceptanceInTime(acceptance, b)) throw new ChainError("ACCEPTANCE_TOO_LATE", `accepted at ${acceptance.timestampS} s`);
     this.#applyDelta(work, b, c, delta);
     if (b.escrow < delta) throw new ChainError("INSUFFICIENT_ESCROW", b.owner);
 
+    // The reserve pays first for the settled entry, then for a new credit entry only if it covers all of it, in which
+    // case the entry is the Budget's. Otherwise the deposit pays for the whole credit entry, which has no funder: no
+    // entry is ever paid by the reserve and owned by nobody.
     const key = settledKey(c.budgetId, c.payee);
-    const reserved = this.#reserved.get(b.id) ?? 0;
-    // A new credit entry is the Budget's when its reserve covers a whole pair; otherwise the payee helps pay for it.
-    const funder: CreditFunder = reserved >= PAIR_BYTES ? { budget: b.id } : null;
-    const grown = (this.#settled.has(key) ? 0 : storageBytes.settled(c.payee)) + (this.#credits.has(caller) ? 0 : storageBytes.credit(caller, funder));
-    const fromReserve = Math.min(grown, reserved);
-    const charged = storageCost(grown - fromReserve);
+    let reserve = this.#reserved.get(b.id) ?? 0;
+    let chargedBytes = 0;
+    const settledBytes = this.#settled.has(key) ? 0 : storageBytes.settled(c.payee);
+    const fromReserve = Math.min(settledBytes, reserve);
+    reserve -= fromReserve;
+    chargedBytes += settledBytes - fromReserve;
+    let funder: CreditFunder = null;
+    if (!this.#credits.has(caller)) {
+      const owned = storageBytes.credit(caller, { budget: b.id });
+      if (owned <= reserve) {
+        reserve -= owned;
+        funder = { budget: b.id };
+      } else {
+        chargedBytes += storageBytes.credit(caller, null);
+      }
+    }
+    const charged = storageCost(chargedBytes);
     if (depositYocto < charged) throw new ChainError("INSUFFICIENT_DEPOSIT", `${depositYocto} < ${charged}`);
 
-    this.#reserved.set(b.id, reserved - fromReserve);
+    this.#reserved.set(b.id, reserve);
     this.#commit(work);
     b.escrow -= delta;
     this.#addCredit(caller, delta, funder);
@@ -418,7 +481,9 @@ export class FakeChain implements Chain {
 
   async budget(id: Id32): Promise<Budget | null> {
     const b = this.#budgets.get(id);
-    return b ? { ...structuredClone(b), storageReserveBytes: BigInt(this.#reserved.get(id) ?? 0) } : null;
+    return b
+      ? { ...structuredClone(b), storageReserveBytes: BigInt(this.#reserved.get(id) ?? 0), maxPayees: this.#maxPayees.get(id) ?? 0, payeesPaid: this.#payeesPaid.get(id) ?? 0 }
+      : null;
   }
 
   async settledOf(budgetId: Id32, payee: AccountId): Promise<bigint> {
@@ -552,12 +617,26 @@ export class FakeChain implements Chain {
   }
 
   #workspace(): Workspace {
-    return { settled: new Map(), spent: new Map() };
+    return { settled: new Map(), spent: new Map(), paid: new Map() };
   }
 
   #commit(work: Workspace) {
     for (const [k, v] of work.settled) this.#settled.set(k, v);
     for (const [id, v] of work.spent) this.#budgets.get(id)!.spent = v;
+    for (const [id, n] of work.paid) this.#payeesPaid.set(id, n);
+  }
+
+  /**
+   * Counts a payee the Budget has never paid, and refuses one more than it declared (`TOO_MANY_PAYEES`). The pair is
+   * new exactly when it has no settled amount yet, in storage or earlier in the same batch.
+   */
+  #countPayee(work: Workspace, b: Budget, c: Claim): void {
+    const key = settledKey(c.budgetId, c.payee);
+    if ((work.settled.get(key) ?? this.#settled.get(key) ?? 0n) !== 0n) return;
+    const paid = (work.paid.get(b.id) ?? this.#payeesPaid.get(b.id) ?? 0) + 1;
+    const max = this.#maxPayees.get(b.id) ?? 0;
+    if (paid > max) throw new ChainError("TOO_MANY_PAYEES", `Budget ${b.id} declared at most ${max} payees`);
+    work.paid.set(b.id, paid);
   }
 
   /** The checks on the voucher itself, in the hub's order: reserved payee, payee list, signature, staleness, step. Returns the delta. */
@@ -610,7 +689,7 @@ export class FakeChain implements Chain {
     let terms;
     try {
       terms = { paymentId: String(p.payment_id), merchant: String(p.merchant), amount: BigInt(String(p.amount)), expiryMs: BigInt(String(p.expiry_ms)) };
-      if (terms.amount !== amount || this.#now > terms.expiryMs || this.#payments.has(terms.paymentId) || this.#isReserved(terms.merchant)) return false;
+      if (terms.amount !== amount || amount < this.#minPayment || !this.#settlers.has(checkout.settler) || this.#now > terms.expiryMs || this.#payments.has(terms.paymentId) || this.#isReserved(terms.merchant)) return false;
       if (!verifyDigest(checkout.key, checkoutDigest(this.hub, this.network, terms), String(p.signature))) return false;
     } catch {
       return false;

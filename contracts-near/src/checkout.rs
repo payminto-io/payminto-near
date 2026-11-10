@@ -1,8 +1,9 @@
 //! Hosted-checkout payments.
 //!
 //! Invariant owned here: a token transfer credits a merchant only under terms the checkout key signed for exactly
-//! that payment id, merchant, amount and expiry, and each payment id is accepted once. The checkout settler's
-//! storage balance pays for the records; a payment it cannot cover is refunded in full by the token.
+//! that payment id, merchant, amount and expiry, each payment id is accepted once, and no payment is below the
+//! minimum. The checkout settler's storage balance pays for the records, and only a settler that accepted the role
+//! itself, and is still allowlisted, can be the checkout settler; a payment it cannot cover is refunded in full.
 
 use near_sdk::json_types::{U64, U128};
 use near_sdk::{AccountId, env, near, require};
@@ -12,30 +13,62 @@ use crate::HubExt;
 use crate::crypto::{is_acceptable_public_key, verify_signature};
 use crate::encoding::checkout_digest;
 use crate::errors::*;
-use crate::events::{CheckoutKeySet, PaymentReceived};
+use crate::events::{CheckoutKeyProposed, CheckoutKeySet, MinPaymentSet, PaymentReceived};
 use crate::storage::borsh_len;
 use crate::types::*;
 use crate::{Hub, now_ms};
 
 #[near]
 impl Hub {
-    /// Sets the node key that signs checkout terms, and the allowlisted settler whose storage balance pays for the
-    /// payments accepted under those terms. This grants no access to funds.
+    /// Proposes the node key that signs checkout terms, and the allowlisted settler whose storage balance would pay
+    /// for the payments accepted under those terms. Nothing changes until that settler calls `accept_checkout`, so
+    /// the admin can never spend a settler's storage balance without its consent. This grants no access to funds.
     #[payable]
     pub fn set_checkout_key(&mut self, key: Id32, settler: AccountId) {
         let ctx = self.require_admin();
         require!(self.settlers.contains(&settler), NOT_SETTLER);
         require!(is_acceptable_public_key(&key.0), INVALID_KEY);
-        // `checkout` lives in the contract's root record, which is written after this method returns, so its growth
+        // The proposal lives in the contract's root record, which is written after this method returns, so its growth
         // is the change in its serialized length.
-        let before = borsh_len(&self.checkout);
-        self.checkout = Some(Checkout {
+        let before = borsh_len(&self.pending_checkout);
+        self.pending_checkout = Some(Checkout {
             key,
             settler: settler.clone(),
         });
-        let after = borsh_len(&self.checkout);
+        let after = borsh_len(&self.pending_checkout);
         self.charge_deposit_keep_one(ctx.admin(), after.saturating_sub(before));
-        CheckoutKeySet { key, settler }.emit();
+        CheckoutKeyProposed { key, settler }.emit();
+    }
+
+    /// The proposed settler takes the checkout role for exactly the key it names, which must be the proposed key.
+    /// Exactly one yoctoNEAR, so only the settler's full-access key can accept. The root record never grows here: the
+    /// proposal moves into place.
+    #[payable]
+    pub fn accept_checkout(&mut self, key: Id32) {
+        let ctx = self.require_pending_checkout_settler();
+        let proposed = self
+            .pending_checkout
+            .take()
+            .unwrap_or_else(|| env::panic_str(NOT_PENDING_CHECKOUT));
+        require!(proposed.key == key, NOT_PENDING_CHECKOUT);
+        require!(self.settlers.contains(ctx.settler()), NOT_SETTLER);
+        self.checkout = Some(proposed);
+        CheckoutKeySet {
+            key,
+            settler: ctx.settler().clone(),
+        }
+        .emit();
+    }
+
+    /// Sets the smallest checkout payment the hub accepts, in token base units. A fixed-width field: no storage.
+    #[payable]
+    pub fn set_min_payment(&mut self, amount: U128) {
+        let _ctx = self.require_admin();
+        require!(amount.0 > 0, ZERO_AMOUNT);
+        if self.min_payment != amount.0 {
+            self.min_payment = amount.0;
+            MinPaymentSet { amount }.emit();
+        }
     }
 }
 
@@ -57,6 +90,8 @@ impl Hub {
         };
         let now = now_ms();
         if terms_amount != amount
+            || amount < self.min_payment
+            || !self.settlers.contains(&checkout.settler)
             || now > expiry_ms
             || self.payments.contains_key(&payment_id)
             || self.is_reserved(&merchant)

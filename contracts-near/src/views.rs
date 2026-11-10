@@ -65,6 +65,11 @@ impl Hub {
         self.checkout.as_ref().map(|c| c.settler.clone())
     }
 
+    /// The checkout key and settler the admin proposed, until that settler calls `accept_checkout`.
+    pub fn pending_checkout(&self) -> Option<Checkout> {
+        self.pending_checkout.clone()
+    }
+
     pub fn totals(&self) -> Totals {
         Totals {
             escrow: U128(self.total_escrow),
@@ -79,6 +84,7 @@ impl Hub {
             pending_admin: self.pending_admin.clone(),
             token: self.token.clone(),
             network: self.network.clone(),
+            min_payment: U128(self.min_payment),
         }
     }
 

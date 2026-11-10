@@ -58,10 +58,11 @@ export const storageBytes = {
   checkout: (settler: AccountId): number => 32 + str(settler),
   /**
    * A Budget record before any revoke: owner, settler, agent key, cap, spent, escrow, valid until, revoked at (none),
-   * payees, policy hash, allow-any flag and storage reserve. `open_budget` charges this plus `REVOKE_BYTES` and the reserve.
+   * payees, policy hash, allow-any flag, the payee limit and count (two u32) and storage reserve. `open_budget` charges
+   * this plus `REVOKE_BYTES` and the reserve.
    */
   budget: (b: { owner: AccountId; settler: AccountId; payees: readonly AccountId[] }): number =>
-    record(32, str(b.owner) + str(b.settler) + 32 + 16 + 16 + 16 + 8 + 1 + 4 + b.payees.reduce((sum, p) => sum + str(p), 0) + 32 + 1 + 8),
+    record(32, str(b.owner) + str(b.settler) + 32 + 16 + 16 + 16 + 8 + 1 + 4 + b.payees.reduce((sum, p) => sum + str(p), 0) + 32 + 1 + 4 + 4 + 8),
 } as const;
 
 /** What `bytes` of storage cost, in yoctoNEAR. */

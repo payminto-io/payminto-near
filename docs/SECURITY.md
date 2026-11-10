@@ -35,14 +35,17 @@ What limits the damage is the shape of the contract, not a promise from the oper
 | Budget owner | A NEAR account (a wallet, or a DAO contract) | Open a Budget and prepay its settlement storage, fund its escrow, move its own hub credit into escrow (`fund_from_credit`), revoke before `valid_until`, reclaim what is left after the settlement deadline, and `prune` its settled entries then for the storage refund | Take escrow back before the deadline, revoke after `valid_until` to shorten the expiry grace, or raise spending past the cap without opening a new Budget |
 | Agent | A bare ed25519 key: no NEAR account, no gas | Sign vouchers for its one Budget | Sign a NEAR transaction, move tokens, change the Budget, or revoke on chain (it can ask the node to stop accepting its vouchers) |
 | Node operator (the settler) | A function-call key limited to `settle_batch` and `payout` on the hub, the node signing key, and the node account's own full-access key, which it keeps offline | Accept or refuse calls, sign acceptances, settle batches of agent-signed vouchers for Budgets that name it as settler, trigger payouts, set the timestamp on receipts; with the full-access key, register a receipt key and withdraw its unused storage balance | Move escrow or credit to itself, settle a voucher the agent did not sign, pay a payee the Budget does not allow, exceed a Budget's cap or an owner's escrow, settle a Budget that names another settler, or remove a receipt key once it is registered |
-| Hub admin | A separate NEAR account | Add or remove settlers, set the checkout key and the settler whose storage balance checkout payments draw on, and hand the role to another account in two steps (`propose_admin`, then `accept_admin` by that account) | Reach funds: none of these methods touches escrow or credit. Remove a settler's receipt keys: a settler taken off the list keeps them. Make an account admin without that account accepting |
+| Hub admin | A separate NEAR account | Add or remove settlers, propose the checkout key and the settler whose storage balance checkout payments would draw on, set the minimum checkout payment, and hand the role to another account in two steps (`propose_admin`, then `accept_admin` by that account) | Reach funds: none of these methods touches escrow or credit. Spend a settler's storage balance: a proposed checkout settler must accept the role itself with `accept_checkout`. Remove a settler's receipt keys: a settler taken off the list keeps them. Make an account admin without that account accepting |
 | Hub account | No keys | Nothing: no key can sign for it | Have its code changed |
 | Seller (payee) | A NEAR account, and the vouchers and acceptances the SDK stores | Settle its own earnings with `settle_own(claim, acceptance)` when the node is gone, for calls the node accepted | Settle a voucher the node never accepted (`ACCEPTANCE_KEY_UNKNOWN`, `BAD_ACCEPTANCE`), or one whose acceptance is dated after the Budget's revoke or expiry (`ACCEPTANCE_TOO_LATE`) |
 | Relayer operator (optional) | A full-access key on a relayer account that holds a little NEAR and nothing else | Pay the gas for an owner's signed, zero-deposit call to the hub, or refuse to | Change what the owner signed, act for an owner, or reach escrow or credit |
 | Anyone | Nothing | Call `payout` for any account (the credit goes to that account), add NEAR to any account's storage balance with `fund_storage`, and verify a receipt with `verify_receipt` | Redirect a payout, withdraw another account's storage balance, or fund the hub's or the token's storage balance (`RESERVED_ACCOUNT`) |
 
 `contracts-near/src/auth.rs` holds one guard per role, every entry point calls exactly one of them first, and a unit test calls every guarded method as every wrong caller and checks the exact refusal code.
-Every state change on the hub logs a NEP-297 event (standard `payminto`, version `1.0.0`), so anyone can follow the hub without polling its views.
+Every state change on the hub logs a NEP-297 event (standard `payminto`, version `1.0.0`), and a call that changes nothing logs nothing.
+The events say what happened; they are not a full copy of the state.
+`batch_settled` is a summary (settler, batch id, root, number of claims, gross and net), and the per-Budget and per-account amounts of a batch are its `claims` and `expected_net` arguments, which are public in the transaction.
+An indexer therefore reads those arguments, or the views, to know each Budget's `spent`, `escrow` and storage reserve and each account's credit.
 
 The operator can always refuse service.
 It can refuse calls, stop settling, or go offline.
@@ -107,12 +110,14 @@ It does not show that the service was delivered.
 It does not show that the root covers every voucher the node accepted: the chain proves the settler committed to a root, not that the root is complete.
 Calls a seller settled itself are booked by the node with `settledBy: "seller"`.
 They are in no batch, so they have no Merkle proof; what can be checked on chain for them is that the hub's settled position covers the call.
+After the settlement deadline the owner may `prune` the Budget, which removes those settled positions, so `settled_of` then returns 0.
+What remains is the `claim_settled_by_payee` event of each such call, which carries the payee and the final `cumulative`, the `batch_settled` events and batch roots for batched calls, and the transactions themselves.
 
 ## Known limits
 
 ### The contract is unaudited
 
-It was written during a hackathon and has unit tests, sandbox tests, a solvency check and an internal audit ([docs/audit/2026-11-10-internal-audit.md](audit/2026-11-10-internal-audit.md)), whose findings hub v2 fixes, and nothing more.
+It was written during a hackathon and has unit tests, sandbox tests, a solvency check, an internal audit ([docs/audit/2026-11-10-internal-audit.md](audit/2026-11-10-internal-audit.md)), whose findings hub v2 fixes, and an independent pre-audit of hub v2 ([docs/audit/2026-11-11-hub-v2-pre-audit.md](audit/2026-11-11-hub-v2-pre-audit.md)), whose findings are fixed or documented here, and nothing more.
 `contracts-near/build.sh` builds `contracts-near/out/hub.wasm` with a pinned toolchain, cargo-near version and `Cargo.lock`, and keeps every home-directory path out of the wasm, so its hash does not depend on who builds it or where (internal audit F8).
 A rebuild from another directory gave the same hash; a build on a second machine has not been compared yet, and the NEP-330 Docker build has not been run.
 Because the hub is locked, a bug found later cannot be fixed in place.
@@ -149,6 +154,11 @@ It does not guarantee:
   So no batch clears only because of an offset.
 - That earned credit pays an owner's debit.
   Settlement debits escrow only; an owner moves earned credit into a Budget with `fund_from_credit`, signed from its own wallet.
+- That an owner's earnings are always withdrawable credit.
+  Netting is by account, so what an owner earns in a batch first offsets what its own agent spends in that batch, and that part is booked as escrow, not credit.
+  That escrow is spendable by the owner's agent, and it comes back to the owner at `reclaim` after the settlement deadline (or after a revoke and its 24 hours).
+  How much is booked this way depends on how the settler groups claims into batches: if A's agent spends 10 and A earns 15, one batch leaves A with escrow 100 and credit 5, and two batches leave escrow 90 and credit 15.
+  No funds are lost either way, but an owner that wants its earnings withdrawable at once should not rely on netting (independent pre-audit P3; the contract keeps this behaviour, pinned by `p3_netting_turns_an_owners_earnings_into_locked_escrow`).
 - Any saving in gas or fees.
   This page quotes none.
 
@@ -185,6 +195,7 @@ A Budget's owner cannot settle to itself through `settle_own` (`PAYEE_IS_OWNER`)
 In a batch sent by the settler, a payment from an owner to itself counts toward the Budget's `spent` and moves no tokens.
 A Budget that sets `allow_any_payee` allows any other payee on chain, which removes the main protection against a misdirected or injected payment.
 In hub v2 that takes the explicit flag, with an empty list and a `max_payees` of 1 to 256 distinct payees the Budget can ever pay; an empty list without the flag is refused with `INVALID_BUDGET`.
+`max_payees` is a count: the hub counts each payee a Budget pays for the first time, in batches and in `settle_own`, and refuses one more than declared with `TOO_MANY_PAYEES` (pre-audit P4).
 The TypeScript builder in `packages/chain` sets the flag for an empty list and declares 16 payees unless told otherwise, so a client that builds terms some other way must set it on purpose.
 The agent wallet refuses such a Budget unless its operator opts in (`ALLOW_ANY_PAYEE=1`, or `allowAnyPayee` in the SDK).
 The payee list holds at most 16 accounts.
@@ -232,8 +243,9 @@ Hub storage is not paid by the hub account.
 Every method that grows state measures the growth and charges exactly those bytes to whoever caused them.
 The owner prepays its Budget's settlement storage at `open_budget`: 332 bytes (3.32 milliNEAR) for each payee the Budget can pay, each listed payee or `max_payees` for a Budget that allows any payee.
 `settle_batch` and `settle_own` draw each new (Budget, payee) pair's `settled` and credit entries from that reserve, and a Budget whose reserve is short fails the batch with `INSUFFICIENT_RESERVE`.
-`settle_own` then falls back to its caller's deposit.
-Settlers prepay a NEAR storage balance with `fund_storage({ account })`, which pays only for their own batch records, their receipt keys and checkout payments.
+`settle_own` takes the `settled` entry from the reserve first and its caller's deposit for the rest, and takes a new credit entry from the reserve only when what is left covers all of it, and otherwise from the caller's deposit alone.
+So no entry is ever paid by a reserve and owned by nobody, every byte a reserve gives comes back to it, and a listed Budget's reserve cannot run out (pre-audit P1).
+Settlers prepay a NEAR storage balance with `fund_storage({ account })`, which pays only for their own batch records, their receipt keys and the checkout payments of a settler that accepted the checkout role.
 A settler whose balance cannot pay for a batch record gets `INSUFFICIENT_STORAGE` for the whole batch and cannot settle until it, or anyone else, tops the balance up.
 `storage_of({ account })` reports the balance, and `withdraw_storage({ amount })` returns the unused part to its own account only.
 A removed credit entry returns its bytes to whoever paid for it: the Budget's reserve or the checkout settler's balance.
@@ -244,7 +256,11 @@ In hub v1 the settler paid for every new (Budget, payee) pair a batch settled, a
 An owner with throwaway payee accounts could therefore make a settler pay for many pairs with dust payments, until its balance ran out and its batches failed with `INSUFFICIENT_STORAGE`.
 Hub v2 moves that cost to the owner, so dust payments to new payees spend the owner's own prepaid NEAR and nothing of the settler's.
 The node keeps its two limits as defence in depth: a first payment to a payee new to a Budget must be at least `NEW_PAYEE_MIN_AMOUNT` (default 0.001 USDC), and one Budget may pay at most `NEW_PAYEES_PER_HOUR` new payees in a rolling hour (default 20).
-Checkout payment records and batch records stay on their settler's balance for good; the node signs every checkout and decides when to batch, so an outsider cannot drive either.
+Checkout payment records and batch records stay on their settler's balance for good.
+In hub v2 as first written, the admin alone chose which settler's balance paid for checkout payments, so an admin holding the checkout key could burn any settler's balance with one-unit payments to itself (pre-audit P2).
+Now `set_checkout_key` only proposes, and the named settler takes the role with `accept_checkout` and its full-access key; a payment is refunded once that settler leaves the allowlist.
+The hub also refunds any checkout payment below its minimum, 10,000 base units (0.01 USDC) unless the admin changes it with `set_min_payment`, and the node refuses open-amount links and payer amounts below its own `MIN_CHECKOUT_AMOUNT` (`AMOUNT_TOO_SMALL`), so one-unit payments cannot burn the checkout settler's balance (pre-audit P5).
+Each accepted payment still writes about 150 bytes for good, so the checkout settler watches its balance.
 
 ### The node
 

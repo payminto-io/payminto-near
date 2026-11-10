@@ -91,6 +91,8 @@ type RawBudget = {
   payees: string[];
   policy_hash: string;
   storage_reserve_bytes?: string;
+  max_payees?: number;
+  payees_paid?: number;
 };
 type RawBatch = { root: string; settler: string; gross: string; net: string; at: string };
 type RawPayment = { id: string; merchant: string; amount: string; payer: string; at: string };
@@ -223,12 +225,21 @@ export class NearRpcChain implements Chain {
   }
 
   /** The hub's deployment parameters, and the admin `propose_admin` named, if any. Not part of `Chain`. */
-  async config(): Promise<{ admin: AccountId; pendingAdmin: AccountId | null; token: AccountId; network: string }> {
-    const c = await this.#view<{ admin: string; pending_admin?: string | null; token: string; network: string }>(this.hub, "config", {});
+  async config(): Promise<{ admin: AccountId; pendingAdmin: AccountId | null; token: AccountId; network: string; minPayment: bigint | null }> {
+    const c = await this.#view<{ admin: string; pending_admin?: string | null; token: string; network: string; min_payment?: string }>(this.hub, "config", {});
     if (!c || !isAccountId(c.admin) || !isAccountId(c.token) || typeof c.network !== "string") throw invalid("config", c);
     const pending = c.pending_admin ?? null;
     if (pending !== null && !isAccountId(pending)) throw invalid("config", c);
-    return { admin: c.admin, pendingAdmin: pending, token: c.token, network: c.network };
+    const minPayment = c.min_payment === undefined ? null : this.#u128(c.min_payment, "min_payment");
+    return { admin: c.admin, pendingAdmin: pending, token: c.token, network: c.network, minPayment };
+  }
+
+  /** The checkout key and settler the admin proposed and the settler has not accepted yet, or null. Not part of `Chain`. */
+  async pendingCheckout(): Promise<{ key: PublicKey; settler: AccountId } | null> {
+    const p = await this.#view<{ key: string; settler: string } | null>(this.hub, "pending_checkout", {});
+    if (p === null || p === undefined) return null;
+    if (!isId32(p.key) || !isAccountId(p.settler)) throw invalid("pending_checkout", p);
+    return { key: publicKeyToString(hexToBytes(p.key)), settler: p.settler };
   }
 
   /** The hub's liability totals, for the solvency check against `balanceOf(hub)`. Not part of `Chain`. */
@@ -477,6 +488,8 @@ function parseBudget(id: Id32, raw: RawBudget): Budget {
     payees: [...raw.payees],
     policyHash: raw.policy_hash,
     ...(raw.storage_reserve_bytes === undefined ? {} : { storageReserveBytes: u(raw.storage_reserve_bytes, "storage_reserve_bytes") }),
+    ...(typeof raw.max_payees === "number" ? { maxPayees: raw.max_payees } : {}),
+    ...(typeof raw.payees_paid === "number" ? { payeesPaid: raw.payees_paid } : {}),
   };
 }
 

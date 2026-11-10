@@ -270,15 +270,8 @@ async fn checkout_payment_credits_the_merchant_and_rejects_repeats() -> TestResu
     let merchant = w.create("merchant").await?;
     w.mint(&payer, 100).await?;
     let key = agent(50);
-    w.call_with_deposit(
-        &w.admin,
-        &w.hub,
-        "set_checkout_key",
-        json!({ "key": payminto_hub::types::Id32(key.verifying_key().to_bytes()), "settler": w.node }),
-        near_api::NearToken::from_millinear(10),
-    )
-    .await?
-    .assert_success();
+    w.enable_checkout(payminto_hub::types::Id32(key.verifying_key().to_bytes()))
+        .await?;
 
     let expiry = now_ms() + 600_000;
     let msg = checkout_msg(&w.hub, &key, id32(1), &merchant, 25, expiry);
@@ -543,7 +536,7 @@ async fn one_hundred_claims_to_new_payees_do_not_reduce_the_hubs_free_balance() 
     );
 
     // 64-character payees cost exactly a pair each, so the reserve is used up, and one more new payee is beyond what
-    // the owner prepaid: that batch is refused whole.
+    // the owner declared and prepaid: that batch is refused whole.
     assert_eq!(w.reserve_bytes(&budget).await?, 0);
     let extra = acct(&format!("{:064x}", 1000));
     assert_refused(
@@ -554,7 +547,7 @@ async fn one_hundred_claims_to_new_payees_do_not_reduce_the_hubs_free_balance() 
             vec![net_entry(&extra, 0, 1), net_entry(&owner, 1, 0)],
         )
         .await?,
-        "INSUFFICIENT_RESERVE",
+        "TOO_MANY_PAYEES",
     );
     w.assert_solvent().await?;
     Ok(())
@@ -664,15 +657,8 @@ async fn checkout_payment_draws_on_the_checkout_settlers_storage_and_is_refunded
     let merchant = w.create("merchant").await?;
     w.mint(&payer, 100).await?;
     let key = agent(50);
-    w.call_with_deposit(
-        &w.admin,
-        &w.hub,
-        "set_checkout_key",
-        json!({ "key": payminto_hub::types::Id32(key.verifying_key().to_bytes()), "settler": w.node }),
-        near_api::NearToken::from_millinear(10),
-    )
-    .await?
-    .assert_success();
+    w.enable_checkout(payminto_hub::types::Id32(key.verifying_key().to_bytes()))
+        .await?;
     let settler: Option<String> = w.view(&w.hub, "checkout_settler", json!({})).await?;
     assert_eq!(settler, Some(w.node.to_string()));
 

@@ -121,8 +121,15 @@ export class Gateway {
     this.#payouts = d.payouts;
     this.#publicUrl = d.publicUrl;
     this.#clock = d.clock ?? (() => Math.floor(Date.now() / 1000));
-    this.ctx = { network: d.network, livemode: isLivemode(d.network), hub: d.chain.hub, token: d.token.address, checkoutBaseUrl: d.config.checkoutBaseUrl };
-    this.wallet = new WalletRail(d.chain);
+    this.ctx = {
+      network: d.network,
+      livemode: isLivemode(d.network),
+      hub: d.chain.hub,
+      token: d.token.address,
+      checkoutBaseUrl: d.config.checkoutBaseUrl,
+      ...(d.config.minCheckoutAmount === undefined ? {} : { minCheckoutAmount: d.config.minCheckoutAmount }),
+    };
+    this.wallet = new WalletRail(d.chain, d.config.minCheckoutAmount);
     this.rails.set(this.wallet.method, this.wallet);
     this.merchants = new MerchantService({ db: d.db, ctx: this.ctx, checkoutKey: d.chain.nodeKey });
     this.webhooks = new WebhookService({ db: d.db, ctx: this.ctx, log: d.log.child({ component: "webhooks" }), allowPrivate: d.config.webhookAllowPrivate, clock: d.clock, send: d.webhookSender });

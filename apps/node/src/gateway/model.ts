@@ -201,7 +201,15 @@ export type ApiKeyRow = {
 // API shapes: exactly the exported types in packages/protocol/src/gateway.ts.
 // ---------------------------------------------------------------------------
 
-export type ModelContext = { network: Network; livemode: boolean; hub: AccountId; token: AccountId; checkoutBaseUrl: string };
+export type ModelContext = {
+  network: Network;
+  livemode: boolean;
+  hub: AccountId;
+  token: AccountId;
+  checkoutBaseUrl: string;
+  /** The smallest checkout amount in token base units; absent means the hub's default, `DEFAULT_MIN_PAYMENT`. */
+  minCheckoutAmount?: bigint;
+};
 
 export function refundStatusOf(paid: bigint, refunded: bigint): PaymentRefundStatus {
   if (refunded === 0n) return "none";

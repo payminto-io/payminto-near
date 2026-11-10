@@ -1,4 +1,4 @@
-import { checkoutPayTx, checkoutTermsToJson, type CheckoutTerms, type CheckoutWallet } from "@payminto/protocol";
+import { DEFAULT_MIN_PAYMENT, checkoutPayTx, checkoutTermsToJson, type CheckoutTerms, type CheckoutWallet } from "@payminto/protocol";
 import type { ChainClient } from "../chain.ts";
 import type { PaymentRow } from "./model.ts";
 
@@ -20,14 +20,17 @@ export interface CheckoutRail<View = unknown> {
  * the payment under `checkout_id` and credits the merchant. No pre-registration on chain is needed.
  *
  * The terms are for the whole amount due and a payment id can be used once, so this rail takes an untouched payment
- * only. The hub credits the merchant in full, so it carries no fee.
+ * only. The hub credits the merchant in full, so it carries no fee. The node signs no terms below its minimum checkout
+ * amount: the hub refunds such a payment anyway, and each accepted payment writes a permanent record on chain.
  */
 export class WalletRail implements CheckoutRail<CheckoutWallet> {
   readonly method = "wallet";
   readonly #chain: ChainClient;
+  readonly minAmount: bigint;
 
-  constructor(chain: ChainClient) {
+  constructor(chain: ChainClient, minAmount: bigint = DEFAULT_MIN_PAYMENT) {
     this.#chain = chain;
+    this.minAmount = minAmount;
   }
 
   terms(p: Pick<PaymentRow, "checkout_id" | "payout" | "amount_due" | "expires_unix">): CheckoutTerms {
@@ -35,7 +38,7 @@ export class WalletRail implements CheckoutRail<CheckoutWallet> {
   }
 
   offer(p: PaymentRow): CheckoutWallet | null {
-    if (p.amount_paid !== "0" || BigInt(p.fee_total) !== 0n) return null;
+    if (p.amount_paid !== "0" || BigInt(p.fee_total) !== 0n || BigInt(p.amount_due) < this.minAmount) return null;
     const terms = this.terms(p);
     const signature = this.#chain.signCheckout(terms);
     return {

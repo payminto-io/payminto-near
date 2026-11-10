@@ -15,7 +15,7 @@ Where this page and the code differ, the code is what runs; `contracts-near/READ
 
 | Part | Path | What it does |
 |---|---|---|
-| Hub contract | `contracts-near/` | Rust contract on NEAR, one module per invariant. Escrows a NEP-141 token in owner-funded Budgets, verifies vouchers and node acceptances, settles netted batches, stores a Merkle root per settler and batch id, keeps each settler's receipt keys and prepaid storage balance and each Budget's prepaid storage reserve, pays out credit, and logs a NEP-297 event for every state change. Locked: the account has no access keys |
+| Hub contract | `contracts-near/` | Rust contract on NEAR, one module per invariant. Escrows a NEP-141 token in owner-funded Budgets, verifies vouchers and node acceptances, settles netted batches, stores a Merkle root per settler and batch id, keeps each settler's receipt keys and prepaid storage balance and each Budget's prepaid storage reserve, pays out credit, and logs a NEP-297 event for every state change; a batch's per-Budget amounts are its public transaction arguments. Locked: the account has no access keys |
 | Chain seam | `packages/chain` | The only package that imports NEAR libraries: types, the `Chain` interface, Borsh digests, the Merkle tree, wallet transaction builders (`actions.ts`), `FakeChain` (simulated hub), `NearRpcChain` (RPC client on near-kit) and `scripts/deploy-hub.ts` |
 | Protocol | `packages/protocol` | x402 v2 wire schemas for the `payminto-voucher` scheme, policy rules and refusals, gateway wire types, webhook signatures |
 | Clearing node | `apps/node` | Hono HTTP server on `node:sqlite`. Registers Budgets, checks every voucher against policy, signs receipts and refusal records, builds and settles batches, books what sellers settle themselves, runs payouts, sends refusal webhooks, exports settlements, and runs the merchant gateway |
@@ -128,7 +128,7 @@ agent                seller (paywall)           clearing node                hub
 8. On `POST /v1/settlements`, or on a timer, the node first reads the hub's settled position of every (Budget, payee) pair it would claim, and books what a payee settled itself.
    It then takes the latest voucher of each pair, checks each Budget on the hub, and packs claims into batches of at most 100 with one Budget per owner.
    It builds a Merkle tree over every call in the batch and calls `settle_batch(batch_id, root, claims, expected_net)`.
-9. The hub checks, in one atomic receipt: the caller is an allowed settler and each Budget's own settler, the batch id is new for this settler, each voucher verifies with `env::ed25519_verify`, each claim's signed amount is within its cumulative step, each claim is inside its cap, payee list and settlement deadline, the netting result equals `expected_net`, and each owner's net debit fits its escrow.
+9. The hub checks, in one atomic receipt: the caller is an allowed settler and each Budget's own settler, the batch id is new for this settler, each voucher verifies with `env::ed25519_verify`, each claim's signed amount is within its cumulative step, each Budget pays no more distinct payees than its `max_payees` (`TOO_MANY_PAYEES`), each claim is inside its cap, payee list and settlement deadline, the netting result equals `expected_net`, and each owner's net debit fits its escrow.
    Then it debits escrow by each owner's net debit, credits each net creditor, and stores the root.
    The bytes each Budget's new payees take are charged to the storage reserve its owner prepaid at `open_budget`, 332 bytes per payee the Budget can pay; a Budget whose reserve is short fails the batch with `INSUFFICIENT_RESERVE`.
    The batch record is charged to a NEAR storage balance the settler prepaid on the hub with `fund_storage`; `storage_of(account)` reports what is left, and a batch the balance cannot pay for is refused whole with `INSUFFICIENT_STORAGE`.
@@ -215,7 +215,8 @@ A settler registers for itself, with exactly one yoctoNEAR attached, so its func
 | A voucher the hub already settled | `STALE_VOUCHER` |
 
 So the exit covers calls the node accepted, and a seller must keep its receipts; the SDK voucher store does.
-`settle_own` draws its storage from the same reserve the owner paid for when the Budget opened, and then from the caller's deposit.
+`settle_own` draws its storage from the same reserve the owner paid for when the Budget opened, and then from the caller's deposit; a new credit entry comes wholly from the reserve or wholly from the deposit, so every byte the reserve gives comes back to it.
+After the settlement deadline the owner can `prune` the Budget's settled positions; the `claim_settled_by_payee` events, which carry the final cumulative amount, and the transactions remain as the record of those settlements.
 The node reads `settled_of` before every settlement and books each movement that none of its batches made as a seller settlement.
 Those calls are `settled` with `settledBy: "seller"`; they are in no batch, so they have no Merkle proof.
 
@@ -226,7 +227,9 @@ It supports two methods: `wallet` and `voucher`.
 
 For `wallet`, the hosted checkout hands the payer's NEAR wallet a ready `ft_transfer_call` to the hub.
 Its `msg` carries the payment id, the merchant account, the amount and an expiry, signed with the node's checkout key.
-The hub verifies the signature, returns the tokens for an unknown token, a wrong amount, expired terms or a repeated payment id, and otherwise records the payment and credits the merchant.
+The hub verifies the signature, returns the tokens for an unknown token, a wrong amount, an amount below its minimum (10,000 base units by default), expired terms or a repeated payment id, and otherwise records the payment and credits the merchant.
+The record is paid from the storage balance of the checkout settler, which took that role itself with `accept_checkout` after the admin proposed it with `set_checkout_key`.
+The node signs no terms below its own `MIN_CHECKOUT_AMOUNT`, and refuses open-amount links and payer amounts below it with `AMOUNT_TOO_SMALL`.
 The node polls the hub's record of each open payment id at final finality and books what the hub recorded.
 
 For `voucher`, an agent pays a payment link or a payment over x402 with vouchers from its Budget, through the same policy engine as any other call.

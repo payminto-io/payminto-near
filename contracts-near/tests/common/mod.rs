@@ -190,6 +190,39 @@ impl World {
             .parse()?)
     }
 
+    /// The checkout under `key`, as a deployment sets it up: the admin proposes the node, the node accepts with its
+    /// full-access key, and the admin lowers the minimum payment to one base unit so tests can use small amounts.
+    pub async fn enable_checkout(&self, key: Id32) -> TestResult<()> {
+        self.call_with_deposit(
+            &self.admin.clone(),
+            &self.hub.clone(),
+            "set_checkout_key",
+            json!({ "key": key, "settler": self.node }),
+            NearToken::from_millinear(10),
+        )
+        .await?
+        .assert_success();
+        self.call_with_deposit(
+            &self.node.clone(),
+            &self.hub.clone(),
+            "accept_checkout",
+            json!({ "key": key }),
+            NearToken::from_yoctonear(1),
+        )
+        .await?
+        .assert_success();
+        self.call_with_deposit(
+            &self.admin.clone(),
+            &self.hub.clone(),
+            "set_min_payment",
+            json!({ "amount": "1" }),
+            NearToken::from_yoctonear(1),
+        )
+        .await?
+        .assert_success();
+        Ok(())
+    }
+
     /// The batch the node settled under `batch_id`.
     pub async fn batch(&self, batch_id: Id32) -> TestResult<Value> {
         self.view(

@@ -19,7 +19,7 @@ use crate::events::{BatchSettled, ClaimSettledByPayee};
 use crate::netting::Netting;
 use crate::storage::{refund, storage_cost};
 use crate::types::*;
-use crate::{Hub, MAX_CLAIMS, PAIR_BYTES, add, now_ms, settle_deadline, sub};
+use crate::{Hub, MAX_CLAIMS, add, now_ms, settle_deadline, sub};
 
 #[near]
 impl Hub {
@@ -65,6 +65,7 @@ impl Hub {
                 None => self.settled_amount(&(claim.budget_id, claim.payee.clone())),
             };
             let delta = self.verify_claim(budget, claim, prior);
+            count_new_payee(budget, prior);
             budget.spent = U128(add(budget.spent.0, delta));
             require!(budget.spent.0 <= budget.cap.0, CAP_EXCEEDED);
             pairs.insert(claim.payee.clone(), claim.cumulative.0);
@@ -182,23 +183,45 @@ impl Hub {
         let key = (claim.budget_id, claim.payee.clone());
         let prior = self.settled_amount(&key);
         let delta = self.verify_claim(&budget, &claim, prior);
+        count_new_payee(&mut budget, prior);
         self.verify_acceptance(&budget, &claim, &acceptance);
         budget.spent = U128(add(budget.spent.0, delta));
         require!(budget.spent.0 <= budget.cap.0, CAP_EXCEEDED);
         require!(budget.escrow.0 >= delta, INSUFFICIENT_ESCROW);
         budget.escrow = U128(budget.escrow.0 - delta);
 
-        // A credit entry created here is the Budget's when its reserve covers a whole pair, so the bytes go back to
-        // the reserve when it is paid out. Otherwise the payee's deposit pays part of it and the entry has no funder.
-        let reserve = budget.storage_reserve_bytes.0;
-        let funder = (reserve >= PAIR_BYTES).then_some(Funder::Budget(claim.budget_id));
-        let before = self.storage_mark();
+        // Storage comes from the Budget's reserve first and then from the payee's deposit, and no entry is ever paid
+        // by the reserve and owned by nobody. The `settled` entry is the Budget's, and `prune` refunds its bytes to
+        // the owner. A new credit entry is the Budget's when what is left of the reserve covers all of it, so its bytes
+        // go back to the reserve when it is paid out; otherwise the payee's deposit pays for all of it, and the reserve
+        // for none of it.
+        let mut reserve = budget.storage_reserve_bytes.0;
+        let mut charged_bytes = 0u64;
+        let mark = self.storage_mark();
         self.settled.insert(key, claim.cumulative.0);
-        self.add_credit(&payee, delta, funder);
-        let grown = self.storage_growth(before);
-        let from_reserve = grown.min(reserve);
-        budget.storage_reserve_bytes = U64(reserve - from_reserve);
-        let charged = storage_cost(grown - from_reserve);
+        let settled = self.storage_growth(mark);
+        let from_reserve = settled.min(reserve);
+        reserve -= from_reserve;
+        charged_bytes += settled - from_reserve;
+        if self.credits.contains_key(&payee) {
+            self.add_credit(&payee, delta, None);
+        } else {
+            let mark = self.storage_mark();
+            self.add_credit(&payee, delta, Some(Funder::Budget(claim.budget_id)));
+            let entry = self.storage_growth(mark);
+            if entry <= reserve {
+                reserve -= entry;
+            } else {
+                // Measured, not computed: write the entry again with no funder and charge the payee for it.
+                self.credits.remove(&payee);
+                self.credits.flush();
+                let mark = self.storage_mark();
+                self.add_credit(&payee, delta, None);
+                charged_bytes += self.storage_growth(mark);
+            }
+        }
+        budget.storage_reserve_bytes = U64(reserve);
+        let charged = storage_cost(charged_bytes);
         let deposit = env::attached_deposit().as_yoctonear();
         require!(deposit >= charged, INSUFFICIENT_DEPOSIT);
 
@@ -212,8 +235,18 @@ impl Hub {
             payee,
             cumulative: claim.cumulative,
             amount: U128(delta),
+            storage_reserve_bytes: U64(reserve),
         }
         .emit();
+    }
+}
+
+/// Counts a payee the Budget has never paid, and refuses one more than it declared. `prior` is zero exactly when the
+/// pair has no `settled` entry yet, because a settled cumulative amount is always positive.
+fn count_new_payee(budget: &mut Budget, prior: u128) {
+    if prior == 0 {
+        budget.payees_paid += 1;
+        require!(budget.payees_paid <= budget.max_payees, TOO_MANY_PAYEES);
     }
 }
 

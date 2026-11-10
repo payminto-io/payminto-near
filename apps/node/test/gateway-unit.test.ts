@@ -10,6 +10,7 @@ import { ChainClient } from "../src/chain.ts";
 import { Database } from "../src/db/database.ts";
 import { silentLogger } from "../src/logger.ts";
 import { WalletRail } from "../src/gateway/checkout.ts";
+import { LinkService } from "../src/gateway/links.ts";
 import { MerchantService, type MerchantRow } from "../src/gateway/merchants.ts";
 import type { ModelContext } from "../src/gateway/model.ts";
 import { nextStatus, PaymentService } from "../src/gateway/payments.ts";
@@ -234,14 +235,38 @@ describe("NEAR checkout rail and watcher", () => {
     const watcher = new PaymentWatcher({ db: h.db, chain, payments: h.payments, log: silentLogger });
     // The node's clock is behind the hub's block time here, which a real deployment can see by a few seconds.
     h.clock.now = Math.floor(Number(fake.nowMs) / 1000);
-    const p = await h.payments.create(h.merchant, { amount: 700n, expires_in: 300 });
+    const p = await h.payments.create(h.merchant, { amount: 70_000n, expires_in: 300 });
     const msg = (new WalletRail(chain).offer(p)!.transaction.actions[0]!.params.args as { msg: string }).msg;
     h.clock.now += 301;
     h.payments.expireDue();
     expect(h.payments.row(p.id)!.status).toBe("expired");
-    expect(fake.ftTransferCall(PAYER, 700n, msg).refunded).toBe(0n);
+    expect(fake.ftTransferCall(PAYER, 70_000n, msg).refunded).toBe(0n);
     expect(await watcher.tick()).toBe(1);
     expect(h.payments.row(p.id)).toMatchObject({ status: "paid", late: 1 });
+  });
+});
+
+describe("minimum checkout amount", () => {
+  it("refuses an open-amount link or a payer amount below the minimum, and signs no wallet terms below it", async () => {
+    const h = harness();
+    const links = new LinkService(h.db, ctx);
+    expect(links.minimum).toBe(10_000n);
+    expect(() => links.create(h.merchant.id, { title: "Tips", min_amount: 9_999n, max_amount: 50_000n })).toThrow(/AMOUNT_TOO_SMALL|at least 10000/);
+    const open = links.create(h.merchant.id, { title: "Tips", min_amount: 10_000n, max_amount: 50_000n });
+    expect(links.amountFor(open, 20_000n)).toBe(20_000n);
+    // An operator can choose a higher floor; a link created under a lower one is held to the new floor when paid.
+    const strict = new LinkService(h.db, { ...ctx, minCheckoutAmount: 15_000n });
+    expect(() => strict.amountFor(open, 12_000n)).toThrow(/at least 15000/);
+
+    const fake = startFakeChain([PAYER]);
+    const node = testKey(90);
+    fake.setCheckoutKey(node.publicKey);
+    const chain = new ChainClient(fake, node);
+    const below = await h.payments.create(h.merchant, { amount: 9_999n, expires_in: 300 });
+    expect(new WalletRail(chain).offer(below)).toBeNull();
+    expect(new WalletRail(chain, 1n).offer(below)).not.toBeNull();
+    const at = await h.payments.create(h.merchant, { amount: 10_000n, expires_in: 300 });
+    expect(new WalletRail(chain).offer(at)!.terms.amount).toBe("10000");
   });
 });
 

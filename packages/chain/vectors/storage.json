@@ -85,14 +85,14 @@
         "mid.testnet",
         "zeta.testnet"
       ],
-      "bytes": 296
+      "bytes": 304
     },
     {
       "record": "budget",
       "owner": "a-very-long-sub.account-name_with.separators.payminto.testnet",
       "settler": "bb",
       "payees": [],
-      "bytes": 278
+      "bytes": 286
     }
   ]
 }

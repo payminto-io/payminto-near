@@ -6,12 +6,15 @@
  *   1. hub signs: DeployContract(hub.wasm) + new({ admin, token, network })   (`new` is private, so one transaction)
  *   2. hub signs: token.storage_deposit({ account_id: hub, registration_only: true })   (before any deposit can arrive)
  *   3. admin signs: hub.set_settler({ account: settler, allowed: true })   (the deposit pays for the entry)
- *   4. admin signs: hub.set_checkout_key({ key, settler })   (the deposit pays for the entry)
+ *   4. admin signs: hub.set_checkout_key({ key, settler })   (a proposal; the deposit pays for it)
  *   5. admin signs: hub.fund_storage({ account: settler })   (prefund: the settler's storage balance, which every
  *      settle_batch, receipt key and checkout payment draws on; the hub itself never pays for storage)
  *   6. settler signs: hub.register_receipt_key({ key })   (1 yoctoNEAR; only when the settler's key is at hand,
  *      otherwise the script prints the transaction for the node operator to sign)
- *   7. checks code hash, config, settler, checkout key and its settler, token registration, the settler's storage
+ *   6b. settler signs: hub.accept_checkout({ key })   (1 yoctoNEAR; the settler takes the checkout role, so no checkout
+ *      payment draws on its storage balance without its consent; left to the operator like step 6 without its key)
+ *   7. checks code hash, config (no pending admin), settler, checkout key and its settler (or the pending proposal when
+ *      step 6b is left to the operator), token registration, the settler's storage
  *      balance and the hub's own NEAR balance
  *   8. hub signs: DeleteKey for every access key on the hub account, then checks that none is left
  *
@@ -36,7 +39,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { base58 } from "@scure/base";
 import { InMemoryKeyStore, Near, parseKey, type KeyStore } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
-import { fundStorageTx, registerReceiptKeyTx } from "../src/actions.ts";
+import { acceptCheckoutTx, fundStorageTx, registerReceiptKeyTx } from "../src/actions.ts";
 import { isAccountId, isId32, isPublicKey, publicKeyBytes, publicKeyToString, toHex } from "../src/bytes.ts";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { NearRpcError, sendBuiltOnce, sendWalletTx } from "../src/node.ts";
@@ -96,6 +99,8 @@ export type DeployReport = {
   settlerStorageYocto: string | null;
   /** Whether the settler's receipt key is on the hub. `settle_own` works for this settler's sellers only once it is. */
   receiptKeyRegistered: boolean;
+  /** Whether the settler accepted the checkout role. Checkout payments are refunded until it does. */
+  checkoutAccepted: boolean;
 };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -105,7 +110,7 @@ export const DEFAULT_WASM = resolve(HERE, "../../../contracts-near/out/hub.wasm"
  * `contracts-near/build.sh`. The script refuses to deploy the default wasm when its hash is anything else; an explicit
  * `--wasm` path skips this check, for testing another build.
  */
-export const HUB_CODE_HASH = "EyMRXoHdTQHLadE1dJzcGC5jY5XwmWsEdaeVeV9fHDmx";
+export const HUB_CODE_HASH = "H8NHZwWQPwgdYCku8kUR7AqcnbvY28BQGaRU5LhuARFN";
 /** A common NEP-141 registration price; the live run reads the token's own bound and uses the higher value. */
 const DEFAULT_STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n;
 const EMPTY_CODE_HASH = "11111111111111111111111111111111";
@@ -177,7 +182,7 @@ export async function deployHub(o: DeployOptions): Promise<DeployReport> {
   const minSettlerStorage = o.minSettlerStorage ?? maxSettleBatchStorageCost(100);
   const minHubBalance = o.minHubBalance ?? DEFAULT_MIN_HUB_BALANCE;
   if (settlerStorage < minSettlerStorage) throw new Error(`--settler-storage ${settlerStorage} is below --min-settler-storage ${minSettlerStorage}`);
-  const report: DeployReport = { network, hub: o.hub, wasmSha256Hex: digest.toString("hex"), codeHash, steps: {}, locked: false, settlerStorageYocto: null, receiptKeyRegistered: false };
+  const report: DeployReport = { network, hub: o.hub, wasmSha256Hex: digest.toString("hex"), codeHash, steps: {}, locked: false, settlerStorageYocto: null, receiptKeyRegistered: false, checkoutAccepted: false };
   const keyStore = o.dryRun ? new InMemoryKeyStore() : keyStoreFor(o);
   const client = new Near({
     network: o.rpcUrl ? { rpcUrl: o.rpcUrl, networkId: o.network === "sandbox" ? "localnet" : "testnet" } : "testnet",
@@ -269,10 +274,14 @@ export async function deployHub(o: DeployOptions): Promise<DeployReport> {
   await run("set_settler", o.admin, o.hub, [call("set_settler", settlerArgs, 30n, settlerDeposit)], settlerSet, () =>
     sendBuiltOnce(client, o.admin, (b) => b.functionCall(o.hub, "set_settler", settlerArgs, { gas: "30 Tgas", attachedDeposit: settlerDeposit }), "set_settler"),
   );
-  const keySet =
-    deployed &&
-    (await read("checkout key", () => view<string | null>(o.hub, "checkout_key", {}), null)) === checkoutHex &&
-    (await read("checkout settler", () => view<string | null>(o.hub, "checkout_settler", {}), null)) === o.settler;
+  const checkoutActive = async () =>
+    (await view<string | null>(o.hub, "checkout_key", {})) === checkoutHex && (await view<string | null>(o.hub, "checkout_settler", {})) === o.settler;
+  const checkoutPending = async () => {
+    const p = await view<{ key: string; settler: string } | null>(o.hub, "pending_checkout", {});
+    return p?.key === checkoutHex && p?.settler === o.settler;
+  };
+  const accepted = deployed && (await read("checkout key", checkoutActive, false));
+  const keySet = accepted || (deployed && (await read("pending checkout", checkoutPending, false)));
   const keyArgs = { key: checkoutHex, settler: o.settler };
   const keyDeposit = storageCost(storageBytes.checkout(o.settler));
   await run("set_checkout_key", o.admin, o.hub, [call("set_checkout_key", keyArgs, 30n, keyDeposit)], keySet, () =>
@@ -299,16 +308,32 @@ export async function deployHub(o: DeployOptions): Promise<DeployReport> {
     report.steps["register_receipt_key"] = o.dryRun ? "planned" : "left to the settler";
   }
 
+  // 6b. The settler takes the checkout role. Only the settler can accept the admin's proposal, so the admin can never
+  // spend the settler's storage balance on checkout payments without its consent.
+  const acceptAction = [call("accept_checkout", { key: checkoutHex }, 30n, 1n)];
+  if (accepted || canSignAsSettler) {
+    await run("accept_checkout", o.settler, o.hub, acceptAction, accepted, () => sendWalletTx(client, o.settler, acceptCheckoutTx(o.hub, publicKeyToString(hexToBytes(checkoutHex)))));
+  } else {
+    log(`\n[accept_checkout] left to the settler: ${o.settler} signs this itself, with a full-access key`);
+    log(show(o.settler, o.hub, acceptAction));
+    log(`  Until it does, the hub refunds every checkout payment.`);
+    report.steps["accept_checkout"] = o.dryRun ? "planned" : "left to the settler";
+  }
+
   // 7. Check everything before the irreversible step.
   if (!o.dryRun) {
     const problems: string[] = [];
     const now = await client.getAccount(o.hub, { finality: "final" });
     if (now.codeHash !== codeHash) problems.push(`code hash ${now.codeHash} != ${codeHash}`);
-    const config = await view<{ admin: string; token: string; network: string }>(o.hub, "config", {});
+    const config = await view<{ admin: string; pending_admin?: string | null; token: string; network: string }>(o.hub, "config", {});
     if (config?.admin !== o.admin || config?.token !== o.token || config?.network !== network) problems.push(`config ${JSON.stringify(config)}`);
+    // After the lock nobody could withdraw a proposal, so an admin change someone proposed must not survive it.
+    if ((config?.pending_admin ?? null) !== null) problems.push(`an admin transfer to ${config?.pending_admin} is pending`);
     if ((await view<boolean>(o.hub, "is_settler", { account: o.settler })) !== true) problems.push(`${o.settler} is not a settler`);
-    if ((await view<string | null>(o.hub, "checkout_key", {})) !== checkoutHex) problems.push("checkout key mismatch");
-    if ((await view<string | null>(o.hub, "checkout_settler", {})) !== o.settler) problems.push("checkout settler mismatch");
+    report.checkoutAccepted = await checkoutActive();
+    if (!report.checkoutAccepted && !(report.steps["accept_checkout"] === "left to the settler" && (await checkoutPending()))) {
+      problems.push("checkout key or settler mismatch");
+    }
     if ((await view<unknown>(o.token, "storage_balance_of", { account_id: o.hub })) == null) problems.push("hub is not registered at the token");
     const storage = await storageOf();
     report.settlerStorageYocto = storage.toString();
@@ -320,6 +345,7 @@ export async function deployHub(o: DeployOptions): Promise<DeployReport> {
     log(`\n[verify] code hash, config, settler, checkout key and token registration all match`);
     log(`  ${o.settler} storage balance ${near(storage)} (minimum ${near(minSettlerStorage)}); hub's own balance ${near(own)} (minimum ${near(minHubBalance)})`);
     log(`  receipt key ${receiptKey}: ${report.receiptKeyRegistered ? "registered" : "NOT registered yet; the settler must sign register_receipt_key"}`);
+    log(`  checkout: ${report.checkoutAccepted ? `accepted by ${o.settler}` : `proposed; ${o.settler} must sign accept_checkout`}`);
   } else {
     log(`\n[verify] a live run checks the code hash, config, settler, checkout key and its settler, token registration,`);
     log(`  that ${o.settler} holds at least ${near(minSettlerStorage)} of storage balance, and that the hub's own balance is at least ${near(minHubBalance)}`);

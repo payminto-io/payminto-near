@@ -377,8 +377,7 @@ fn f7_hub_and_token_accounts_are_never_credited() {
 
     // A checkout payment naming one of them as merchant is refunded in full.
     let checkout = agent(50);
-    h.ctx(admin(), plenty());
-    h.hub.set_checkout_key(pk(&checkout), node());
+    h.enable_checkout(&checkout);
     for (n, reserved) in [hub_id(), token()].into_iter().enumerate() {
         let name = reserved.to_string();
         let digest = checkout_digest(hub_id().as_str(), NET, &id(n as u8), &name, 25, T0 + 1000);
@@ -431,7 +430,12 @@ fn f3_settle_own_never_writes_storage_the_hub_pays_for() {
 
 #[test]
 fn f3_settle_batch_charges_every_byte_to_the_budgets_reserve_or_the_settlers_balance() {
-    let (mut h, a, key) = funded(1_000);
+    let mut h = Harness::new();
+    let key = agent(1);
+    let mut t = h.terms(&key, 1000, vec![]);
+    t.max_payees = 20;
+    let a = h.open(A, t);
+    h.deposit(A, &a, 1_000);
     let payees: Vec<String> = (0..20).map(|i| format!("payee-{i}.test")).collect();
     let claims: Vec<Claim> = payees.iter().map(|p| claim(&a, p, &key, 1, 1)).collect();
     let lines: Vec<(&str, &str, u128)> = payees.iter().map(|p| (A, p.as_str(), 1)).collect();
@@ -507,8 +511,7 @@ fn f3_settle_batch_without_storage_balance_is_refused_whole() {
 fn f3_checkout_payment_storage_is_charged_to_the_checkout_settler() {
     let mut h = Harness::new();
     let checkout = agent(50);
-    h.ctx(admin(), plenty());
-    h.hub.set_checkout_key(pk(&checkout), node());
+    h.enable_checkout(&checkout);
     let msg = |n: u8| {
         let digest = checkout_digest(hub_id().as_str(), NET, &id(n), S, 25, T0 + 1000);
         format!(

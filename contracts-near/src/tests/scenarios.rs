@@ -189,8 +189,7 @@ fn deposit_to_revoked_or_expired_budget_is_refunded() {
 }
 
 fn set_checkout(h: &mut Harness, key: &SigningKey) {
-    h.ctx(admin(), plenty());
-    h.hub.set_checkout_key(pk(key), node());
+    h.enable_checkout(key);
 }
 
 fn payment_msg(key: &SigningKey, payment_id: Id32, merchant: &str, amount: u128, expiry_ms: u64) -> String {
@@ -835,7 +834,7 @@ fn settle_own_after_deadline_is_closed() {
 }
 
 #[test]
-fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
+fn settle_own_draws_every_new_payee_from_the_owners_reserve_up_to_max_payees() {
     let mut h = Harness::new();
     let a = one_budget(&mut h, 1_000, 1_000_000);
     assert_eq!(
@@ -843,10 +842,9 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
         u64::from(DEFAULT_ANY_PAYEES) * crate::PAIR_BYTES
     );
 
-    // Each new payee writes a `settled` and a `credits` entry, drawn from the bytes the owner prepaid.
-    let mut settled = 0u128;
-    let mut i = 0;
-    let per_claim = loop {
+    // Each new payee writes a `settled` and a `credits` entry, all drawn from the bytes the owner prepaid, and the
+    // payee attaches nothing.
+    for i in 0..DEFAULT_ANY_PAYEES {
         let payee = format!("p{i:02}.test");
         let reserve = h.budget(&a).storage_reserve_bytes.0;
         let before = h.usage();
@@ -854,8 +852,6 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
         h.accounts.insert(acct(&payee));
         h.own(claim(&a, &payee, &agent(1), 1, 1));
         let grown = h.usage() - before;
-        settled += 1;
-        i += 1;
         assert_eq!(
             reserve - h.budget(&a).storage_reserve_bytes.0,
             grown,
@@ -865,43 +861,20 @@ fn settle_own_uses_owner_reserved_storage_then_charges_the_payee() {
             near_sdk::test_utils::get_created_receipts().is_empty(),
             "nothing to refund"
         );
-        if h.budget(&a).storage_reserve_bytes.0 < grown {
-            break grown;
-        }
-    };
-    assert!(
-        settled >= 16,
-        "the reserve covers at least 16 new payees, it covered {settled}"
-    );
+    }
+    assert_eq!(h.budget(&a).payees_paid, DEFAULT_ANY_PAYEES);
 
-    // The reserve no longer covers a new payee, so the payee pays the rest, and only the rest.
-    let left = h.budget(&a).storage_reserve_bytes.0;
-    let owed = u128::from(per_claim - left) * byte_cost();
+    // One payee more than the owner declared is refused, whatever the payee attaches.
     let extra = "pxx.test";
-    assert_eq!(extra.len(), "p00.test".len(), "same entry size as the measured claims");
-    let unpaid = claim(&a, extra, &agent(1), 1, 1);
-    let paid = unpaid.clone();
-    h.expect_err(INSUFFICIENT_DEPOSIT, |h| {
-        h.ctx(acct(extra), owed - 1);
-        h.own(unpaid);
+    h.expect_code(TOO_MANY_PAYEES, |h| {
+        h.ctx(acct(extra), plenty());
+        h.own(claim(&a, extra, &agent(1), 1, 1));
     });
-    assert_eq!(
-        h.budget(&a).storage_reserve_bytes.0,
-        left,
-        "a refused claim consumes no reserve"
-    );
-    h.ctx(acct(extra), owed + 5);
-    h.accounts.insert(acct(extra));
-    h.own(paid);
-    assert_eq!(h.hub.credit_of(acct(extra)).0, 1);
-    assert_eq!(h.budget(&a).storage_reserve_bytes.0, 0);
-    let receipts = near_sdk::test_utils::get_created_receipts();
-    assert_eq!(receipts.len(), 1, "only the excess deposit is refunded");
 
     // A repeat payee writes no new entry, so the whole deposit comes back.
-    h.ctx(acct(extra), 7);
+    h.ctx(acct("p00.test"), 7);
     let before = h.usage();
-    h.own(claim(&a, extra, &agent(1), 1, 2));
+    h.own(claim(&a, "p00.test", &agent(1), 1, 2));
     assert_eq!(h.usage(), before);
     assert_eq!(
         near_sdk::test_utils::get_created_receipts().len(),
@@ -1041,13 +1014,21 @@ fn admin_methods_are_admin_only_and_need_a_deposit_that_covers_their_storage() {
     });
     h.ctx(admin(), plenty());
     h.hub.set_checkout_key(id(1), node());
-    assert_eq!(h.hub.checkout_key(), Some(id(1)));
-    assert_eq!(h.hub.checkout_settler(), Some(node()));
+    // A proposal, paid by the admin; the node accepts it, which moves it into place and writes nothing new.
+    assert_eq!(h.hub.checkout_key(), None);
     let first = plenty() - transferred(&near_sdk::test_utils::get_created_receipts()[0]);
     assert_eq!(first, (32 + 4 + node().as_str().len() as u128) * byte_cost());
-    // Replacing the key with one of the same size costs nothing more.
-    h.ctx(admin(), 1);
+    h.ctx(node(), 1);
+    h.hub.accept_checkout(id(1));
+    assert_eq!(h.hub.checkout_key(), Some(id(1)));
+    assert_eq!(h.hub.checkout_settler(), Some(node()));
+    // Proposing a replacement of the same size costs the admin nothing more than the proposal record.
+    h.ctx(admin(), plenty());
     h.hub.set_checkout_key(id(2), node());
+    let second = plenty() - transferred(&near_sdk::test_utils::get_created_receipts()[0]);
+    assert_eq!(second, first);
+    h.ctx(node(), 1);
+    h.hub.accept_checkout(id(2));
     assert_eq!(h.hub.checkout_key(), Some(id(2)));
 }
 

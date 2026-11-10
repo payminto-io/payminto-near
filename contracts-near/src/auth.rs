@@ -10,6 +10,7 @@
 //! | owner, full key | `require_owner_full_key` | as owner, and exactly 1 yoctoNEAR | as owner, `ONE_YOCTO_REQUIRED` |
 //! | settler | `require_settler`, then `SettlerCtx::require_names` per Budget | caller is allowlisted, and is the Budget's settler | `NOT_SETTLER`, `NOT_BUDGET_SETTLER` |
 //! | settler, full key | `require_settler_full_key` | as settler, and exactly 1 yoctoNEAR | `NOT_SETTLER`, `ONE_YOCTO_REQUIRED` |
+//! | proposed checkout settler | `require_pending_checkout_settler` | caller is the settler `set_checkout_key` named, exactly 1 yoctoNEAR | `NOT_PENDING_CHECKOUT`, `ONE_YOCTO_REQUIRED` |
 //! | payee | `require_payee` | caller is the claim's payee and not the Budget's owner | `NOT_PAYEE`, `PAYEE_IS_OWNER` |
 //! | token | `token_caller` | caller is the token; anything else is refunded, never a panic | none |
 //! | the hub itself | `require_self` | caller is the hub account: the callbacks and `new` | `NOT_SELF` |
@@ -161,6 +162,16 @@ impl Hub {
         let ctx = self.require_settler();
         require_one_yocto();
         ctx
+    }
+
+    pub(crate) fn require_pending_checkout_settler(&self) -> SettlerCtx {
+        let settler = caller();
+        require!(
+            self.pending_checkout.as_ref().is_some_and(|c| c.settler == settler),
+            NOT_PENDING_CHECKOUT
+        );
+        require_one_yocto();
+        SettlerCtx { settler }
     }
 
     pub(crate) fn require_payee(&self, claim: &Claim, budget: &Budget) -> PayeeCtx {

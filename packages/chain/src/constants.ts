@@ -27,6 +27,16 @@ export const MAX_ANY_PAYEES = 256;
  * says otherwise. The owner prepays settlement storage for this many payees.
  */
 export const DEFAULT_MAX_PAYEES = 16;
+/**
+ * The smallest checkout payment a new hub accepts, in token base units (0.01 USDC). Smaller payments are refunded.
+ * The hub admin can change it with `set_min_payment`; read the live value from `config().minPayment`.
+ */
+export const DEFAULT_MIN_PAYMENT = 10_000n;
+/**
+ * The latest `validUntil` the hub accepts, in Unix milliseconds (the year 2286). A time sent in microseconds or
+ * nanoseconds is far above it, so the hub refuses it with INVALID_BUDGET instead of opening a Budget that never expires.
+ */
+export const MAX_VALID_UNTIL_MS = 10_000_000_000_000n;
 /** Payees one `prune` call can clear. */
 export const MAX_PRUNE_PAYEES = 100;
 export const MAX_PAYOUT_ACCOUNTS = 10;
@@ -72,6 +82,7 @@ export const HUB_ERRORS = [
   "NOT_OWNER",
   "NOT_PAYEE",
   "NOT_PENDING_ADMIN",
+  "NOT_PENDING_CHECKOUT",
   "NOT_SELF",
   "NOT_SETTLER",
   "ONE_BUDGET_PER_OWNER",
@@ -85,6 +96,7 @@ export const HUB_ERRORS = [
   "TOO_EARLY",
   "TOO_MANY_ACCOUNTS",
   "TOO_MANY_CLAIMS",
+  "TOO_MANY_PAYEES",
   "TOO_MANY_RECEIPT_KEYS",
   "UNKNOWN_BUDGET",
   "ZERO_AMOUNT",
