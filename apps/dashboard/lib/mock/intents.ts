@@ -111,6 +111,15 @@ function fees(o: CheckoutOrigin, out: bigint): IntentsFeeLines {
   };
 }
 
+/**
+ * The demo's one difference from the node: Acme Store's fee plan takes a platform fee, which a payment from another
+ * chain cannot split off, so the node would not offer it for Acme's payments at all. The demo waives the fee on this
+ * rail instead, so the flow can be clicked; on a node, a business on a plan with no platform fee gets the same result.
+ */
+function noFee(p: PaymentDetail) {
+  Object.assign(p, { method: "oneclick", surcharge: "0", amount_due: p.amount, platform_fee: "0", method_fee: "0", fee_total: "0", net_amount: p.amount });
+}
+
 const originJson = (o: CheckoutOrigin) => ({ asset: o.assetId, chain: o.blockchain, chain_name: o.chainName, symbol: o.symbol, decimals: o.decimals });
 
 export class MockIntents {
@@ -201,7 +210,7 @@ export class MockIntents {
     const row = this.#build(p, o, refund, Date.now());
     this.#rows.set(p.id, [...rows, row]);
     // The node re-quotes an untouched payment for the method in use; the fee is zero on this rail.
-    if (p.status === "open" && p.credits.length === 0) p.method = "oneclick";
+    if (p.status === "open" && p.credits.length === 0) noFee(p);
     this.host.event(p, "intents.quote_created", { origin: `${o.symbol} on ${o.chainName}`, amount: row.q.send_exactly.amount });
     this.host.changed(p);
     return { quote: this.#json(row), reused: false };
@@ -213,6 +222,7 @@ export class MockIntents {
    */
   seedPaid(p: PaymentDetail, assetId: string, refundTo: string, atMs: number): void {
     const o = CHECKOUT_ORIGINS.find((x) => x.assetId === assetId)!;
+    noFee(p);
     const row = this.#build(p, o, refundTo, atMs - 4 * 60_000);
     const delivery = nearTx(`${row.q.id}:delivery`);
     Object.assign(row.q, {
