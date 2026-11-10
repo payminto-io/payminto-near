@@ -109,6 +109,7 @@ function Settings({ merchantId, p, refetch, refreshing, canPayout, canToggle }: 
               onSaved={(next) => {
                 qc.setQueryData(payoutKey, next);
                 setEditing(false);
+                setToggleError(null);
               }}
               onCancel={p.account ? () => setEditing(false) : null}
             />
@@ -140,7 +141,16 @@ function Settings({ merchantId, p, refetch, refreshing, canPayout, canToggle }: 
           </ul>
         </section>
 
-        {p.storage_step && p.account && <StorageStep p={p} account={p.account} onDone={refetch} />}
+        {p.storage_step && p.account && (
+          <StorageStep
+            p={p}
+            account={p.account}
+            onDone={() => {
+              setToggleError(null);
+              refetch();
+            }}
+          />
+        )}
       </div>
     </Panel>
   );
@@ -207,7 +217,7 @@ function AccountForm({ p, merchantId, onSaved, onCancel }: { p: IntentsPayout; m
             setProof(null);
             setError(null);
           }}
-          placeholder={p.mode === "live" ? "business.near" : "anychain.test.near"}
+          placeholder="business.near"
           className="hash h-11 text-base md:h-9 md:text-[0.8125rem]"
           spellCheck={false}
           autoCapitalize="none"
