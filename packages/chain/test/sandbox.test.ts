@@ -184,7 +184,7 @@ describe.skipIf(!RUN)("hub on near-sandbox through NearRpcChain", () => {
     expect(Object.values(report.steps).every((s) => s !== "planned" && s !== "skipped" && s !== "left to the settler")).toBe(true);
     expect((await root.getAccount(hub.id)).codeHash).toBe(report.codeHash);
     expect((await root.getAccessKeys(hub.id)).keys).toHaveLength(0);
-    expect(await chain.config()).toEqual({ admin: admin.id, token: token.id, network: NETWORK });
+    expect(await chain.config()).toEqual({ admin: admin.id, pendingAdmin: null, token: token.id, network: NETWORK });
     expect(await chain.isSettler(node.id)).toBe(true);
     expect(await chain.isRegistered(hub.id)).toBe(true);
     expect(reader.readOnly).toBe(true);
