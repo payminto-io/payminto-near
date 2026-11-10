@@ -7,7 +7,7 @@
  */
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { verifyWebhook, WEBHOOK_SIGNATURE_HEADER, type AccountId, type CheckoutView, type IntentsOptions, type IntentsQuote } from "@payminto/protocol";
+import { verifyWebhook, WEBHOOK_SIGNATURE_HEADER, type AccountId, type CheckoutView, type IntentsOptions, type IntentsProofCredit, type IntentsQuote, type IntentsSummary, type PaymentProof, type PublicLinkIntents } from "@payminto/protocol";
 import { NodeSession } from "./session.ts";
 import { rpc } from "./signer-near.ts";
 import type { Stack } from "./stack.ts";
@@ -74,7 +74,10 @@ async function transfersOf(rpcUrl: string, hash: string, sender: AccountId): Pro
 export async function intentsChecks(s: Stack, step: Step, o: { api: string; origin: string; admin: { email: string; password: string } }): Promise<void> {
   const chain = s.hub.chain;
   const token = s.hub.names.token;
-  const anyAccount = s.setup.anyChain.account;
+  // --check always runs the simulated checkout (config.ts refuses --intents live with it).
+  const anyChain = s.setup.anyChain;
+  if (!anyChain) throw new Error("the any-chain checks need the simulated checkout, and this stack runs it live");
+  const anyAccount = anyChain.account;
   const anon = new NodeSession({ baseUrl: o.api, origin: o.origin });
   const admin = new NodeSession({ baseUrl: o.api, origin: o.origin });
   await admin.login(o.admin.email, o.admin.password);
@@ -124,8 +127,31 @@ export async function intentsChecks(s: Stack, step: Step, o: { api: string; orig
       };
     });
 
+    await step("the any-chain payment as the business and the buyer see it: the payment list says USDC on Base, the link offers Any chain, and its proof reads the delivery on chain", async () => {
+      const list = await admin.get<{ items: Array<{ id: string; method: string | null; intents: IntentsSummary | null }> }>("/v1/payments?method=oneclick&status=paid&limit=10", scope);
+      const item = list.items.find((x) => x.intents?.status === "confirmed");
+      const link = await anon.get<{ intents: PublicLinkIntents | null }>(`/v1/links/public/${s.setup.link.slug}`);
+      const proof = item ? await anon.get<PaymentProof>(`/v1/checkout/${item.id}/proof`) : null;
+      const credit = proof?.credits.find((c): c is IntentsProofCredit => c.method === "oneclick");
+      const onChain = credit?.delivery_tx ? await transfersOf(s.urls.rpc, credit.delivery_tx.hash, s.accounts.solver) : [];
+      const delivered = onChain.filter((t) => t.token === token && t.to === anyAccount).reduce((sum, t) => sum + t.amount, 0n);
+      const ok =
+        item?.intents?.origin.symbol === "USDC" &&
+        item.intents.origin.chain_name === "Base" &&
+        link.intents?.offered === true &&
+        credit?.verified === true &&
+        credit.recipient === anyAccount &&
+        credit.oneclick.status === "SUCCESS" &&
+        credit.delivered_on_chain === delivered.toString() &&
+        delivered >= BigInt(credit.amount);
+      return {
+        ok,
+        detail: `list: ${item ? `${item.id} "Any chain - ${item.intents?.origin.symbol} on ${item.intents?.origin.chain_name}"` : "no paid any-chain payment"}; link ${s.setup.link.slug} offers Any chain: ${link.intents?.offered}; proof: delivery ${credit?.delivery_tx?.hash ?? "none"} read again by the node, ${credit?.delivered_on_chain ?? "?"} to ${credit?.recipient ?? "?"} (verified ${credit?.verified}), on chain ${delivered}; 1Click ${credit?.oneclick.status ?? "?"}`,
+      };
+    });
+
     await step("send too little from another chain: 1Click returns the deposit, the payment is open again, a signed payment.deposit_returned arrives and no USDC moves on chain", async () => {
-      const view = await anon.post<CheckoutView>(`/v1/links/public/${s.setup.anyChain.link.slug}/payments`, {});
+      const view = await anon.post<CheckoutView>(`/v1/links/public/${anyChain.link.slug}/payments`, {});
       const quote = await anon.post<IntentsQuote>(`/v1/checkout/${view.id}/intents/quotes`, { origin_asset: BASE_USDC, refund_to: BUYER_BASE_ADDRESS });
       const before = await chain.balanceOf(anyAccount);
       const short = BigInt(quote.min_amount_in.amount) / 2n;

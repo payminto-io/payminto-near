@@ -5,6 +5,7 @@
  *
  * Transactions are `WalletTx` values from the pure builders in @payminto/chain; this module never names a contract method.
  */
+import type { DataStorage } from "@hot-labs/near-connect";
 import type { AccountId, TxHash, WalletTx } from "@payminto/protocol";
 import { LOCAL_SIGNER } from "./config";
 
@@ -134,13 +135,31 @@ async function driver(): Promise<WalletDriver> {
   return driverPromise;
 }
 
-/** NEAR Connect behind the WalletDriver interface. Loaded lazily because it touches window, IndexedDB and storage. */
-async function nearConnectDriver(network: WalletNetwork): Promise<WalletDriver> {
+/**
+ * Where a NEAR Connect instance remembers its wallet (the key `selected-wallet`). The default is plain localStorage; a
+ * prefix keeps a second connection's choice apart from the first one's.
+ */
+function prefixedStorage(prefix: string): DataStorage {
+  const ls = () => (typeof window === "undefined" ? null : window.localStorage);
+  return {
+    get: async (key) => ls()?.getItem(`${prefix}${key}`) ?? null,
+    set: async (key, value) => void ls()?.setItem(`${prefix}${key}`, value),
+    remove: async (key) => void ls()?.removeItem(`${prefix}${key}`),
+  };
+}
+
+/**
+ * NEAR Connect behind the WalletDriver interface. Loaded lazily because it touches window, IndexedDB and storage.
+ * `@hot-labs/near-connect` 0.12.0 takes the network in its constructor (`network`, default mainnet), passes it to every
+ * wallet call, and lists only wallets whose manifest has every wanted feature; `storage` replaces its localStorage.
+ */
+async function nearConnectDriver(network: WalletNetwork, o: { features?: Partial<Record<string, boolean>>; storage?: DataStorage } = {}): Promise<WalletDriver> {
   const { NearConnector } = await import("@hot-labs/near-connect");
   const connector = new NearConnector({
     network,
     autoConnect: false,
-    features: network === "mainnet" ? { signAndSendTransaction: true, mainnet: true } : { signAndSendTransaction: true, testnet: true },
+    features: o.features ?? (network === "mainnet" ? { signAndSendTransaction: true, mainnet: true } : { signAndSendTransaction: true, testnet: true }),
+    ...(o.storage ? { storage: o.storage } : {}),
     footerBranding: { heading: "Payminto", link: "https://wallet.near.org", linkText: "Need a NEAR wallet?" },
   });
   const firstAccount = (accounts: ReadonlyArray<{ accountId: string }> | undefined): AccountId | null => accounts?.[0]?.accountId ?? null;
@@ -448,4 +467,110 @@ export async function signMessage(message: string, recipient: string, expected?:
     throw new WalletError("wrong_account", `Your wallet signed as ${signed.accountId}. Connect ${expected} and sign again.`);
   }
   return { ...signed, message, recipient, nonce: toBase64(nonce) };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NEAR mainnet, for the any-chain payout account only
+
+/** How every screen names the second connection, so it is never mistaken for the dashboard's own. */
+export const MAINNET_LABEL = "NEAR mainnet";
+
+let mainnetOverride: WalletDriver | null = null;
+let mainnetPromise: Promise<WalletDriver> | null = null;
+
+/** Tests and the mock server install their own mainnet wallet here; null restores NEAR Connect on mainnet. */
+export function setMainnetWalletDriver(driver: WalletDriver | null): void {
+  mainnetOverride = driver;
+  mainnetPromise = null;
+}
+
+/**
+ * A second wallet connection, on NEAR mainnet, for exactly two actions of the any-chain checkout's settings when the
+ * server runs it live: the NEP-413 message that proves the business holds its mainnet payout account, and that
+ * account's USDC storage deposit. It never stands in for the dashboard's own connection (testnet, or the local signer
+ * under pnpm local): it has its own NEAR Connect instance, remembers its wallet under its own keys
+ * (`payminto-mainnet:` in localStorage), and shares no state with `useWallet`.
+ */
+async function mainnetDriver(): Promise<WalletDriver> {
+  if (mainnetOverride) return mainnetOverride;
+  if (typeof window === "undefined") throw new WalletError("unavailable", "A NEAR mainnet wallet is only available in the browser.");
+  mainnetPromise ??= nearConnectDriver("mainnet", { features: { signMessage: true, signAndSendTransaction: true, mainnet: true }, storage: prefixedStorage("payminto-mainnet:") }).catch((e: unknown) => {
+    mainnetPromise = null;
+    throw new WalletError("unavailable", "NEAR Connect could not load for NEAR mainnet. Check your connection and try again.", { cause: e });
+  });
+  return mainnetPromise;
+}
+
+/** The mainnet account a wallet already shared with this site, without a prompt; null when none. */
+export async function mainnetAccount(): Promise<AccountId | null> {
+  try {
+    return await (await mainnetDriver()).account();
+  } catch {
+    return null;
+  }
+}
+
+const mainnetListeners = new Set<(account: AccountId | null) => void>();
+
+/** Calls back with the mainnet account whenever this page connects or disconnects it. Returns an unsubscribe. */
+export function subscribeMainnet(cb: (account: AccountId | null) => void): () => void {
+  mainnetListeners.add(cb);
+  return () => void mainnetListeners.delete(cb);
+}
+
+const mainnetChanged = (account: AccountId | null) => {
+  for (const l of mainnetListeners) l(account);
+};
+
+/** Opens the mainnet wallet once (when needed) and returns the account it shared; any other account than `expected` is refused. */
+export async function connectMainnet(expected?: AccountId): Promise<AccountId> {
+  try {
+    const d = await mainnetDriver();
+    let account = (await d.account()) ?? (await d.connect(expected));
+    // Another account is connected: open the wallet once more so the person can pick the right one.
+    if (expected && account !== expected) account = await d.connect(expected);
+    mainnetChanged(account);
+    if (expected && account !== expected) {
+      throw new WalletError("wrong_account", `This needs ${expected} on ${MAINNET_LABEL}, and your wallet is connected as ${account}. Switch accounts in your wallet, then try again.`);
+    }
+    return account;
+  } catch (e) {
+    throw toWalletError(e);
+  }
+}
+
+export async function disconnectMainnet(): Promise<void> {
+  try {
+    await (await mainnetDriver()).disconnect();
+  } catch (e) {
+    const err = toWalletError(e);
+    if (err.kind !== "not_connected") throw err;
+  } finally {
+    mainnetChanged(null);
+  }
+}
+
+/** `signMessage` on the mainnet connection: a NEP-413 proof from `expected`, refused here when another account signed. */
+export async function signMessageOnMainnet(message: string, recipient: string, expected: AccountId, nonce: Uint8Array): Promise<Nep413Proof> {
+  if (nonce.length !== 32) throw new WalletError("failed", "A NEP-413 nonce must be 32 bytes.");
+  let signed: SignedMessage;
+  try {
+    const d = await mainnetDriver();
+    signed = await d.signMessage({ message, recipient, nonce });
+  } catch (e) {
+    throw toWalletError(e);
+  }
+  if (signed.accountId !== expected) throw new WalletError("wrong_account", `Your wallet signed as ${signed.accountId} on ${MAINNET_LABEL}. Connect ${expected} and sign again.`);
+  return { ...signed, message, recipient, nonce: toBase64(nonce) };
+}
+
+/** Signs and sends one transaction from `expected` on NEAR mainnet; a wallet connected as anyone else sends nothing. */
+export async function sendOnMainnet(tx: WalletTx, expected: AccountId): Promise<TxResult> {
+  await connectMainnet(expected);
+  try {
+    const d = await mainnetDriver();
+    return readOutcome(tx, await d.signAndSendTransaction(tx));
+  } catch (e) {
+    throw toWalletError(e);
+  }
 }

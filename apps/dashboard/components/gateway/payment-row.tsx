@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { withBusiness } from "@/lib/merchant-scope";
-import type { Payment } from "@/lib/schemas";
+import type { Payment, PaymentListItem } from "@/lib/schemas";
 import { shortAddress } from "@/lib/format";
-import { anyChainMethodLabel, originPayer } from "@/lib/intents";
+import { anyChainMethodLabel, originPayer, showsAnyChain } from "@/lib/intents";
 import { Address, Money } from "@/components/app/primitives";
 import { PaymentStatusChip } from "@/components/app/status";
 import { TimeAgo } from "@/components/app/time-ago";
@@ -14,7 +14,7 @@ export const PAYMENT_COLS = "md:grid-cols-[8.5rem_10.5rem_minmax(0,1.6fr)_minmax
 export const PAYMENT_COLS_BUSINESS = "md:grid-cols-[8.5rem_10.5rem_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)_6.5rem]";
 
 /** One payment: amount first and bold, status right after it, the whole row links to the detail. */
-export function PaymentRow({ p, linkTitle, business }: { p: Payment; linkTitle?: string; business?: string | null }) {
+export function PaymentRow({ p, linkTitle, business }: { p: Payment & { intents?: PaymentListItem["intents"] }; linkTitle?: string; business?: string | null }) {
   const withCol = business !== undefined;
   // An any-chain payer is the buyer's address on the chain they paid from ("base:0x..."), not a NEAR account.
   const origin = originPayer(p.payer);
@@ -30,7 +30,7 @@ export function PaymentRow({ p, linkTitle, business }: { p: Payment; linkTitle?:
         {p.description ?? "Payment"}
         <span className="text-muted-foreground">{linkTitle || p.link_id ? " - link" : p.reference ? ` - ${p.reference}` : " - API"}</span>
         {p.refund_status !== "none" && <span className="ml-2 text-xs text-muted-foreground">{p.refund_status === "full" ? "Refunded" : "Partly refunded"}</span>}
-        {p.method === "oneclick" && <span className="block truncate text-xs text-muted-foreground">{anyChainMethodLabel(p)}</span>}
+        {showsAnyChain(p) && <span className="block truncate text-xs text-muted-foreground">{anyChainMethodLabel(p)}</span>}
       </span>
       {withCol && <span className="min-w-0 truncate text-sm text-muted-foreground max-md:hidden">{business ?? "-"}</span>}
       <span className="relative z-10 min-w-0 text-sm text-muted-foreground max-md:justify-self-end">

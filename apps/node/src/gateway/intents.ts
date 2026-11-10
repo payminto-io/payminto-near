@@ -26,11 +26,14 @@ import {
   type IntentsPayout,
   type IntentsPayoutProof,
   type IntentsPlatformStatus,
+  type IntentsProofCredit,
   type IntentsQuote,
   type IntentsQuoteStatus,
   type IntentsStep,
+  type IntentsSummary,
   type IntentsTx,
   type PaymentIntents,
+  type PublicLinkIntents,
 } from "@payminto/protocol";
 import type { IntentsConfig } from "../config.ts";
 import type { Database } from "../db/database.ts";
@@ -352,7 +355,8 @@ export class IntentsService {
       m.id,
     );
     this.#log.info("any-chain payout account set", { merchantId: m.id, account, registered });
-    return this.payoutView(this.#merchants.merchant(m.id), false);
+    // Read the chain again for the answer, so every check has one (a page never shows "not read" right after a save).
+    return this.payoutView(this.#merchants.merchant(m.id));
   }
 
   /** `PUT /v1/merchants/{id}/methods` turning `oneclick` on. */
@@ -376,6 +380,88 @@ export class IntentsService {
     if (BigInt(p.amount_due) - BigInt(p.amount_paid) <= 0n) return no("Nothing is left to pay.");
     if (p.expires_unix - this.#clock() < MIN_QUOTE_WINDOW_SEC) return no("This checkout expires too soon to pay from another chain.");
     return { available: true, reason: null };
+  }
+
+  /**
+   * `intents` on `GET /v1/links/public/{slug}`: whether a buyer of this link can pay from another chain. Each payment
+   * still checks its own expiry window when it is created; this answers what the link can promise.
+   */
+  linkOffer(m: MerchantRow, amount: bigint | null): PublicLinkIntents {
+    const no = (reason: string): PublicLinkIntents => ({ mode: this.mode, label: this.label, offered: false, reason });
+    if (this.#merchants.method(m.id, "oneclick")?.enabled !== 1) return no("This business does not take payments from other chains.");
+    if (!this.verified(m)) return no("This business has not finished setting up payments from other chains.");
+    if (m.status !== "active") return no("This business is not taking payments.");
+    if (amount !== null) {
+      let fee = 0n;
+      try {
+        fee = this.#payments.quote(m, amount, null).fee_total;
+      } catch {
+        // Outside the business's limits: the link itself says so when a payment is started.
+      }
+      if (fee > 0n) return no("This payment carries a platform fee, which a payment from another chain cannot split off.");
+    }
+    return { mode: this.mode, label: this.label, offered: true, reason: null };
+  }
+
+  /** `intents` of each item of `GET /v1/payments`: the confirmed quote of each payment, else its newest one. */
+  summaries(paymentIds: readonly string[]): Map<string, IntentsSummary> {
+    const out = new Map<string, IntentsSummary>();
+    if (!paymentIds.length) return out;
+    const rows = this.#db.all<Pick<QuoteRow, "payment_id" | "mode" | "status" | "origin_asset" | "origin_chain" | "origin_symbol">>(
+      `SELECT payment_id, mode, status, origin_asset, origin_chain, origin_symbol FROM intents_quotes WHERE payment_id IN (${paymentIds.map(() => "?").join(", ")})
+       ORDER BY (status = 'confirmed') DESC, created_at DESC, rowid DESC`,
+      ...paymentIds,
+    );
+    for (const r of rows) {
+      if (out.has(r.payment_id)) continue;
+      out.set(r.payment_id, {
+        mode: r.mode,
+        label: INTENTS_LABELS[r.mode],
+        status: r.status,
+        origin: { asset: r.origin_asset, chain: r.origin_chain, chain_name: this.kit.originOf(r.origin_asset)?.chainName ?? r.origin_chain, symbol: r.origin_symbol },
+      });
+    }
+    return out;
+  }
+
+  /**
+   * One any-chain credit of `GET /v1/checkout/{id}/proof`: the delivery transaction on NEAR read again now (the
+   * evidence), and what 1Click last reported (its word, kept beside it). Null when the credit names no quote.
+   */
+  async proofCredit(c: CreditRow): Promise<IntentsProofCredit | null> {
+    const r = c.intents_quote_id ? this.row(c.intents_quote_id) : undefined;
+    if (!r) return null;
+    const q = this.json(r);
+    const senders = [...new Set([...this.config.deliverySenders, r.recipient])];
+    let delivered: bigint | null = null;
+    if (q.delivery_tx) {
+      try {
+        const read = await this.#reader.delivery(q.delivery_tx.hash, senders);
+        if (read.status === "final") delivered = read.transfers.filter((t) => t.token === this.usdcContract && t.to === r.recipient).reduce((sum, t) => sum + t.amount, 0n);
+      } catch (err) {
+        this.#log.warn("could not read a delivery transaction for a proof", { quoteId: r.id, hash: q.delivery_tx.hash, err: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return {
+      method: "oneclick",
+      amount: c.amount,
+      payer: `${r.origin_chain}:${mask(r.refund_to)}`,
+      quote_id: r.id,
+      mode: r.mode,
+      label: INTENTS_LABELS[r.mode],
+      settlement_network: q.settlement_network,
+      token: this.usdcContract,
+      recipient: r.recipient,
+      origin: q.origin,
+      deposited: q.deposited,
+      origin_txs: q.origin_txs,
+      delivery_tx: q.delivery_tx,
+      delivery_senders: senders,
+      oneclick: { status: r.provider_status, correlation_id: r.correlation_id, deposit_address: r.deposit_address, read_at: r.updated_at },
+      verification: r.verification,
+      delivered_on_chain: delivered === null ? null : delivered.toString(),
+      verified: delivered === null ? null : delivered >= BigInt(c.amount),
+    };
   }
 
   /** `intents` on the checkout view and its SSE stream. */

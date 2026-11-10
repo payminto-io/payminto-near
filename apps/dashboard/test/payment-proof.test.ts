@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { canonicalJson, sha256Text, type ChainPayment, type TxState } from "@payminto/protocol";
-import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, type PaymentReader, type ProofCheck, type ServedOrder } from "@/lib/payment-proof";
-import type { OrderCommitment, PaymentProof } from "@/lib/schemas";
+import { canonicalJson, sha256Text, type ChainPayment, type TxState, type TxTransfers } from "@payminto/protocol";
+import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, type DeliveryReader, type PaymentReader, type ProofCheck, type ServedOrder } from "@/lib/payment-proof";
+import { anyProofSchema, type IntentsProof, type OrderCommitment, type PaymentProof } from "@/lib/schemas";
 
 const check = (state: ProofCheck["state"]): ProofCheck => ({ id: "x", label: "x", state, detail: "" });
 
@@ -81,5 +81,82 @@ describe("runProofChecks on NEAR", () => {
     const r = await runProofChecks(proof, served, null);
     expect(states(r)).toEqual({ tx: "skip", record: "skip", transfer: "skip", order: "pass" });
     expect(proofVerdict(r.checks).state).toBe("unverified");
+  });
+});
+
+describe("runProofChecks for a payment paid from another chain (NEAR Intents)", () => {
+  const USDC = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+  const DELIVERY = "4oUu8NQ5wVyZCjU2LhJ3PZm6yZ5v1nTzgk8h2KkS4m7Q";
+  const intents: IntentsProof = {
+    method: "oneclick",
+    amount: "1500000",
+    payer: "base:0x5f2b...554f",
+    quote_id: "iq_aaaaaaaaaaaaaaaaaaaaaaaa",
+    mode: "live",
+    label: "Live - NEAR mainnet",
+    settlement_network: "near:mainnet",
+    token: USDC,
+    recipient: "northwind-usdc.near",
+    origin: { asset: "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", chain: "base", chain_name: "Base", symbol: "USDC", decimals: 6 },
+    deposited: { amount: "1503010", formatted: "1.503010", symbol: "USDC" },
+    origin_txs: [{ hash: `0x${"1".repeat(64)}`, explorer_url: null }],
+    delivery_tx: { hash: DELIVERY, explorer_url: `https://nearblocks.io/txns/${DELIVERY}` },
+    delivery_senders: ["relay.near", "northwind-usdc.near"],
+    oneclick: { status: "SUCCESS", correlation_id: "c-1", deposit_address: `0x${"2".repeat(40)}`, read_at: "2026-11-14T10:00:00.000Z" },
+    verification: "rpc_checked",
+    delivered_on_chain: "1500000",
+    verified: true,
+  };
+  const any: PaymentProof = { ...proof, method: "oneclick", payer: intents.payer, payout: intents.recipient, token: USDC, tx_hash: DELIVERY, hub_payment_id: null, credit_amount: "1500000", amount_paid: "1500000", intents };
+  const delivery = (answer: TxTransfers, asked: string[][] = []): DeliveryReader => ({
+    rpcUrl: "https://rpc.mainnet.near.org",
+    txTransfers: async (hash, senders) => (asked.push([hash, ...senders]), answer),
+  });
+  const paid: TxTransfers = { status: "final", sender: "relay.near", transfers: [{ token: USDC, from: "intents.near", to: "northwind-usdc.near", amount: 1_500_000n }] };
+
+  it("reads the delivery on NEAR mainnet in this browser: final, and the USDC reached the business's account", async () => {
+    const asked: string[][] = [];
+    const r = await runProofChecks(any, served, reader(), delivery(paid, asked));
+    expect(states(r)).toEqual({ delivery: "pass", delivered: "pass", order: "pass" });
+    expect(asked).toEqual([[DELIVERY, "relay.near", "northwind-usdc.near"]]);
+    expect(r.read).toEqual({ rpcUrl: "https://rpc.mainnet.near.org", hub: "hub.payminto.testnet", blockHeight: null });
+    expect(proofVerdict(r.checks).state).toBe("verified");
+    expect(expectedCheckIds(any)).toEqual(["delivery", "delivered", "order"]);
+    expect(plainCheckTitle("delivered", { merchant: "Northwind", network: "NEAR mainnet" })).toBe("The USDC reached Northwind's NEAR account");
+  });
+
+  it("fails a delivery that pays less, pays someone else, or is another token, and one NEAR does not know", async () => {
+    const short: TxTransfers = { ...paid, transfers: [{ ...paid.transfers[0]!, amount: 1_499_999n }] };
+    expect(states(await runProofChecks(any, served, reader(), delivery(short))).delivered).toBe("fail");
+    const other: TxTransfers = { ...paid, transfers: [{ ...paid.transfers[0]!, to: "attacker.near" }] };
+    expect(states(await runProofChecks(any, served, reader(), delivery(other))).delivered).toBe("fail");
+    const token: TxTransfers = { ...paid, transfers: [{ ...paid.transfers[0]!, token: "fake-usdc.near" }] };
+    expect(states(await runProofChecks(any, served, reader(), delivery(token))).delivered).toBe("fail");
+    expect(states(await runProofChecks(any, served, reader(), delivery({ status: "unknown" })))).toMatchObject({ delivery: "fail", delivered: "fail" });
+  });
+
+  it("skips the chain checks without a reader for the settlement network, and never uses the hub's record", async () => {
+    const r = await runProofChecks(any, served, reader(), null);
+    expect(states(r)).toEqual({ delivery: "skip", delivered: "skip", order: "pass" });
+    expect(proofVerdict(r.checks).state).toBe("unverified");
+  });
+
+  it("reads the node's proof with a NEAR Intents credit", () => {
+    const p = anyProofSchema.parse({
+      payment_id: "pay_1",
+      livemode: false,
+      status: "paid",
+      network: "near:sandbox",
+      hub: "hub.test.near",
+      token: { address: "usdc.test.near", symbol: "USDC", decimals: 6 },
+      payout: "northwind.test.near",
+      amount_due: "1500000",
+      amount_paid: "1500000",
+      order_hash: "ab".repeat(32),
+      paid_at: "2026-11-14T10:00:00.000Z",
+      checked_at: "2026-11-14T10:05:00.000Z",
+      credits: [intents],
+    });
+    expect(p).toMatchObject({ method: "oneclick", payout: "northwind-usdc.near", token: USDC, tx_hash: DELIVERY, hub_payment_id: null, payer: "base:0x5f2b...554f", intents: { quote_id: intents.quote_id } });
   });
 });

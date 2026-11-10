@@ -8,10 +8,12 @@ import { cn } from "@/lib/utils";
 import { formatDateTime, formatToken, shortHash } from "@/lib/format";
 import { gatewayNetwork } from "@/lib/gateway";
 import { ApiError } from "@/lib/http";
-import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, type ProofCheck } from "@/lib/payment-proof";
+import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, settlementName, type ProofCheck } from "@/lib/payment-proof";
 import { useCheckoutApi } from "@/lib/use-checkout";
-import { readErrorText, readerLabel } from "@/lib/near-reader";
-import type { CheckoutView, PaymentProof } from "@/lib/schemas";
+import { deliveryReader, readErrorText, readerLabel } from "@/lib/near-reader";
+import { mainnetTxUrl, verificationText } from "@/lib/intents";
+import type { CheckoutView, IntentsProof, PaymentProof } from "@/lib/schemas";
+import { IntentsLabel } from "./intents";
 import { Button } from "@/components/ui/button";
 import { brandStyle, CheckoutFooter, LineItems, MerchantRow, Notice, OrderHash, Rows, TokenAmount } from "./parts";
 import { CheckoutMotion, EASE_OUT, ProgressRing, Shimmer, T, useCalm } from "./motion";
@@ -36,10 +38,13 @@ export function ReceiptScreen({ id }: { id: string }) {
   const network = view.data ? gatewayNetwork(info.data) : null;
   const hub = view.data?.hub ?? null;
   const source = useMemo(() => (api && network && hub ? api.reader({ network: network.id, hub, rpcUrl: info.data?.network.rpc_url }) : null), [api, network, hub, info.data]);
+  // Paid from another chain: the delivery is read where the USDC landed (NEAR mainnet when live), not on the hub.
+  const settlement = proof.data?.intents?.settlement_network ?? null;
+  const delivery = useMemo(() => (settlement ? deliveryReader(settlement, source) : null), [settlement, source]);
   const checks = useQuery({
-    queryKey: ["proof-checks", id, source?.reader.rpcUrl ?? null],
+    queryKey: ["proof-checks", id, source?.reader.rpcUrl ?? null, delivery?.reader.rpcUrl ?? null],
     enabled: Boolean(proof.data && (order.data || order.isError) && network && !info.isPending),
-    queryFn: () => runProofChecks({ ...proof.data!, tx_hash: proof.data!.tx_hash ?? view.data?.tx_hash ?? null }, order.data ?? null, source?.reader ?? null),
+    queryFn: () => runProofChecks({ ...proof.data!, tx_hash: proof.data!.tx_hash ?? view.data?.tx_hash ?? null }, order.data ?? null, source?.reader ?? null, delivery?.reader ?? null),
     staleTime: Infinity,
     retry: false,
   });
@@ -75,9 +80,13 @@ export function ReceiptScreen({ id }: { id: string }) {
                 failedToRead={checks.isError ? readErrorText(checks.error) : null}
                 onRetry={() => void checks.refetch()}
                 source={
-                  source
-                    ? `Every check reads NEAR from this browser, through ${readerLabel(source)}${checks.data?.read?.blockHeight ? ` at final block ${checks.data.read.blockHeight.toLocaleString("en-US")}` : ""}. The order is hashed here too.`
-                    : "The order is hashed in this browser. No NEAR RPC is configured for this network, so the chain checks are skipped."
+                  p?.intents
+                    ? delivery
+                      ? `The delivery is read from ${settlementName(p.intents.settlement_network)} in this browser, through ${readerLabel(delivery)}. The order is hashed here too. The NEAR Intents status is the server's last read of 1Click.`
+                      : `The order is hashed in this browser. No RPC is configured for ${settlementName(p.intents.settlement_network)}, so the delivery is not checked.`
+                    : source
+                      ? `Every check reads NEAR from this browser, through ${readerLabel(source)}${checks.data?.read?.blockHeight ? ` at final block ${checks.data.read.blockHeight.toLocaleString("en-US")}` : ""}. The order is hashed here too.`
+                      : "The order is hashed in this browser. No NEAR RPC is configured for this network, so the chain checks are skipped."
                 }
                 items={order.data?.order.line_items ?? []}
                 reference={order.data?.order.reference ?? null}
@@ -116,7 +125,7 @@ function ProofBody({
   reference: string | null;
 }) {
   const calm = useCalm();
-  const ids = checks ? checks.checks.map((c) => c.id) : expectedCheckIds();
+  const ids = checks ? checks.checks.map((c) => c.id) : expectedCheckIds(p);
   const [revealed, setRevealed] = useState(0);
   const total = ids.length;
   useEffect(() => {
@@ -126,7 +135,9 @@ function ProofBody({
   }, [checks, revealed, total, calm]);
   const done = Boolean(checks) && revealed >= total;
   const verdict = checks ? proofVerdict(checks.checks) : null;
-  const ctx = { merchant: v.merchant.name, network: network.name };
+  // A payment paid from another chain is proven where the USDC landed (NEAR mainnet when live).
+  const any = p.intents ?? null;
+  const ctx = { merchant: v.merchant.name, network: any ? settlementName(any.settlement_network) : network.name };
   const explorer = network.explorer;
   const amount = formatToken(p.amount_paid, v.token.symbol, v.token.decimals);
 
@@ -142,10 +153,11 @@ function ProofBody({
       <div className="flex flex-col items-center px-5 pt-8 pb-6 text-center sm:px-8">
         <Seal state={failedToRead ? "unverified" : !done ? "checking" : verdict!.state} fraction={total ? revealed / total : 0} />
         <p className="mt-5 text-xs font-medium tracking-wide text-muted-foreground uppercase">Payment proof</p>
+        {any && <IntentsLabel mode={any.mode} label={any.label} className="mt-2" />}
         <div aria-live="polite">
           <AnimatePresence mode="wait" initial={false}>
             <motion.h1 key={failedToRead ? "f" : done ? verdict!.state : "c"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={T.base} className="mt-1 text-2xl font-semibold tracking-[-0.015em] text-balance">
-              {failedToRead ? "We could not read the chain" : !done ? `Checking ${network.name}` : verdict!.state === "verified" ? `Verified on ${network.name}` : verdict!.state === "unverified" ? "Not verified on chain yet" : "Some checks did not pass"}
+              {failedToRead ? "We could not read the chain" : !done ? `Checking ${ctx.network}` : verdict!.state === "verified" ? `Verified on ${ctx.network}` : verdict!.state === "unverified" ? "Not verified on chain yet" : "Some checks did not pass"}
             </motion.h1>
           </AnimatePresence>
         </div>
@@ -181,46 +193,54 @@ function ProofBody({
             Do not rely on this receipt until {v.merchant.name} explains why.
           </Notice>
         )}
-        <Rows
-          className="mt-5"
-          rows={[
-            ["Amount", <TokenAmount key="a" atomic={p.amount_paid} token={v.token} />],
-            [
-              "Paid to",
-              <span key="o" className="flex min-w-0 flex-col items-end gap-0.5">
-                <span>{v.merchant.name}</span>
-                <ChainLink text={p.payout} title={p.payout} href={explorer ? `${explorer}/address/${p.payout}` : null} />
-              </span>,
-            ],
-            [
-              "Transaction",
-              p.tx_hash ? (
-                <span key="t" className="flex min-w-0 flex-col items-end gap-0.5 text-right">
-                  <ChainLink text={shortHash(p.tx_hash)} title={p.tx_hash} href={explorer ? `${explorer}/txns/${p.tx_hash}` : null} />
-                  <span className="text-xs text-muted-foreground">
-                    {p.method === "voucher" ? "The settlement that paid it." : "As the payer's wallet reported it. The hub's own record of the payment is the proof."}
+        {any ? (
+          <IntentsRows any={any} merchant={v.merchant.name} />
+        ) : (
+          <Rows
+            className="mt-5"
+            rows={[
+              ["Amount", <TokenAmount key="a" atomic={p.amount_paid} token={v.token} />],
+              [
+                "Paid to",
+                <span key="o" className="flex min-w-0 flex-col items-end gap-0.5">
+                  <span>{v.merchant.name}</span>
+                  <ChainLink text={p.payout} title={p.payout} href={explorer ? `${explorer}/address/${p.payout}` : null} />
+                </span>,
+              ],
+              [
+                "Transaction",
+                p.tx_hash ? (
+                  <span key="t" className="flex min-w-0 flex-col items-end gap-0.5 text-right">
+                    <ChainLink text={shortHash(p.tx_hash)} title={p.tx_hash} href={explorer ? `${explorer}/txns/${p.tx_hash}` : null} />
+                    <span className="text-xs text-muted-foreground">
+                      {p.method === "voucher" ? "The settlement that paid it." : "As the payer's wallet reported it. The hub's own record of the payment is the proof."}
+                    </span>
                   </span>
-                </span>
-              ) : (
-                <span key="t" className="text-right text-muted-foreground">
-                  None reported. The hub&apos;s own record of the payment is the proof.
-                </span>
-              ),
-            ],
-          ]}
-        />
+                ) : (
+                  <span key="t" className="text-right text-muted-foreground">
+                    None reported. The hub&apos;s own record of the payment is the proof.
+                  </span>
+                ),
+              ],
+            ]}
+          />
+        )}
       </div>
 
       <Technical>
-        <Rows
-          rows={[
-            ["Hub", p.hub ? <ChainLink key="h" text={p.hub} title={p.hub} href={explorer ? `${explorer}/address/${p.hub}` : null} /> : "-"],
-            ["Hub payment id", p.hub_payment_id ? <span key="i" className="hash text-[0.8125rem]" title={p.hub_payment_id}>{shortHash(p.hub_payment_id)}</span> : "-"],
-            ["Payer", p.payer ? <ChainLink key="p" text={p.payer} title={p.payer} href={explorer ? `${explorer}/address/${p.payer}` : null} /> : "-"],
-            ["Paid with", p.method === "wallet" ? "NEAR wallet" : p.method === "voucher" ? "AI agent with a Budget" : p.method === "oneclick" ? "Any chain (NEAR Intents)" : p.method ? "Transfer" : "-"],
-            ["Order fingerprint", <OrderHash key="h" value={p.order_hash} className="justify-end" />],
-          ]}
-        />
+        {any ? (
+          <IntentsTechnical any={any} orderHash={p.order_hash} />
+        ) : (
+          <Rows
+            rows={[
+              ["Hub", p.hub ? <ChainLink key="h" text={p.hub} title={p.hub} href={explorer ? `${explorer}/address/${p.hub}` : null} /> : "-"],
+              ["Hub payment id", p.hub_payment_id ? <span key="i" className="hash text-[0.8125rem]" title={p.hub_payment_id}>{shortHash(p.hub_payment_id)}</span> : "-"],
+              ["Payer", p.payer ? <ChainLink key="p" text={p.payer} title={p.payer} href={explorer ? `${explorer}/address/${p.payer}` : null} /> : "-"],
+              ["Paid with", p.method === "wallet" ? "NEAR wallet" : p.method === "voucher" ? "AI agent with a Budget" : p.method === "oneclick" ? "Any chain (NEAR Intents)" : p.method ? "Transfer" : "-"],
+              ["Order fingerprint", <OrderHash key="h" value={p.order_hash} className="justify-end" />],
+            ]}
+          />
+        )}
         {checks && (
           <ul className="mt-4 space-y-1 text-xs text-muted-foreground">
             {checks.checks.map((c) => (
@@ -240,6 +260,80 @@ function ProofBody({
         <p className="mt-4 text-xs text-subtle">{source}</p>
       </Technical>
     </div>
+  );
+}
+
+/** The NEAR delivery link: 1Click's explorer link, else NearBlocks for NEAR mainnet; none on the local chain. */
+function deliveryHref(any: IntentsProof): string | null {
+  if (!any.delivery_tx) return null;
+  return any.delivery_tx.explorer_url ?? (any.settlement_network === "near:mainnet" ? mainnetTxUrl(any.delivery_tx.hash) : null);
+}
+
+/** What a reader checks first for a payment paid from another chain: what was paid, from where, and where it landed. */
+function IntentsRows({ any, merchant }: { any: IntentsProof; merchant: string }) {
+  const mainnet = any.settlement_network === "near:mainnet";
+  const usdc = { address: any.token, symbol: "USDC", decimals: 6 };
+  return (
+    <Rows
+      className="mt-5"
+      rows={[
+        ["Amount", <TokenAmount key="a" atomic={any.amount} token={usdc} />],
+        [
+          "Paid to",
+          <span key="o" className="flex min-w-0 flex-col items-end gap-0.5">
+            <span>{merchant}</span>
+            <ChainLink text={any.recipient} title={any.recipient} href={mainnet ? `https://nearblocks.io/address/${any.recipient}` : null} />
+          </span>,
+        ],
+        [
+          "Paid from",
+          <span key="f" className="flex min-w-0 flex-col items-end gap-0.5 text-right">
+            <span>
+              {any.deposited ? `${any.deposited.formatted} ${any.deposited.symbol}` : any.origin.symbol} on {any.origin.chain_name}
+            </span>
+            <span className="text-xs text-muted-foreground">Through NEAR Intents (1Click)</span>
+          </span>,
+        ],
+        [
+          "Delivery",
+          any.delivery_tx ? (
+            <span key="d" className="flex min-w-0 flex-col items-end gap-0.5 text-right">
+              <ChainLink text={shortHash(any.delivery_tx.hash)} title={any.delivery_tx.hash} href={deliveryHref(any)} />
+              <span className="text-xs text-muted-foreground">The NEAR transaction that delivered the USDC. It is the proof.</span>
+            </span>
+          ) : (
+            <span key="d" className="text-right text-muted-foreground">
+              None reported.
+            </span>
+          ),
+        ],
+        [
+          "NEAR Intents",
+          <span key="s" className="flex min-w-0 flex-col items-end gap-0.5 text-right">
+            <span className="hash text-[0.8125rem]">{any.oneclick.status ?? "No status"}</span>
+            <span className="text-xs text-muted-foreground">1Click&apos;s status as the server last read it, {formatDateTime(any.oneclick.read_at)}. Its word, not the proof.</span>
+          </span>,
+        ],
+      ]}
+    />
+  );
+}
+
+function IntentsTechnical({ any, orderHash }: { any: IntentsProof; orderHash: string }) {
+  return (
+    <Rows
+      rows={[
+        ["Settled on", any.settlement_network],
+        ["USDC contract", <span key="t" className="hash text-[0.8125rem] [overflow-wrap:anywhere]" title={any.token}>{shortHash(any.token)}</span>],
+        ["Buyer refund address", <span key="p" className="hash text-[0.8125rem]">{any.payer ?? "-"}</span>],
+        ["Origin transaction", any.origin_txs[0] ? <span key="o" className="hash text-[0.8125rem]" title={any.origin_txs[0].hash}>{shortHash(any.origin_txs[0].hash)}</span> : "-"],
+        ["Deposit address", <span key="a" className="hash text-[0.8125rem]" title={any.oneclick.deposit_address}>{shortHash(any.oneclick.deposit_address)}</span>],
+        ["1Click correlation id", <span key="c" className="hash text-[0.8125rem] [overflow-wrap:anywhere]">{any.oneclick.correlation_id}</span>],
+        ["How the server checked", verificationText(any.verification)],
+        ["Paid with", "Any chain (NEAR Intents)"],
+        ["Order fingerprint", <OrderHash key="h" value={orderHash} className="justify-end" />],
+      ]}
+    />
   );
 }
 

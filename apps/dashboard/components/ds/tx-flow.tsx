@@ -47,6 +47,20 @@ export type TxPlan = {
   recheck?: (results: TxResult[]) => Promise<TxResult[]>;
   /** Turns a failure text from NEAR into what happened and what to do next, for contracts with their own error codes. */
   explainFailure?: (error: string) => string;
+  /**
+   * Another wallet connection than the dashboard's own, such as NEAR mainnet for the any-chain payout account: it
+   * connects (refusing any account but `signer`) and sends in place of the default wallet, and its transactions link to
+   * its own explorer. The review names its network in `label`.
+   */
+  wallet?: TxWallet;
+};
+
+export type TxWallet = {
+  /** "NEAR mainnet". */
+  label: string;
+  connect: (signer?: NearAccount) => Promise<unknown>;
+  send: (txs: WalletTx[]) => Promise<TxResult[]>;
+  explorerTx: (hash: string) => string | null;
 };
 
 type Phase =
@@ -87,8 +101,8 @@ export function TxFlow({ plan, open, onOpenChange, onFinal }: { plan: TxPlan; op
   async function send() {
     setPhase({ kind: "pending" });
     try {
-      await ensureConnected(plan.signer);
-      settle(plan.run ? await plan.run({ progress: (step) => setPhase({ kind: "pending", step }) }) : await signAndSendTransactions(plan.txs));
+      await (plan.wallet ? plan.wallet.connect(plan.signer) : ensureConnected(plan.signer));
+      settle(plan.run ? await plan.run({ progress: (step) => setPhase({ kind: "pending", step }) }) : plan.wallet ? await plan.wallet.send(plan.txs) : await signAndSendTransactions(plan.txs));
     } catch (e) {
       if (e instanceof FlowError) return setPhase({ kind: "failed", error: e.message, results: [] });
       const err = toWalletError(e);
@@ -126,10 +140,10 @@ export function TxFlow({ plan, open, onOpenChange, onFinal }: { plan: TxPlan; op
 
         <div className="max-h-[60dvh] overflow-y-auto px-4 py-4 sm:px-6">
           {phase.kind === "review" && <Review plan={plan} notice={phase.notice} />}
-          {phase.kind === "pending" && <Pending count={plan.txs.length} step={phase.step} />}
-          {phase.kind === "final" && <Outcome tone="final" results={phase.results} note={plan.finalNote} />}
-          {phase.kind === "sent" && <Outcome tone={phase.results.some((r) => r.status === "pending" && r.unknown) ? "unknown" : "sent"} results={phase.results} />}
-          {phase.kind === "failed" && <Outcome tone="failed" results={phase.results} error={phase.error} />}
+          {phase.kind === "pending" && <Pending count={plan.txs.length} step={phase.step} txHref={plan.wallet?.explorerTx} />}
+          {phase.kind === "final" && <Outcome tone="final" results={phase.results} note={plan.finalNote} txHref={plan.wallet?.explorerTx} />}
+          {phase.kind === "sent" && <Outcome tone={phase.results.some((r) => r.status === "pending" && r.unknown) ? "unknown" : "sent"} results={phase.results} txHref={plan.wallet?.explorerTx} />}
+          {phase.kind === "failed" && <Outcome tone="failed" results={phase.results} error={phase.error} txHref={plan.wallet?.explorerTx} />}
         </div>
 
         {/* Sticky only in the bottom sheet, which scrolls itself. The centred dialog is moved by a transform, and a sticky child of a transformed box is placed as if it had not moved, which drew the footer over the review. */}
@@ -243,7 +257,11 @@ function Review({ plan, notice }: { plan: TxPlan; notice?: string }) {
         </div>
       )}
       <dl className="divide-y rounded-xl border">
-        {[...plan.summary, ...(plan.signer ? [{ label: "Signed by", value: <AccountId value={plan.signer} mode="wrap" explorer={false} /> }] : [])].map((r) => (
+        {[
+          ...(plan.wallet ? [{ label: "Network", value: <span className="font-medium">{plan.wallet.label}</span> }] : []),
+          ...plan.summary,
+          ...(plan.signer ? [{ label: "Signed by", value: <AccountId value={plan.signer} mode="wrap" explorer={false} /> }] : []),
+        ].map((r) => (
           <div key={r.label} className="grid min-h-12 items-center gap-x-3 gap-y-0.5 px-3 py-2 text-sm sm:grid-cols-[6rem_minmax(0,1fr)]">
             <dt className="text-muted-foreground">{r.label}</dt>
             <dd className="min-w-0">{r.value}</dd>
@@ -255,7 +273,7 @@ function Review({ plan, notice }: { plan: TxPlan; notice?: string }) {
           {plan.txHeading ?? (plan.txs.length === 1 ? "The transaction your wallet will sign" : `The ${plan.txs.length} transactions your wallet will sign, in order`)}
         </h3>
         {plan.txs.map((tx, i) => (
-          <TxCard key={i} tx={tx} index={plan.txs.length > 1 ? i + 1 : null} gasPayer={plan.gasPayer} />
+          <TxCard key={i} tx={tx} index={plan.txs.length > 1 ? i + 1 : null} gasPayer={plan.gasPayer} explorer={!plan.wallet} />
         ))}
       </section>
       {plan.inner && (
@@ -270,13 +288,14 @@ function Review({ plan, notice }: { plan: TxPlan; notice?: string }) {
   );
 }
 
-function TxCard({ tx, index, gasPayer }: { tx: WalletTx; index: number | null; gasPayer?: ReactNode }) {
+/** `explorer` false: the receiver is on another network than the dashboard's explorer shows. */
+function TxCard({ tx, index, gasPayer, explorer = true }: { tx: WalletTx; index: number | null; gasPayer?: ReactNode; explorer?: boolean }) {
   return (
     <div className="rounded-xl border bg-rail">
       {txLines(tx).map((l, j) => (
         <dl key={j} className="flex flex-col gap-2.5 p-3 text-sm">
           <Row label={index ? `${index}. Receiver` : "Receiver"}>
-            <AccountId value={l.receiver} mode="wrap" />
+            <AccountId value={l.receiver} mode="wrap" explorer={explorer} />
           </Row>
           <Row label="Method">
             <code className="font-mono text-[0.8125rem]">{l.method}</code>
@@ -311,8 +330,12 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function HashLine({ hash }: { hash: string }) {
+/** `txHref` replaces the dashboard's explorer for a flow on another network (NEAR mainnet). */
+type TxHref = ((hash: string) => string | null) | undefined;
+
+function HashLine({ hash, txHref }: { hash: string; txHref?: TxHref }) {
   const ex = useExplorer();
+  const href = txHref ? txHref(hash) : ex.tx(hash);
   const [head, tail] = splitForMiddle(hash);
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1">
@@ -321,12 +344,12 @@ function HashLine({ hash }: { hash: string }) {
         <span className="shrink-0">{tail}</span>
       </span>
       <CopyButton value={hash} label="transaction hash" />
-      <ExplorerLink href={ex.tx(hash)} label="transaction" />
+      <ExplorerLink href={href} label="transaction" />
     </span>
   );
 }
 
-function Pending({ count, step }: { count: number; step?: TxStep }) {
+function Pending({ count, step, txHref }: { count: number; step?: TxStep; txHref?: TxHref }) {
   return (
     <div role="status" aria-live="polite" className="flex flex-col items-center gap-3 py-6 text-center">
       <span className="flex size-11 items-center justify-center rounded-full bg-info-soft text-primary">
@@ -339,7 +362,7 @@ function Pending({ count, step }: { count: number; step?: TxStep }) {
       {step?.hash && (
         <div className="flex w-full max-w-sm items-center gap-3 rounded-xl border px-3 py-2 text-left text-sm">
           <span className="shrink-0 text-xs font-medium text-muted-foreground">Sent</span>
-          <HashLine hash={step.hash} />
+          <HashLine hash={step.hash} txHref={txHref} />
         </div>
       )}
     </div>
@@ -361,7 +384,7 @@ const WAITING_TEXT = {
 const RESULT_WORD = { final: "Final", failed: "Failed", pending: "Waiting" } as const;
 const RESULT_TONE = { final: "text-positive", failed: "text-negative", pending: "text-warning" } as const;
 
-function Outcome({ tone, results, error, note }: { tone: keyof typeof OUTCOME; results: TxResult[]; error?: string; note?: ReactNode }) {
+function Outcome({ tone, results, error, note, txHref }: { tone: keyof typeof OUTCOME; results: TxResult[]; error?: string; note?: ReactNode; txHref?: TxHref }) {
   const o = OUTCOME[tone];
   return (
     <div role="status" aria-live="polite" className="flex flex-col gap-4">
@@ -381,7 +404,7 @@ function Outcome({ tone, results, error, note }: { tone: keyof typeof OUTCOME; r
           {results.map((r, i) => (
             <li key={i} className="flex min-h-12 items-center gap-3 px-3 py-2 text-sm">
               <span className={cn("shrink-0 text-xs font-medium", RESULT_TONE[r.status])}>{RESULT_WORD[r.status]}</span>
-              {r.hash ? <HashLine hash={r.hash} /> : <span className="text-muted-foreground">{r.status === "pending" ? "The relayer gave no transaction hash" : "Not sent"}</span>}
+              {r.hash ? <HashLine hash={r.hash} txHref={txHref} /> : <span className="text-muted-foreground">{r.status === "pending" ? "The relayer gave no transaction hash" : "Not sent"}</span>}
             </li>
           ))}
         </ul>

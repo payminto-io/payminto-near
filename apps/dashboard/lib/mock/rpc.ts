@@ -21,6 +21,8 @@ export type MockRpcHandlers = {
   txFinal(hash: string): boolean;
   /** The panic of a transaction that reached the demo hub and failed there, or null. */
   txFailure?(hash: string): string | null;
+  /** The receipts of a final transaction that emitted events (an any-chain delivery's NEP-141 transfer), or null for none. */
+  txReceipts?(hash: string): unknown[] | null;
   /** The nonce of an access key on a demo account, or null when the account has no such key. */
   accessKey?(account: AccountId, publicKey: string): { nonce: number } | null;
 };
@@ -71,7 +73,7 @@ export function mockRpcFetch(h: MockRpcHandlers, latencyMs = 240): typeof fetch 
       const failure = h.txFailure?.(hash) ?? null;
       if (failure === null && !h.txFinal(hash)) return answer(req.id, { error: handlerError("UNKNOWN_TRANSACTION", `Transaction ${hash} doesn't exist`) });
       const outcome = failure === null ? { SuccessValue: "" } : { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: `Smart contract panicked: ${failure}` } } } } };
-      return answer(req.id, { result: { final_execution_status: "FINAL", status: outcome, transaction: { hash }, receipts_outcome: [] } });
+      return answer(req.id, { result: { final_execution_status: "FINAL", status: outcome, transaction: { hash }, receipts_outcome: (failure === null ? h.txReceipts?.(hash) : null) ?? [] } });
     }
     return answer(req.id, { error: { name: "REQUEST_VALIDATION_ERROR", cause: { name: "METHOD_NOT_FOUND", info: {} }, code: -32601, message: "Method not found", data: req.method } });
   }) as typeof fetch;

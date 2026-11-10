@@ -6,6 +6,7 @@
   "description": "pnpm local: the whole Payminto product on a local near-sandbox node, with the dashboard and a local signer in place of a browser wallet",
   "scripts": {
     "local": "node src/cli.ts",
+    "capture": "node src/capture-live.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ."
   },

@@ -15,7 +15,10 @@ import {
   inFlight,
   initialTab,
   intentsStage,
+  linkPayCopy,
+  mainnetTxUrl,
   originPayer,
+  showsAnyChain,
   paidFromText,
   payoutChecklist,
   payTabs,
@@ -291,6 +294,12 @@ describe("the business's side", () => {
     expect(anyChainMethodLabel({ method: "oneclick", payer: "base:0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f" }, [quote({ status: "confirmed" })])).toBe("Any chain - USDC on Base");
     expect(anyChainMethodLabel({ method: "oneclick", payer: "sol:So11111111111111111111111111111111111111112" })).toBe("Any chain - from Solana");
     expect(anyChainMethodLabel({ method: "oneclick", payer: null })).toBe("Any chain (NEAR Intents)");
+    // A list item carries the node's summary of its quote, so lists name the token and chain without the detail.
+    const summary = { mode: "simulated" as const, label: "Simulated - no real money", status: "awaiting_deposit" as const, origin: { asset: "nep141:eth.omft.near", chain: "eth", chain_name: "Ethereum", symbol: "ETH" } };
+    expect(anyChainMethodLabel({ method: "oneclick", payer: null, intents: summary })).toBe("Any chain - ETH on Ethereum");
+    expect(anyChainMethodLabel({ method: "oneclick", payer: "base:0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", intents: null })).toBe("Any chain - from Base");
+    expect(showsAnyChain({ method: "wallet", intents: summary })).toBe(true);
+    expect(showsAnyChain({ method: "wallet", intents: null })).toBe(false);
     expect(originPayer("base:0xabc")).toEqual({ chain: "Base", address: "0xabc" });
     expect(originPayer("alice.testnet")).toBeNull();
   });
@@ -308,5 +317,20 @@ describe("the business's side", () => {
     const list = payoutChecklist({ account: null, settlement_network: "near:mainnet", checks: { exists: null, usdc_registered: null, proven: false, proven_at: null } });
     expect(list.map((c) => c.state)).toEqual(["todo", "todo", "todo"]);
     expect(list[0]!.label).toBe("The account exists on NEAR mainnet");
+  });
+  it("links a NEAR mainnet transaction to NearBlocks", () => {
+    expect(mainnetTxUrl("8vHxbKWRZtLJdD5Wmv4cCzQbYnU1ckqmVYp9oG6cWWLx")).toBe("https://nearblocks.io/txns/8vHxbKWRZtLJdD5Wmv4cCzQbYnU1ckqmVYp9oG6cWWLx");
+  });
+});
+
+describe("the payment link page", () => {
+  const offered = { mode: "live" as const, label: "Live - NEAR mainnet", offered: true, reason: null };
+  it("says the buyer pays from a NEAR wallet, or from another chain when the link offers it", () => {
+    expect(linkPayCopy(null)).toEqual({ lead: "Next you pay from your NEAR wallet. A plain transfer from an exchange cannot carry this order, so it would not count as this payment.", chip: "Pay from your NEAR wallet" });
+    expect(linkPayCopy({ ...offered, offered: false, reason: "This business does not take payments from other chains." }).chip).toBe("Pay from your NEAR wallet");
+    const any = linkPayCopy(offered);
+    expect(any.chip).toBe("Pay from NEAR or any chain");
+    expect(any.lead).toBe("Next you pay from your NEAR wallet, or from another chain with USDC, USDT or ETH through NEAR Intents.");
+    expect(any.lead).not.toContain("pay from your NEAR wallet.");
   });
 });

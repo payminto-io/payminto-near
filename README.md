@@ -49,7 +49,7 @@ Press Ctrl-C to stop everything.
 | `pnpm demo` | In about 5 seconds: four owners, 189 paid calls, nine refusals that each name their rule, one netted batch, and a seller settling on its own after the node stops, then `25 of 25 checks passed` |
 | `pnpm demo --chain sandbox` | The same story as real transactions on a local NEAR node, in about 2 minutes: `26 of 26 checks passed` |
 | `pnpm swarm` | In about 5 seconds: 20 buyer and 5 seller agents on their own sub-accounts in sealed-bid rounds, 299 calls settled in 1 transaction and 5 transfers, then `17 of 17 checks passed` |
-| `pnpm local --check` | The browser guide run as a script, every result checked on chain, in about 2.5 minutes: `21 of 21 checks passed` |
+| `pnpm local --check` | The browser guide run as a script, every result checked on chain, in about 3 minutes: `24 of 24 checks passed` |
 | `pnpm --silent --filter @payminto/payee-check demo` | An agent fed injected "pay X" instructions: all 3 injected payments are refused before anything is signed |
 | `pnpm --filter dashboard dev:mock` | The dashboard at http://localhost:3000 with sample data, no node and no chain |
 

@@ -38,6 +38,11 @@ export const DEMO_SCENARIOS = [
   "payee-request-arrives",
   /** Acme Store has not set up the any-chain checkout: no NEAR account for it, and the method is off. Read on load. */
   "intents-setup",
+  /**
+   * The any-chain checkout as on a server that runs it live, not set up yet: the settings use the NEAR mainnet wallet
+   * connection, played by a second demo wallet. Nothing reaches NEAR or 1Click.
+   */
+  "intents-live",
 ] as const;
 export type DemoScenario = (typeof DEMO_SCENARIOS)[number];
 
