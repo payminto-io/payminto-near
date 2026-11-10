@@ -14,6 +14,8 @@ import { getMerchantScope } from "../merchant-scope";
 import type { CreateMerchantBody, FeePlanBody, MerchantPatch as OperatorMerchantPatch, OperatorApi, PayoutHistoryEntry } from "../operator-api";
 import type { MockTxOutcome } from "./server";
 import { plainAmount } from "../gateway";
+import { MockIntents } from "./intents";
+import { demo } from "./scenario";
 import type {
   CreateLinkBody,
   CreateRefundBody,
@@ -21,6 +23,7 @@ import type {
   CheckoutApi,
   GatewayApi,
   GatewayPage,
+  IntentsPayoutBody,
   MerchantPatch,
   PaymentsQuery,
   SubmitRefundBody,
@@ -46,6 +49,9 @@ import type {
   Credit,
   GatewayOverview,
   Info,
+  IntentsOptions,
+  IntentsPayout,
+  IntentsQuote,
   MerchantProfile,
   Payment,
   PaymentDetail,
@@ -162,8 +168,15 @@ const merchants: Merchant[] = [
   { id: gid("mer", "globex"), livemode: false, name: "Globex Data API", slug: "globex", status: "suspended", payout: addr("globex-payout"), support_email: null, brand_color: null, logo_url: null, fee_plan_id: plans[2]!.id, created_at: iso(Date.now() - 30 * 86_400_000), volume_30d: (88n * 1_000_000n).toString(), payments_30d: 41 },
 ];
 
+/**
+ * `?demo=intents-setup` plays a business that has not set up the any-chain checkout yet, so its settings can be walked
+ * through; otherwise Acme Store takes payments from other chains (simulated) into its own NEAR account.
+ */
+const INTENTS_SETUP = demo("intents-setup");
+
 const methodRows: MerchantMethod[] = merchants.flatMap((m) => [
   { merchant_id: m.id, method: "wallet" as const, enabled: true, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
+  { merchant_id: m.id, method: "oneclick" as const, enabled: m.id === ACME_ID && !INTENTS_SETUP, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
   { merchant_id: m.id, method: "voucher" as const, enabled: m.id !== gid("mer", "globex"), fee_bps: 25, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
 ]);
 
@@ -311,6 +324,8 @@ function makePayment(args: {
     credits,
     refunds: [],
     events,
+    // Filled from the any-chain store when the payment is read (MockIntents).
+    intents: null,
   };
   p.order_hash = orderFingerprint(canonicalJson(orderOf(p)));
   payments.push(p);
@@ -651,9 +666,39 @@ function seedScreening() {
   );
 }
 
+/** The any-chain checkout of this demo node, simulated: Acme Store's NEAR account and every deposit address. */
+const intents = new MockIntents(
+  {
+    find,
+    enabled: (merchantId) => methodRows.some((r) => r.merchant_id === merchantId && r.method === "oneclick" && r.enabled),
+    changed(p, opts) {
+      if (opts?.reopen && p.credits.length === 0 && p.status === "processing") p.status = new Date(p.expires_at).getTime() > Date.now() ? "open" : "expired";
+      settleState(p);
+      notify(p);
+    },
+    event(p, type, data) {
+      p.events.push(event(type, Date.now(), data));
+    },
+    merchant: { id: ACME_ID, hub: HUB },
+  },
+  { account: INTENTS_SETUP ? null : "acme-store.near" },
+);
+
+/** One payment paid from USDC on Base an hour ago, so the console shows an any-chain payment and its NEAR Intents card. */
+function seedAnyChain() {
+  const pro = links.find((l) => l.slug === "pro-plan");
+  const at = now - 62 * 60_000;
+  const p = makePayment({ id: demoId("anychain"), amount: 25n * USDC, status: "open", createdMs: at - 6 * 60_000, ttlMs: 60 * 60_000, link: pro, email: "ines@mail.example" });
+  intents.seedPaid(p, "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", "0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", at);
+  Object.assign(p, { status: "paid", amount_paid: p.amount_due, method: "oneclick", payer: p.credits[0]!.payer, paid_at: iso(at), updated_at: iso(at) });
+  p.events.push(event("intents.quote_created", at - 4 * 60_000, { origin: "USDC on Base" }), event("payment.processing", at - 90_000), event("payment.paid", at, { amount_paid: p.amount_due }));
+  if (pro) pro.paid_total = (BigInt(pro.paid_total) + BigInt(p.amount_due)).toString();
+}
+
 if (!EMPTY) {
   seed();
   seedScreening();
+  seedAnyChain();
 }
 
 // Payment links created in this browser survive a reload and open in a new tab.
@@ -784,7 +829,7 @@ function viewOf(p: MockPayment): CheckoutView {
     token: TOKEN_META,
     hub: HUB,
     method: p.method,
-    methods: payable ? ["wallet"] : [],
+    methods: payable ? ["wallet", ...(intents.offered(p) ? (["oneclick"] as const) : [])] : [],
     wallet: payable && p.method === "wallet" && rest > 0n ? walletOf(p, rest) : null,
     success_url: p.success_url,
     tx_hash: (pending ?? lastConfirmed)?.tx_hash ?? null,
@@ -796,6 +841,7 @@ function viewOf(p: MockPayment): CheckoutView {
     paid_at: p.paid_at,
     payer: lastConfirmed?.payer ?? pending?.payer ?? null,
     payout: PAYOUT,
+    intents: intents.checkout(p),
   };
 }
 
@@ -818,10 +864,11 @@ function publicLinkOf(l: PaymentLink): PublicLink {
 }
 
 function stripPayment(p: MockPayment): Payment {
-  const { credits: _c, refunds: _r, events: _e, ...rest } = p;
+  const { credits: _c, refunds: _r, events: _e, intents: _i, ...rest } = p;
   void _c;
   void _r;
   void _e;
+  void _i;
   return rest;
 }
 
@@ -903,7 +950,7 @@ export class MockGatewayApi implements GatewayApi {
   async payment(id: string): Promise<PaymentDetail> {
     await delay();
     const p = find(id);
-    return { ...p, credits: [...p.credits], refunds: [...p.refunds], events: [...p.events].sort((a, b) => a.created_at.localeCompare(b.created_at)) };
+    return { ...p, credits: [...p.credits], refunds: [...p.refunds], events: [...p.events].sort((a, b) => a.created_at.localeCompare(b.created_at)), intents: intents.paymentIntents(p.id) };
   }
 
   async cancelPayment(id: string): Promise<Payment> {
@@ -1275,6 +1322,16 @@ export class MockGatewayApi implements GatewayApi {
     );
     return out.join("\r\n") + "\r\n";
   }
+
+  async intentsPayout(): Promise<IntentsPayout> {
+    await delay();
+    return intents.payout();
+  }
+
+  async setIntentsPayout(body: IntentsPayoutBody): Promise<IntentsPayout> {
+    await delay(500);
+    return intents.setPayout(body);
+  }
 }
 
 /** True when the operator switched to a merchant other than Acme Store, which has no gateway history in the mock. */
@@ -1408,6 +1465,15 @@ export class MockOperatorApi implements OperatorApi {
     }
     return this.methods(merchantId);
   }
+  async setMethodsEnabled(merchantId: string, items: Pick<MerchantMethod, "method" | "enabled">[]): Promise<MerchantMethod[]> {
+    await delay(400);
+    if (merchantId === ACME_ID && items.some((r) => r.method === "oneclick" && r.enabled)) intents.assertCanEnable();
+    for (const r of items) {
+      const row = methodRows.find((x) => x.merchant_id === merchantId && x.method === r.method);
+      if (row) row.enabled = r.enabled;
+    }
+    return this.methods(merchantId);
+  }
   async feePlans(): Promise<FeePlan[]> {
     await delay();
     return plans.map((p) => ({ ...p, merchants: merchants.filter((m) => m.fee_plan_id === p.id).length }));
@@ -1535,6 +1601,37 @@ export class MockCheckoutApi implements CheckoutApi {
     void txHash;
   }
 
+  async intentsOptions(id: string): Promise<IntentsOptions> {
+    await delay(700);
+    return intents.options(id);
+  }
+
+  /** Retries with the same key get the same quote, as the node's idempotency keys do. */
+  readonly #byKey = new Map<string, IntentsQuote>();
+  async createIntentsQuote(id: string, body: { origin_asset: string; refund_to: string }, idempotencyKey: string): Promise<IntentsQuote> {
+    await delay(900);
+    const seen = this.#byKey.get(`${id} ${idempotencyKey}`);
+    if (seen) return intents.quote(id, seen.id);
+    const { quote: q } = intents.createQuote(id, body);
+    this.#byKey.set(`${id} ${idempotencyKey}`, q);
+    return q;
+  }
+
+  async intentsQuote(id: string, quoteId: string): Promise<IntentsQuote> {
+    await delay();
+    return intents.quote(id, quoteId);
+  }
+
+  async submitIntentsDeposit(id: string, quoteId: string, txHash: string): Promise<IntentsQuote> {
+    await delay(500);
+    return intents.submitDeposit(id, quoteId, txHash);
+  }
+
+  async simulateIntentsDeposit(id: string, quoteId: string, amount?: string): Promise<IntentsQuote> {
+    await delay(500);
+    return intents.simulate(id, quoteId, amount);
+  }
+
   /** The demo hub, read through the same NearReader and JSON-RPC the receipt page uses against NEAR. */
   reader(): ReaderSource {
     demoReader ??= mockReader({ hub: HUB, view: hubView, txFinal: (hash) => payments.some((p) => p.credits.some((c) => c.tx_hash === hash && c.status === "confirmed")) });
@@ -1562,6 +1659,11 @@ function hubView(method: string, args: Record<string, unknown>): unknown {
  */
 export function applyMockCheckoutTx(tx: WalletTx, signer: AccountId): MockTxOutcome | null {
   const call = tx.actions[0];
+  // The one human step of the any-chain setup: the business's NEAR account registers with USDC.
+  if (call?.params.methodName === "storage_deposit" && tx.receiverId === intents.payout().usdc.contract) {
+    intents.markRegistered();
+    return { ok: true };
+  }
   if (!call || call.params.methodName !== "ft_transfer_call") return null;
   let msg: { payment?: { payment_id: string; merchant: string; amount: string; expiry_ms: string; signature: string } };
   try {

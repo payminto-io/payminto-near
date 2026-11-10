@@ -16,6 +16,7 @@ import { MerchantMark } from "@/components/checkout/parts";
 import { MethodsEditor, type MethodRow } from "@/components/operator/methods-editor";
 import { ChangePayout } from "@/components/operator/change-payout";
 import { FormRow } from "./kit";
+import { AnyChainSettings } from "./any-chain-settings";
 
 function useBusiness() {
   return useMerchant();
@@ -77,7 +78,12 @@ export function MethodsSettings() {
   const merchant = useBusiness();
   if (merchant.isPending) return <Loading h="h-64" />;
   if (merchant.isError) return <ErrorState error={merchant.error} onRetry={() => void merchant.refetch()} />;
-  return <MethodsPanel merchantId={merchant.data.id} />;
+  return (
+    <>
+      <MethodsPanel merchantId={merchant.data.id} />
+      <AnyChainSettings merchantId={merchant.data.id} />
+    </>
+  );
 }
 
 function ProfileForm({ m, readOnly }: { m: MerchantProfile; readOnly: boolean }) {
@@ -150,8 +156,9 @@ function MethodsPanel({ merchantId }: { merchantId: string }) {
   const methods = useMerchantMethods(merchantId);
   const [draft, setDraft] = useState<MethodRow[] | null>(null);
   const can = useCan();
+  // A business may only switch methods on and off (fees are the platform's), so only those switches are sent.
   const save = useMutation({
-    mutationFn: (rows: MethodRow[]) => api.operator.setMethods(merchantId, rows),
+    mutationFn: (rows: MethodRow[]) => api.operator.setMethodsEnabled(merchantId, rows),
     onSuccess: () => {
       toast.success("Payment methods saved");
       setDraft(null);
@@ -159,7 +166,8 @@ function MethodsPanel({ merchantId }: { merchantId: string }) {
     },
     onError: (e) => toast.error(e.message),
   });
-  const rows = draft ?? methods.data?.map(({ merchant_id: _m, ...r }) => (void _m, r)) ?? [];
+  // "Accept any chain" has its own panel below, with the account it needs.
+  const rows = draft ?? methods.data?.filter((r) => r.method !== "oneclick").map(({ merchant_id: _m, ...r }) => (void _m, r)) ?? [];
   return (
     <Panel
       title="Payment methods"

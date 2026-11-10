@@ -13,6 +13,9 @@ import {
   gatewayOverviewSchema,
   gatewayPageSchema,
   infoSchema,
+  intentsOptionsSchema,
+  intentsPayoutSchema,
+  intentsQuoteSchema,
   merchantProfileSchema,
   paymentDetailSchema,
   paymentLinkSchema,
@@ -34,6 +37,9 @@ import {
   type CreatedApiKey,
   type GatewayOverview,
   type Info,
+  type IntentsOptions,
+  type IntentsPayout,
+  type IntentsQuote,
   type MerchantProfile,
   type Payment,
   type PaymentDetail,
@@ -125,7 +131,14 @@ export interface GatewayApi {
   screeningDecisions(): Promise<ScreeningDecision[]>;
   /** The reconciliation report as CSV (section 16) for [from, to), ISO instants, for the open business or `merchantId`. */
   reconciliationCsv(range: { from: string; to: string }, merchantId?: string): Promise<string>;
+  /** The business's NEAR account for any-chain payments and its checks, read now (`GET /v1/merchant/intents-payout`). */
+  intentsPayout(): Promise<IntentsPayout>;
+  /** Sets and proves that account (`PUT /v1/merchant/intents-payout`); the server asks for a fresh password check. */
+  setIntentsPayout(body: IntentsPayoutBody): Promise<IntentsPayout>;
 }
+
+/** The account and its NEP-413 answer to `intentsPayoutProofRequest`. */
+export type IntentsPayoutBody = { account: string; proof: { timestamp: number; public_key: string; signature: string } };
 
 export type CheckoutUpdate = { view: CheckoutView } | { live: boolean };
 
@@ -168,6 +181,15 @@ export interface CheckoutApi {
   reader(ctx: ReaderContext): ReaderSource | null;
   /** Reports the transaction the payer's wallet sent (`POST /v1/checkout/{id}/wallet`). Display only: the hub record is the evidence. */
   walletSent(id: string, txHash: string): Promise<void>;
+  /** The origins a buyer can pay from, each with an indicative price from a signed dry quote, or greyed with a reason. */
+  intentsOptions(id: string): Promise<IntentsOptions>;
+  /** A deposit address for one origin (`POST .../intents/quotes`); the same key makes a retry safe. */
+  createIntentsQuote(id: string, body: { origin_asset: string; refund_to: string }, idempotencyKey: string): Promise<IntentsQuote>;
+  intentsQuote(id: string, quoteId: string): Promise<IntentsQuote>;
+  /** "I've sent it": the buyer's transaction on the origin chain, which only speeds up detection. */
+  submitIntentsDeposit(id: string, quoteId: string, txHash: string): Promise<IntentsQuote>;
+  /** Simulated mode only: the fake 1Click server receives a deposit of `amount` base units (default: the full amount). */
+  simulateIntentsDeposit(id: string, quoteId: string, amount?: string): Promise<IntentsQuote>;
 }
 
 /** Bare arrays or `{ items }` envelopes, since list envelopes for unpaged routes are not pinned in the spec. */
@@ -332,6 +354,12 @@ export class HttpGatewayApi implements GatewayApi {
     }
     throw new ApiError(res.status, error?.code ?? "HTTP_ERROR", error?.message ?? `The report could not be made (status ${res.status}).`, error?.details);
   }
+  intentsPayout() {
+    return this.req("/v1/merchant/intents-payout", intentsPayoutSchema);
+  }
+  setIntentsPayout(body: IntentsPayoutBody) {
+    return this.req("/v1/merchant/intents-payout", intentsPayoutSchema, { method: "PUT", body: JSON.stringify(body) });
+  }
 }
 
 export class HttpCheckoutApi implements CheckoutApi {
@@ -386,6 +414,24 @@ export class HttpCheckoutApi implements CheckoutApi {
   }
   eventsUrl(id: string) {
     return typeof EventSource === "undefined" ? null : `${this.nodeUrl}/v1/checkout/${encodeURIComponent(id)}/events`;
+  }
+  private intents(id: string, rest = "") {
+    return `/v1/checkout/${encodeURIComponent(id)}/intents${rest}`;
+  }
+  intentsOptions(id: string) {
+    return requestJson(this.nodeUrl, this.intents(id, "/options"), intentsOptionsSchema);
+  }
+  createIntentsQuote(id: string, body: { origin_asset: string; refund_to: string }, idempotencyKey: string) {
+    return requestJson(this.nodeUrl, this.intents(id, "/quotes"), intentsQuoteSchema, { method: "POST", body: JSON.stringify(body), idempotencyKey });
+  }
+  intentsQuote(id: string, quoteId: string) {
+    return requestJson(this.nodeUrl, this.intents(id, `/quotes/${encodeURIComponent(quoteId)}`), intentsQuoteSchema);
+  }
+  submitIntentsDeposit(id: string, quoteId: string, txHash: string) {
+    return requestJson(this.nodeUrl, this.intents(id, `/quotes/${encodeURIComponent(quoteId)}/deposit`), intentsQuoteSchema, { method: "POST", body: JSON.stringify({ tx_hash: txHash }) });
+  }
+  simulateIntentsDeposit(id: string, quoteId: string, amount?: string) {
+    return requestJson(this.nodeUrl, this.intents(id, `/quotes/${encodeURIComponent(quoteId)}/simulate`), intentsQuoteSchema, { method: "POST", body: JSON.stringify(amount ? { amount } : {}) });
   }
 }
 

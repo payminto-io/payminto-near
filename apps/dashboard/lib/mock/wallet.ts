@@ -127,8 +127,9 @@ export class MockWalletDriver implements WalletDriver {
   async signMessage(input: SignMessageInput): Promise<SignedMessage> {
     await pause(600);
     this.#maybeReject();
-    void input;
-    return { accountId: this.#account ?? DEMO_ACCOUNT, publicKey: "ed25519:DemoWa11etKeyNotReal1111111111111111111111111", signature: b64("demo signature, not valid on any chain") };
+    // A payout proof is signed by the account it names, which a person picks in their wallet; the demo wallet does the same.
+    const named = /^Payminto (?:intents payout|payout change) \S+ (\S+) /.exec(input.message)?.[1];
+    return { accountId: named ?? this.#account ?? DEMO_ACCOUNT, publicKey: "ed25519:DemoWa11etKeyNotReal1111111111111111111111111", signature: b64("demo signature, not valid on any chain") };
   }
   onAccountChange(cb: (a: AccountId | null) => void) {
     this.#listeners.add(cb);

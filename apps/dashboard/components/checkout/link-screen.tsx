@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
@@ -10,6 +10,7 @@ import { formatToken } from "@/lib/format";
 import { gatewayNetwork, parseAmountInput, plainAmount } from "@/lib/gateway";
 import { amountPresets, rememberReceiptEmail } from "@/lib/checkout";
 import { ApiError } from "@/lib/http";
+import { captureOpenerOrigin } from "@/lib/embed";
 import { useCheckoutApi } from "@/lib/use-checkout";
 import type { PublicLink } from "@/lib/schemas";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,8 @@ import { NotFoundScreen, UnavailableScreen, useCheckoutTitle } from "./checkout"
 export function LinkScreen({ slug }: { slug: string }) {
   const api = useCheckoutApi();
   const router = useRouter();
+  // Opened by embed.js: remember which page to tell when the payment is made (this popup moves on to /pay/<id>).
+  useEffect(() => captureOpenerOrigin(), []);
   const q = useQuery({
     queryKey: ["public-link", slug],
     queryFn: () => api!.link(slug),

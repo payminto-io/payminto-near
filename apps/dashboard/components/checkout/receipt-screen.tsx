@@ -217,7 +217,7 @@ function ProofBody({
             ["Hub", p.hub ? <ChainLink key="h" text={p.hub} title={p.hub} href={explorer ? `${explorer}/address/${p.hub}` : null} /> : "-"],
             ["Hub payment id", p.hub_payment_id ? <span key="i" className="hash text-[0.8125rem]" title={p.hub_payment_id}>{shortHash(p.hub_payment_id)}</span> : "-"],
             ["Payer", p.payer ? <ChainLink key="p" text={p.payer} title={p.payer} href={explorer ? `${explorer}/address/${p.payer}` : null} /> : "-"],
-            ["Paid with", p.method === "wallet" ? "NEAR wallet" : p.method === "voucher" ? "AI agent with a Budget" : p.method ? "Transfer" : "-"],
+            ["Paid with", p.method === "wallet" ? "NEAR wallet" : p.method === "voucher" ? "AI agent with a Budget" : p.method === "oneclick" ? "Any chain (NEAR Intents)" : p.method ? "Transfer" : "-"],
             ["Order fingerprint", <OrderHash key="h" value={p.order_hash} className="justify-end" />],
           ]}
         />
