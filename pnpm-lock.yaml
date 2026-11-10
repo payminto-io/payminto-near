@@ -315,6 +315,9 @@ importers:
       '@payminto/models':
         specifier: workspace:*
         version: link:../../packages/models
+      '@payminto/near-addons':
+        specifier: workspace:*
+        version: link:../../packages/near-addons
       '@payminto/payee-check':
         specifier: workspace:*
         version: link:../../packages/payee-check

@@ -9,6 +9,7 @@ import {
   type Merchant,
   type MerchantMethod,
   type MerchantProfile,
+  type CheckoutMethod,
   type PaymentMethod,
   type Platform,
 } from "@payminto/protocol";
@@ -55,11 +56,16 @@ export type MerchantRow = {
   payout_set: number;
   created_at: string;
   updated_at: string;
+  /** Any-chain checkout (migration 007): the NEAR account USDC from other chains lands in, and its checks. */
+  intents_payout?: AccountId | null;
+  intents_payout_proven_at?: string | null;
+  intents_payout_registered?: number;
+  intents_payout_proof?: string | null;
 };
 
 export type MethodRow = {
   merchant_id: string;
-  method: PaymentMethod;
+  method: CheckoutMethod;
   enabled: number;
   fee_bps: number;
   fee_fixed: string;
@@ -86,7 +92,8 @@ export function feePlanJson(r: FeePlanRow): FeePlan {
 export function methodJson(r: MethodRow): MerchantMethod {
   return {
     merchant_id: r.merchant_id,
-    method: r.method,
+    // `oneclick` only on a node with the any-chain checkout on (CHECKOUT_METHODS).
+    method: r.method as PaymentMethod,
     enabled: r.enabled === 1,
     fee_bps: r.fee_bps,
     fee_fixed: r.fee_fixed,
@@ -139,11 +146,18 @@ export class MerchantService {
   readonly #db: Database;
   readonly #ctx: ModelContext;
   readonly #checkoutKey: PublicKey;
+  /** Methods listed in method lists: the core two, plus `oneclick` when the any-chain checkout is on. */
+  #listed: readonly CheckoutMethod[] = PAYMENT_METHODS;
 
   constructor(o: { db: Database; ctx: ModelContext; checkoutKey: PublicKey }) {
     this.#db = o.db;
     this.#ctx = o.ctx;
     this.#checkoutKey = o.checkoutKey;
+  }
+
+  /** Called by the gateway when INTENTS_CHECKOUT is on: method lists then show the `oneclick` row too. */
+  listIntentsMethod(): void {
+    this.#listed = [...PAYMENT_METHODS, "oneclick"];
   }
 
   /**
@@ -345,6 +359,8 @@ export class MerchantService {
       for (const method of PAYMENT_METHODS) {
         this.#db.run("INSERT INTO merchant_methods (merchant_id, method, enabled, updated_at) VALUES (?, ?, ?, ?)", id, method, 1, now);
       }
+      // The any-chain rail starts off: it needs a proven NEAR account first (migration 007 did the same for older rows).
+      this.#db.run("INSERT INTO merchant_methods (merchant_id, method, enabled, updated_at) VALUES (?, 'oneclick', 0, ?)", id, now);
       if (b.payout !== null) {
         this.#db.run(
           "INSERT INTO merchant_payout_changes (merchant_id, old_payout, new_payout, signature, public_key, signed_at, at) VALUES (?, NULL, ?, ?, ?, ?, ?)",
@@ -410,17 +426,17 @@ export class MerchantService {
   }
 
   methods(merchantId: string): MethodRow[] {
-    return this.#db.all<MethodRow>("SELECT * FROM merchant_methods WHERE merchant_id = ? ORDER BY method", merchantId);
+    return this.#db.all<MethodRow>("SELECT * FROM merchant_methods WHERE merchant_id = ? ORDER BY method", merchantId).filter((r) => this.#listed.includes(r.method));
   }
 
-  method(merchantId: string, method: PaymentMethod): MethodRow {
+  method(merchantId: string, method: CheckoutMethod): MethodRow {
     return this.#db.get<MethodRow>("SELECT * FROM merchant_methods WHERE merchant_id = ? AND method = ?", merchantId, method)!;
   }
 
   /** Operator sets terms; `enabledOnly` is what a merchant key may change (fees are the operator's). */
   setMethods(
     merchantId: string,
-    items: Array<{ method: PaymentMethod; enabled?: boolean; fee_bps?: number; fee_fixed?: string; bearer?: "merchant" | "customer"; min_amount?: string | null; max_amount?: string | null }>,
+    items: Array<{ method: CheckoutMethod; enabled?: boolean; fee_bps?: number; fee_fixed?: string; bearer?: "merchant" | "customer"; min_amount?: string | null; max_amount?: string | null }>,
     enabledOnly: boolean,
   ): MethodRow[] {
     this.merchant(merchantId);

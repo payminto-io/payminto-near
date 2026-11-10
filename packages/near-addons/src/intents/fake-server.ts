@@ -23,6 +23,12 @@ import type { ExecutionStatus, OneClickToken, QuoteRequest, QuoteResponse, Statu
 export const FAKE_ONECLICK_SEED: Uint8Array = new Uint8Array(32).fill(0x2c);
 export const FAKE_ONECLICK_MANAGER_PUBLIC_KEY = `ed25519:${base58.encode(ed25519.getPublicKey(FAKE_ONECLICK_SEED))}`;
 
+/** Signs a quote response with the fake manager key, as the fake server does (tests that tamper with a quote use it). */
+export function signFakeQuote(r: QuoteResponse, seed: Uint8Array = FAKE_ONECLICK_SEED): QuoteResponse {
+  r.signature = `ed25519:${base58.encode(ed25519.sign(quoteSigningMessage(r), seed))}`;
+  return r;
+}
+
 /** The 1Click fee account the live API injected into `appFees` on 2026-11-10. */
 const LIVE_APP_FEE_RECIPIENT = "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd";
 /** The delivery fee to a NEAR account observed on every live quote (0.004628 USDC). */
@@ -430,7 +436,7 @@ export class FakeOneClick {
       quote = { depositAddress: address, ...quote, deadline: new Date(deadline).toISOString(), timeWhenInactive: new Date(deadline).toISOString() };
     }
     const response: QuoteResponse = { quote, quoteRequest, signature: "", timestamp: new Date(this.now()).toISOString(), correlationId };
-    response.signature = `ed25519:${base58.encode(ed25519.sign(quoteSigningMessage(response), this.#seed))}`;
+    signFakeQuote(response, this.#seed);
     if (!dry) {
       const address = quote.depositAddress!;
       this.#swaps.set(address, {
