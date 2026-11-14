@@ -149,7 +149,7 @@ describe("the printed guide in live mode", () => {
   it("offers no NEAR wallet checkout step: live mode takes only real money from other chains", () => {
     expect(text).not.toContain("Pay 4.50 USDC");
     expect(text).not.toContain("(the checkout payment)");
-    expect(text).toContain('the page offers only "Any chain" (the NEAR wallet and vouchers are off in live mode)');
+    expect(text).toContain('the checkout opens on one screen with "Pay with" (the NEAR wallet and vouchers are off in live mode)');
     expect(liveBanner("northwind-usdc.near").join("\n")).toContain("the NEAR wallet and vouchers (local test money) are off");
   });
 

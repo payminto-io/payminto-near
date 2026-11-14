@@ -51,7 +51,7 @@ export function guide(s: Stack): string[] {
     ...(live
       ? []
       : [
-          `Pay a checkout link as the shopper. Open ${setup.link.url}, press "Continue to pay", then "Pay 4.50 USDC",\n     and pick ${a.shopper.accountId}. See "Payment complete" and its payment proof; in the dashboard, Payments shows it as Paid.`,
+          `Pay a checkout link as the shopper. Open ${setup.link.url}: the checkout opens at once. Press "Pay 4.50 USDC",\n     and pick ${a.shopper.accountId}. See "Payment complete" and its payment proof; in the dashboard, Payments shows it as Paid.`,
         ]),
     ...(live
       ? [
@@ -59,7 +59,7 @@ export function guide(s: Stack): string[] {
           `Pay a live link from Base (real money, 1 to 2 USDC). Payment links, "New link", a fixed amount of 1 to 2 USDC; open it:\n     the checkout opens on one screen with "Pay with" (the NEAR wallet and vouchers are off in live mode). Pick "USDC" and "Base";\n     the payment address and its QR code are already there. Send exactly the amount shown from your own wallet (or press\n     "Pay with your wallet") before the time shown. See waiting, received, converting, delivered, then "Payment complete" with both transactions, and\n     the payment's proof read from NEAR mainnet. docs/LIVE_RUN.md has every step.`,
         ]
       : [
-          `Pay from another chain (NEAR Intents, Simulated - no real money). Open ${setup.link.url}, press "Continue to pay",\n     then the "Any chain" tab. Pick "USDC" and "Base": the payment address and its QR code are already there, with no\n     refund address to type. Press "Simulate deposit (local only)".\n     See the steps go received, converting, delivered, then "Payment complete" with "Paid from Base through NEAR Intents"\n     and both transactions: the node read the delivery on this chain, where ${a.anychain.accountId} received the USDC from\n     ${accounts.solver}. In the dashboard the payment has a "NEAR Intents" card with "Delivery checked on NEAR".\n     Again with ${setup.anyChain?.link.url ?? setup.link.url} and "Send too little": see "Your deposit was returned" and "Try again".`,
+          `Pay from another chain (NEAR Intents, Simulated - no real money). Open ${setup.link.url}: the checkout opens at once;\n     press the "Any chain" tab. Pick "USDC" and "Base": the payment address and its QR code are already there, with no\n     refund address to type. Press "Simulate deposit (local only)".\n     See the steps go received, converting, delivered, then "Payment complete" with "Paid from Base through NEAR Intents"\n     and both transactions: the node read the delivery on this chain, where ${a.anychain.accountId} received the USDC from\n     ${accounts.solver}. In the dashboard the payment has a "NEAR Intents" card with "Delivery checked on NEAR".\n     Again with ${setup.anyChain?.link.url ?? setup.link.url} and "Send too little": see "Your deposit was returned" and "Try again".`,
         ]),
     live
       ? `Pay out. Open Payouts and press "Pay out now".\n     See the hub credit of the creditors of the next settlement arrive in their own accounts, with the payout transaction.\n     (The any-chain payment needs no payout: its USDC was delivered straight to ${live.payout} on NEAR mainnet.)`
