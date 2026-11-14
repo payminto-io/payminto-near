@@ -28,7 +28,26 @@ Agents pay invoices from any chain through MCP tools (`invoice_pay_options`, `in
 The same gateway takes payments from people: a merchant shares a payment link, and the buyer pays from any chain on one screen through NEAR Intents, while the merchant receives USDC in its own NEAR account.
 
 Built for the NEAR HACKATHON (1 to 14 November 2026).
-Tracks: agents, swarms, security, real world, business.
+
+### For the judges, in one minute
+
+| Question | Answer, with evidence |
+|---|---|
+| Does it run, and match this README? | `./scripts/setup.sh && pnpm local --check` prints `24 of 24 checks passed`; [AGENTS.md](AGENTS.md) is the script a coding agent follows, and CI runs the same commands on a clean machine on every push. |
+| Is it real? | One real payment on NEAR mainnet, in the table above: Base to USDC in the merchant's NEAR account in 36 seconds. |
+| Why not a card? | A card cannot charge 0.002 USDC per API call. A Budget can: capped, refusable, provable per call, with one NEAR transaction for many calls. We claim no market volume. |
+| Who answers for an agent's spending? | The owner sets the cap, payees and expiry on chain; every refusal names its rule; the owner can revoke with no NEAR for gas; a seller can settle on its own if the node disappears. |
+| Why NEAR? | `ed25519_verify` in the contract, function-call keys, named accounts, NEP-141 USDC, and NEAR Intents for the any-chain checkout ([Why NEAR](#why-near)). |
+| Will it last? | Open source and self-hosted, with no fee from us; a platform sets its own pricing plans for the businesses it hosts. |
+
+| Track | What answers it |
+|---|---|
+| Agent Economy | Agents pay per API call with signed vouchers over x402, pay invoices through the MCP wallet, and read prices from the NEAR AI Agent Market. |
+| AI Swarms | `pnpm swarm`: 20 buyer and 5 seller agents, 299 paid calls settled in 1 `settle_batch` and 5 transfers. |
+| AI Security & Defense | Budgets enforced in three places, the payee check that blocks lookalikes before signing, and [REFUSALS.md](docs/REFUSALS.md) with a test for every refusal. |
+| Real-World Money | The any-chain checkout, live on mainnet, with payment links, refunds, receipts, reports and signed webhooks. |
+| Autonomous Business | An agent pays a supplier's invoice from its own wallet on any chain, and one server hosts many businesses. |
+| Social Money | DAO-owned Budgets: each step is a Sputnik DAO v2 proposal the members vote on. |
 
 <p align="center"><img src="docs/img/payment-flow.svg" alt="How one paid call works: the owner opens a Budget with USDC escrow on the NEAR hub; each call is paid off chain with a signed voucher that the clearing node checks; many calls settle in one netted transaction, and anyone can prove a single call against the Merkle root." width="900"></p>
 
