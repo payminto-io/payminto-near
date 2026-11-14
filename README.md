@@ -7,7 +7,19 @@ The agent pays per HTTP call with a signed voucher, so a call clears in millisec
 Payminto nets what owners owe each other and settles only the difference on NEAR, in one transaction for many calls.
 Every single call can still be proven against a Merkle root stored on chain.
 
-The same gateway takes payments from people: a merchant shares a payment link, and the buyer pays from a NEAR wallet or from any chain through NEAR Intents, while the merchant receives USDC in its own NEAR account.
+The same gateway takes payments from people: a merchant shares a payment link, and the buyer pays from any chain on one screen through NEAR Intents, while the merchant receives USDC in its own NEAR account.
+
+**A real payment on NEAR mainnet, 14 November 2026.**
+A buyer paid a 1.50 USDC payment link with 0.000854 ETH on Base from MetaMask; NEAR Intents converted it and delivered 1.50 USDC to the merchant's own NEAR account, `sagajet.near`, 36 seconds later.
+The node read that delivery on NEAR itself before it marked the payment paid.
+
+| | Transaction |
+|---|---|
+| Buyer's deposit on Base | [0x3c39f333...1c95b7ba](https://basescan.org/tx/0x3c39f333c89996fed6b8b02bfb560ea1805224aa8d7db45301c7238e1c95b7ba) (21:31:00 UTC) |
+| USDC delivered on NEAR | [32n6tk6ALiKy...rYqtWmN9](https://nearblocks.io/txns/32n6tk6ALiKyvpsVrtyJ837RjtsSpZF4ZkcGrYqtWmN9) (21:31:36 UTC) |
+| Captured record | [docs/live-run/2026-11-14-pay_3n6smj7fu7jcwjkkuemcyoww.json](docs/live-run/2026-11-14-pay_3n6smj7fu7jcwjkkuemcyoww.json): the signed quote, 1Click's status and the NEAR delivery |
+
+<p align="center"><img src="apps/dashboard/docs/screenshots/anychain-live-paid-dark.jpg" alt="The live receipt: Payment complete, 1.50 USDC paid to Northwind Coffee, paid from Base through NEAR Intents, 0.000854 ETH sent on Base, 1.50 USDC received on NEAR at sagajet.near, with the Base deposit and NEAR delivery transactions." width="640"></p>
 
 Built for the NEAR HACKATHON (1 to 14 November 2026).
 Tracks: agents, swarms, security, real world, business.
@@ -98,7 +110,7 @@ For a native coin or Solana the QR code is a payment request (EIP-681 or Solana 
 In "Receive as" a business picks which USDC it receives, on NEAR, Base, Arbitrum, Ethereum, Polygon or Optimism, and its default.
 An AI agent pays the same way from its own wallet with the MCP tools `invoice_pay_options`, `invoice_deposit` and `invoice_status` ([docs/AGENTS.md](docs/AGENTS.md)).
 
-<p align="center"><img src="apps/dashboard/docs/screenshots/anychain-choose-1280-light.png" alt="The checkout's Any chain tab: one list of tokens and chains with estimated amounts." width="560"> <img src="apps/dashboard/docs/screenshots/anychain-deposit-375-light.png" alt="The deposit screen on a phone: send exactly this amount on Base, the QR code, the countdown, the steps and the fees." width="220"></p>
+<p align="center"><img src="apps/dashboard/docs/screenshots/anychain-one-screen-live-dark.jpg" alt="The one-screen checkout in live mode: Pay with USDC, USDT or ETH on Base, Ethereum, Arbitrum, Solana or Polygon; Send exactly 1.501807 USDC on Base; Pay with your wallet; the QR code of the deposit address." width="360"></p>
 
 `pnpm local` runs this against a simulated 1Click server that delivers real tokens on the local chain, and `pnpm local --check` pays one link and has one deposit returned.
 `pnpm local --intents live --intents-payout <account>` runs it against the real 1Click API and NEAR mainnet; [docs/LIVE_RUN.md](docs/LIVE_RUN.md) is the checklist for one real payment.
@@ -131,7 +143,7 @@ The trust model and known limits are in [docs/SECURITY.md](docs/SECURITY.md).
 | Simulated hub (in memory) | `pnpm demo`, `pnpm swarm`, and 2,314 TypeScript tests in 15 packages pass |
 | Local NEAR node (near-sandbox 2.14.0) | `pnpm local`, `pnpm local --check`, and the sandbox demo and swarm pass, with every on-chain step a real transaction against the locked hub |
 | NEAR testnet | Not deployed yet; the deploy script supports it and has a dry run ([docs/WALKTHROUGH.md](docs/WALKTHROUGH.md#deploy-your-own-hub-on-testnet)) |
-| NEAR mainnet | The hub and the clearing node do not run on mainnet. The any-chain rail alone has a live mode (`pnpm local --intents live`) on the real 1Click API, built and tested against recorded answers; no real payment has run on it yet ([docs/LIVE_RUN.md](docs/LIVE_RUN.md)) |
+| NEAR mainnet | The hub and the clearing node do not run on mainnet. The any-chain rail alone has a live mode (`pnpm local --intents live`) on the real 1Click API. Real payments ran on it on 14 November 2026: ETH on Base delivered as 1.50 USDC to `sagajet.near` on NEAR mainnet, confirmed by the node reading the delivery on NEAR ([records](docs/live-run), [checklist](docs/LIVE_RUN.md)). The first run found that live 1Click statuses omit a field the node required; fixed with a test, and the second run confirmed end to end |
 
 The hub contract has had an internal audit and an independent pre-audit, each finding fixed or documented with a test ([docs/audit](docs/audit)); it has not had an external audit.
 What each track covers, and what still needs a person, is in [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md#which-track-each-feature-answers).
