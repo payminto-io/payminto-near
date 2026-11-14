@@ -158,3 +158,53 @@ describe("the mock node's any-chain checkout", () => {
     expect(() => fresh.intents.assertCanEnable()).not.toThrow();
   });
 });
+
+describe("the mock node follows the any-chain contract's additions", () => {
+  it("names each origin's token contract and chain id, so the deposit QR can carry a payment request", () => {
+    const { intents } = harness();
+    const o = intentsOptionsSchema.parse(intents.options("pay_anychain")).options;
+    const by = (sym: string, chain: string) => o.find((x) => x.origin.symbol === sym && x.origin.chain === chain)!.origin;
+    expect(by("USDC", "base")).toMatchObject({ contract_address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", chain_id: 8453 });
+    expect(by("USDC", "arb")).toMatchObject({ chain_id: 42161 });
+    expect(by("ETH", "base")).toMatchObject({ contract_address: null, chain_id: 8453 });
+    expect(by("USDC", "sol")).toMatchObject({ contract_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", chain_id: null });
+  });
+
+  it("saves the token customers see first and shows it on the checkout", () => {
+    const { p, intents } = harness();
+    expect(intents.checkout(p).default_origin).toBeNull();
+    expect(intentsPayoutSchema.parse(intents.setDefaultOrigin(BASE_USDC)).default_origin).toBe(BASE_USDC);
+    expect(intents.checkout(p).default_origin).toBe(BASE_USDC);
+    expect(() => intents.setDefaultOrigin("nep141:other.near")).toThrow(expect.objectContaining({ code: "ORIGIN_NOT_OFFERED" }));
+    expect(intents.setDefaultOrigin(null).default_origin).toBeNull();
+  });
+
+  it("lists USDC on NEAR first, and moves deliveries to a proven EVM address", () => {
+    const { intents } = harness();
+    const before = intentsPayoutSchema.parse(intents.payout());
+    expect(before.destinations![0]).toMatchObject({ chain: "near", verify: "rpc" });
+    expect(before.destinations!.find((d) => d.chain === "base")).toMatchObject({ verify: "provider_only" });
+    expect(before.destination).toMatchObject({ chain: "near", address: "acme-store.near", proven: true });
+    expect(intents.createQuote("pay_anychain", { origin_asset: BASE_USDC, refund_to: REFUND }).quote.destination).toEqual({ chain: "near", chain_name: "NEAR", symbol: "USDC", address: "acme-store.near" });
+
+    const address = "0xab12cd34ef56ab12cd34ef56ab12cd34ef56abcd";
+    expect(() => intents.setPayout({ destination_chain: "base", address, proof: { type: "eip191", timestamp: 1, signature: "0x12" } })).toThrow(expect.objectContaining({ code: "INVALID_PROOF" }));
+    const after = intentsPayoutSchema.parse(intents.setPayout({ destination_chain: "base", address, proof: { type: "eip191", timestamp: 1, signature: `0x${"11".repeat(65)}` } }));
+    expect(after.destination).toMatchObject({ chain: "base", chain_name: "Base", address, proven: true, verify: "provider_only" });
+    expect(after.verified).toBe(true);
+    const q = intentsQuoteSchema.parse(intents.createQuote("pay_anychain", { origin_asset: "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near", refund_to: REFUND }).quote);
+    expect(q.destination).toEqual({ chain: "base", chain_name: "Base", symbol: "USDC", address });
+  });
+
+  it("lends a demo browser wallet that shares one address and signs only for it", async () => {
+    const { demoEvmProvider, DEMO_EVM_ADDRESS } = await import("@/lib/mock/evm-wallet");
+    const w = demoEvmProvider();
+    expect(await w.request({ method: "eth_requestAccounts" })).toEqual([DEMO_EVM_ADDRESS]);
+    expect(await w.request({ method: "personal_sign", params: ["0x6869", DEMO_EVM_ADDRESS] })).toMatch(/^0x[0-9a-f]{130}$/);
+    const refused = await w.request({ method: "personal_sign", params: ["0x6869", "0x0000000000000000000000000000000000000001"] }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refused).toMatchObject({ message: "The demo wallet holds only its own address.", code: 4100 });
+  });
+});

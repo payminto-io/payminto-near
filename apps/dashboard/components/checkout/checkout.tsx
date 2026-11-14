@@ -22,6 +22,7 @@ import {
   redirectFraction,
   redirectSecondsLeft,
   REDIRECT_SECONDS,
+  receiptEmailText,
   rememberedReceiptEmail,
   rememberQuote,
   rememberReceiptEmail,
@@ -36,7 +37,25 @@ import {
 } from "@/lib/checkout";
 import { useCheckout, type CheckoutLive } from "@/lib/use-checkout";
 import { captureOpenerOrigin, notifyOpener } from "@/lib/embed";
-import { activeQuote, amountText, anyChainOffered, initialTab, intentsAnnouncement, paidFromText, payTabs, showsDeposit, TAB_LABEL, type PayTab } from "@/lib/intents";
+import {
+  activeQuote,
+  amountText,
+  anyChainOffered,
+  depositOnItsWay,
+  destinationText,
+  excessReturned,
+  initialTab,
+  intentsAnnouncement,
+  isInFlightError,
+  isNearDestination,
+  paidFromText,
+  payTabs,
+  showsDeposit,
+  showsTabBar,
+  TAB_LABEL,
+  WALLET_HELD,
+  type PayTab,
+} from "@/lib/intents";
 import type { CheckoutApi } from "@/lib/gateway-api";
 import type { CheckoutView } from "@/lib/schemas";
 import { ApiError } from "@/lib/http";
@@ -224,6 +243,8 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
   const [picked, setPicked] = useState<PayTab | null>(null);
   const [cache, setCache] = useState<QuoteCache>({});
   const [seen, setSeen] = useState({ view, status: view.status });
+  // The node refused the NEAR wallet (409 INTENTS_IN_FLIGHT) before this page saw the deposit from another chain.
+  const [inFlight409, setInFlight409] = useState(false);
   // Celebrate and auto-return only when the payer watched it complete, never when reopening an old receipt.
   const [sawPending] = useState(() => !["paid", "overpaid"].includes(view.status) || Date.now() - new Date(view.paid_at ?? 0).getTime() < 30_000);
 
@@ -234,6 +255,7 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
     const next = rememberQuote(cache, view);
     if (next !== cache) setCache(next);
     if (seen.status !== view.status && step !== "idle") setStep("idle");
+    if (seen.status !== view.status && inFlight409) setInFlight409(false);
   }
 
   const signing = step === "approving" || step === "submitting";
@@ -242,19 +264,26 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
   // "NEAR wallet" first and unchanged; "Any chain" beside it when the business takes payments from other chains.
   const tabs = payTabs(view, initialMethod(view) === "wallet");
   const tab: PayTab | null = picked && tabs.includes(picked) ? picked : hasWallet === null ? null : initialTab(view, initialMethod(view) === "wallet");
+  // A deposit from another chain is on its way: the NEAR wallet tab says so and does not offer a second payment.
+  const held = depositOnItsWay(view) || inFlight409;
   const active: PayMethod | null = tab === "wallet" ? "wallet" : null;
   const quote = active ? quoteFor(view, active, cache) : null;
   const options = useIntentsOptions(api, view.id, tab === "oneclick" && anyChainOffered(view));
-  const anyChain = tab === "oneclick" && (model.panel === "pay" || model.panel === "signing" || (model.panel === "confirming" && showsDeposit(activeQuote(view))));
+  // The wallet tab of a held payment keeps the pay panel too, so the tabs stay while the deposit is on its way.
+  const anyChain = (tab === "oneclick" || (tab === "wallet" && held)) && (model.panel === "pay" || model.panel === "signing" || (model.panel === "confirming" && showsDeposit(activeQuote(view))));
 
   // Fees depend on the method (GATEWAY.md section 14.3): re-quote an open, untouched payment for the method on screen.
-  const requoteFor = view.status === "open" && view.amount_paid === "0" && active && view.method !== active ? active : null;
+  const requoteFor = view.status === "open" && view.amount_paid === "0" && active && view.method !== active && !held ? active : null;
   useEffect(() => {
     if (!requoteFor) return;
     let alive = true;
     api.chooseMethod(view.id, requoteFor).then(
       (v) => alive && qc.setQueryData(["checkout", view.id], v),
-      () => undefined,
+      (e: unknown) => {
+        if (!alive || !isInFlightError(e)) return;
+        setInFlight409(true);
+        void qc.invalidateQueries({ queryKey: ["checkout", view.id] });
+      },
     );
     return () => {
       alive = false;
@@ -289,6 +318,7 @@ function Checkout({ view, api, live, refresh }: { view: CheckoutView; api: Check
           anyChain={anyChain}
           options={options}
           onPick={setPicked}
+          held={held}
           step={step}
           setStep={setStep}
           refresh={refresh}
@@ -331,6 +361,8 @@ export function CheckoutSummary({
   const pending = Boolean(quote && !quote.known);
   const title = view.description || `Payment to ${view.merchant.name}`;
   const showItems = items.length > 1 || (items.length === 1 && items[0]!.quantity !== 1);
+  // Where the business receives this payment from another chain, once a deposit address names it.
+  const dest = anyChainTo !== undefined ? (activeQuote(view)?.destination ?? null) : null;
 
   return (
     <div className={cn("transition-[filter,opacity] duration-300", dim && "opacity-75 grayscale")}>
@@ -371,6 +403,13 @@ export function CheckoutSummary({
           <StaggerItem className="mt-7">
             {anyChainTo === undefined ? (
               <PaidDirectly merchant={view.merchant.name} payout={view.payout} explorer={network.explorer} />
+            ) : dest && !isNearDestination(dest) ? (
+              <PaidDirectly
+                merchant={view.merchant.name}
+                payout={dest.address}
+                explorer={null}
+                note={`Delivered as ${dest.symbol} on ${dest.chain_name} to this address through NEAR Intents${view.intents?.mode === "live" ? "." : " (simulated)."}`}
+              />
             ) : (
               <PaidDirectly
                 merchant={view.merchant.name}
@@ -411,6 +450,8 @@ type PanelProps = {
   anyChain: boolean;
   options: ReturnType<typeof useIntentsOptions>;
   onPick: (t: PayTab) => void;
+  /** A deposit from another chain is on its way, so the NEAR wallet does not take a second payment. */
+  held: boolean;
   step: WalletStep;
   setStep: (s: WalletStep) => void;
   refresh: () => void;
@@ -436,7 +477,7 @@ export function CheckoutPanel(props: PanelProps) {
   const panel = anyChain ? "pay" : model.panel;
   // Every screen with any-chain data carries its label: the pay screens, and the receipt of a payment made that way.
   const intentsHeader = Boolean(view.intents) && (anyChain || (panel === "success" && view.method === "oneclick"));
-  const announce = anyChain ? (iq ? intentsAnnouncement(iq) : "Pay from another chain.") : model.announce;
+  const announce = anyChain ? (iq ? intentsAnnouncement(iq) : "Choose what you pay with.") : model.announce;
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -477,7 +518,7 @@ export function CheckoutPanel(props: PanelProps) {
 
 /**
  * The pay panel: the NEAR wallet, exactly as before, and "Any chain" in a second tab when the business takes payments
- * from other chains. With the wallet alone there are no tabs at all.
+ * from other chains. With one way to pay there are no tabs at all: the wallet alone, or in live mode Any chain alone.
  */
 function PayBody(props: PanelProps) {
   const { view, api, tabs, tab, onPick, live, options, refresh } = props;
@@ -488,7 +529,7 @@ function PayBody(props: PanelProps) {
       {view.status === "open" && <ReceiptEmail view={view} api={api} />}
     </div>
   );
-  if (tabs.length === 1 && tab === "wallet") return <WalletBody {...props} />;
+  if (!showsTabBar(view, tabs)) return tab === "oneclick" ? anyChain : <WalletBody {...props} />;
   // While a deposit from another chain is on its way the wallet is not offered, but its tab stays (disabled), so the
   // panel keeps its shape from the first screen to the last.
   const shown: PayTab[] = ["wallet", "oneclick"];
@@ -518,8 +559,18 @@ function PayBody(props: PanelProps) {
   );
 }
 
-function WalletBody({ view, api, model, methods, active, quote, step, setStep, refresh, hasWallet }: PanelProps) {
+function WalletBody({ view, api, model, methods, active, quote, step, setStep, refresh, hasWallet, held }: PanelProps) {
   const partial = model.phase === "partially_paid";
+  if (held) {
+    return (
+      <div className="flex flex-col gap-5">
+        <h1 className="text-lg font-semibold tracking-[-0.01em]">{METHOD_COPY.wallet.label}</h1>
+        <Notice tone="info" icon={<Clock3 />}>
+          {WALLET_HELD}
+        </Notice>
+      </div>
+    );
+  }
   if (!active || !quote) {
     return methods.length === 0 ? (
       <Notice tone="neutral" icon={<AlertTriangle />}>
@@ -788,7 +839,7 @@ function ReceiptEmail({ view, api }: { view: CheckoutView; api: CheckoutApi }) {
       <Swap id={state === "saved" || state === "on-file" ? "done" : open ? "form" : "closed"}>
         {state === "saved" || state === "on-file" ? (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
-            <Check className="size-3.5 text-positive" aria-hidden /> {state === "saved" ? `We will email a receipt to ${email}.` : "A receipt email is already on file for this payment."}
+            <Check className="size-3.5 shrink-0 text-positive" aria-hidden /> {receiptEmailText(state, email, view.status === "paid" || view.status === "overpaid")}
           </p>
         ) : !open ? (
           <button type="button" onClick={() => setOpen(true)} className="flex items-center gap-1.5 rounded text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2">
@@ -912,21 +963,26 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
   const t = view.token;
   // Paid from another chain: the quote that delivered says from where, to which NEAR account, and with which transactions.
   const iq = view.method === "oneclick" && view.intents?.active_quote?.status === "confirmed" ? view.intents.active_quote : null;
+  // The excess or unused price buffer 1Click sent back: the payment is paid, this is not a returned deposit.
+  const excess = iq ? excessReturned(iq) : null;
   const at: [ReactNode, ReactNode][] = view.paid_at ? [["Paid at", <span key="p" className="num">{formatDateTime(view.paid_at)}</span>]] : [];
   const rows: [ReactNode, ReactNode][] = iq
     ? [
         ["Amount", <TokenAmount key="a" atomic={view.amount_paid} token={t} />],
         ["Paid with", "Any chain (NEAR Intents)"],
         ["You sent", <span key="s" className="num font-medium whitespace-nowrap">{amountText(iq.deposited ?? iq.send_exactly)} on {iq.origin.chain_name}</span>],
-        ["From", <span key="f" className="hash text-[0.8125rem]">{iq.refund_to}</span>],
-        ["To", <AddressValue key="to" address={iq.recipient} label={view.merchant.name} />],
+        // A buyer who gave no address is not named: refund_to is then the business's own account.
+        ...(iq.refund_type === "INTENTS" ? [] : ([["From", <span key="f" className="hash text-[0.8125rem]">{iq.refund_to}</span>]] as [ReactNode, ReactNode][])),
+        [`${view.merchant.name} received`, <span key="r" className="num font-medium">{destinationText(iq.delivered ?? iq.amount_out, iq.destination)}</span>],
+        ["To", <AddressValue key="to" address={iq.destination && !isNearDestination(iq.destination) ? iq.destination.address : iq.recipient} label={view.merchant.name} />],
         ...(iq.origin_txs[0] ? ([[`${iq.origin.chain_name} deposit`, <TxValue key="o" tx={iq.origin_txs[0]} />]] as [ReactNode, ReactNode][]) : []),
-        ...(iq.delivery_tx ? ([["NEAR delivery", <TxValue key="d" tx={iq.delivery_tx} />]] as [ReactNode, ReactNode][]) : []),
+        ...(iq.delivery_tx ? ([[isNearDestination(iq.destination) ? "NEAR delivery" : `${iq.destination!.chain_name} delivery`, <TxValue key="d" tx={iq.delivery_tx} />]] as [ReactNode, ReactNode][]) : []),
+        ...(excess ? ([["Returned to you", <ReturnedValue key="r" excess={excess} />]] as [ReactNode, ReactNode][]) : []),
         ...at,
       ]
     : [
         ["Amount", <TokenAmount key="a" atomic={view.amount_paid} token={t} />],
-        ["Paid with", view.method === "voucher" ? "AI agent with a Budget" : "NEAR wallet"],
+        ["Paid with", view.method === "voucher" ? "AI agent with a Budget" : view.method === "oneclick" ? "Any chain (NEAR Intents)" : "NEAR wallet"],
         ["Network", network.name],
         ...(payer ? ([["From", <AddressValue key="f" address={payer} />]] as [ReactNode, ReactNode][]) : []),
         ["To", payout ? <AddressValue key="to" address={payout} label={view.merchant.name} /> : view.merchant.name],
@@ -979,6 +1035,18 @@ function Success({ view, model, watched }: { view: CheckoutView; model: Checkout
         {!back && <p className="mt-1 text-center text-xs text-muted-foreground">You can close this page. This receipt stays at the same address.</p>}
       </div>
     </div>
+  );
+}
+
+/** "Returned to you": the amount, and under it the refund address on the buyer's chain, wrapping rather than scrolling. */
+function ReturnedValue({ excess }: { excess: NonNullable<ReturnType<typeof excessReturned>> }) {
+  return (
+    <span className="inline-flex max-w-full min-w-0 flex-col items-end gap-0.5">
+      <span className="num font-medium whitespace-nowrap">{excess.amount}</span>
+      <span className="text-xs text-muted-foreground">
+        to <span className="hash text-[0.8125rem] [overflow-wrap:anywhere]">{excess.to}</span> on {excess.chain}
+      </span>
+    </span>
   );
 }
 

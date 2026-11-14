@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DATA_DIR, DEFAULT_PORTS, parseArgs, UsageError } from "../src/config.ts";
 import { dashboardEnv } from "../src/dashboard.ts";
-import { assertLocalDatabase, clearLock, DataError, dataPaths, readLock, runningStack, wipeData, writeLock } from "../src/data.ts";
+import { DatabaseSync } from "node:sqlite";
+import { assertLocalDatabase, clearLock, DataError, dataPaths, openLiveQuotes, readLock, runningStack, startClean, wipeData, writeLock } from "../src/data.ts";
 import { choosePorts, isFree, PortBusyError } from "../src/ports.ts";
 import { newPassword, writeLogins } from "../src/setup.ts";
 
@@ -68,6 +69,73 @@ describe("the data directory", () => {
 
   it("has nothing to do when the directory does not exist", () => {
     expect(wipeData(join(scratch(), "missing"))).toEqual({ removed: false, databases: [] });
+  });
+});
+
+describe("real money a live run left behind", () => {
+  /** A previous run's data directory whose database holds these any-chain quotes (the node's own columns that matter). */
+  function previousRun(quotes: Array<{ id: string; payment: string; mode: "live" | "simulated"; status: string }>): ReturnType<typeof dataPaths> {
+    const paths = dataPaths(join(scratch(), "data"));
+    mkdirSync(paths.logs, { recursive: true });
+    writeFileSync(paths.nodeLog, "x");
+    const db = new DatabaseSync(paths.db);
+    db.exec("CREATE TABLE intents_quotes (id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL, deposit_address TEXT NOT NULL, created_at TEXT NOT NULL)");
+    quotes.forEach((q, i) => db.prepare("INSERT INTO intents_quotes VALUES (?, ?, ?, ?, ?, ?)").run(q.id, q.payment, q.mode, q.status, `0xdeposit${i}`, `2026-11-14T10:0${i}:00Z`));
+    db.close();
+    return paths;
+  }
+
+  it("refuses to start over a live quote that is not final, names it, and deletes nothing", () => {
+    const paths = previousRun([
+      { id: "iq_live_processing", payment: "pay_live1", mode: "live", status: "processing" },
+      { id: "iq_live_waiting", payment: "pay_live2", mode: "live", status: "awaiting_deposit" },
+      { id: "iq_live_done", payment: "pay_live3", mode: "live", status: "confirmed" },
+      { id: "iq_sim_open", payment: "pay_sim1", mode: "simulated", status: "processing" },
+    ]);
+    expect(openLiveQuotes(paths.db).map((q) => q.id)).toEqual(["iq_live_processing", "iq_live_waiting"]);
+    let message = "";
+    try {
+      startClean(paths);
+    } catch (err) {
+      expect(err).toBeInstanceOf(DataError);
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/^Not starting: the previous run took real money through the any-chain checkout \(--intents live\)/);
+    expect(message).toContain("iq_live_processing (payment pay_live1, processing, deposit address 0xdeposit0)");
+    expect(message).toContain("iq_live_waiting");
+    expect(message).not.toContain("iq_live_done");
+    expect(message).not.toContain("iq_sim_open");
+    expect(message).toContain("pnpm live:capture pay_live1");
+    expect(message).toContain("pnpm local --reset");
+    expect(existsSync(paths.db)).toBe(true);
+    expect(existsSync(paths.nodeLog)).toBe(true);
+    // --reset is the explicit way out: it deletes without asking the database.
+    expect(wipeData(paths.dir).removed).toBe(true);
+    expect(existsSync(paths.dir)).toBe(false);
+  });
+
+  it("starts clean when every live quote is final, after a simulated run, and with no previous run", () => {
+    const done = previousRun([
+      { id: "iq_a", payment: "pay_a", mode: "live", status: "confirmed" },
+      { id: "iq_b", payment: "pay_b", mode: "live", status: "refunded" },
+      { id: "iq_c", payment: "pay_c", mode: "live", status: "failed" },
+      { id: "iq_d", payment: "pay_d", mode: "live", status: "expired" },
+    ]);
+    expect(startClean(done).removed).toBe(true);
+    const simulated = previousRun([{ id: "iq_s", payment: "pay_s", mode: "simulated", status: "deposit_detected" }]);
+    expect(startClean(simulated).removed).toBe(true);
+    expect(startClean(dataPaths(join(scratch(), "never-ran"))).removed).toBe(false);
+    // A database from before the any-chain checkout has no quotes table at all.
+    const old = dataPaths(join(scratch(), "data"));
+    mkdirSync(old.dir, { recursive: true });
+    new DatabaseSync(old.db).close();
+    expect(startClean(old).removed).toBe(true);
+  });
+
+  it("records the run's any-chain mode in its lock", () => {
+    const paths = dataPaths(join(scratch(), "data"));
+    writeLock(paths, { pid: process.pid, startedAt: "now", mode: "run", intents: "live" });
+    expect(readLock(paths)).toMatchObject({ intents: "live" });
   });
 });
 

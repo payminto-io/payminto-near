@@ -1,7 +1,7 @@
 "use client";
 
 import { skipToken, useQuery } from "@tanstack/react-query";
-import { escrowFull, escrowShort, networkInWords } from "./disclosures";
+import { checkoutWords, escrowFull, escrowShort, networkInWords } from "./disclosures";
 import { qk } from "./queries";
 import type { Info } from "./schemas";
 
@@ -18,8 +18,12 @@ export function useNetworkId(): string | null {
   return console.data?.network.id ?? checkout.data?.network.id ?? ENV_NETWORK;
 }
 
-/** The custody wording for the network this page's server runs on. */
+/** The custody wording for the network this page's server runs on; a live any-chain server says the money is never held. */
 export function useNetworkWords() {
   const id = useNetworkId();
-  return { id, network: networkInWords(id), escrowShort: escrowShort(id), escrowFull: escrowFull(id) };
+  const console = useQuery<Info>({ queryKey: qk.info, queryFn: skipToken });
+  const checkout = useQuery<Info>({ queryKey: ["checkout-info"], queryFn: skipToken });
+  const info = console.data ?? checkout.data;
+  const short = info ? checkoutWords(info).escrowShort : escrowShort(id);
+  return { id, network: networkInWords(id), escrowShort: short, escrowFull: escrowFull(id) };
 }

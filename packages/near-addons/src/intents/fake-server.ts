@@ -2,11 +2,20 @@
  * A fake 1Click server for tests and the local stack. It follows the live wire shapes recorded on 2026-11-10 (status
  * codes, field names, error messages, rate limit headers) and simulates the swap: a deposit reported through the
  * control API under `/_fake/` (never under `/v0`) moves an address through KNOWN_DEPOSIT_TX, PROCESSING and SUCCESS,
- * or INCOMPLETE_DEPOSIT and REFUNDED when it is short, or FAILED on request.
+ * or INCOMPLETE_DEPOSIT and REFUNDED when it is short, or FAILED or REFUNDED with reason SLIPPAGE on request.
+ *
+ * On SUCCESS it returns what the swap did not use, as the docs describe for EXACT_OUTPUT: the swap is modelled as
+ * needing exactly `minAmountIn`, so `refundedAmount` is the deposit minus `minAmountIn` (the unused price buffer, plus
+ * any excess), with no refund reason. A deposit of exactly `minAmountIn` returns nothing.
  *
  * It signs quotes with a public test key, never the 1Click manager key, so a simulated quote can never pass as a live
  * one. Every response carries `x-payminto-simulated: 1`. The `deliver` hook lets the local stack make the delivery a
  * real NEP-141 transfer on its local chain, so the node's on-chain delivery check runs for real.
+ *
+ * A quote may also deliver USDC on an EVM payout destination (Base, Arbitrum, Ethereum, Polygon, Optimism) to an
+ * address. The `deliver` hook is never asked to do that (it delivers on NEAR): the fake records a simulated ERC-20
+ * Transfer instead and serves it over JSON-RPC at `/_fake/rpc/<chain>` (`eth_chainId`, `eth_blockNumber`,
+ * `eth_getTransactionReceipt`), so the node's delivery check off NEAR reads a receipt in simulated mode too.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
@@ -16,6 +25,7 @@ import { isAccountId } from "@payminto/chain";
 import { base58 } from "@scure/base";
 import { formatUnits, isOriginAddress } from "./checkout.ts";
 import type { FetchLike } from "./client.ts";
+import { ERC20_TRANSFER_TOPIC, evmPayoutProofMessage, isEvmAddress, isEvmPayoutChain, payoutDestinationOf, type EvmPayoutProofScope } from "./destination.ts";
 import { quoteSigningMessage } from "./signature.ts";
 import type { ExecutionStatus, OneClickToken, QuoteRequest, QuoteResponse, StatusResponse, SwapDetails, TransactionDetails } from "./types.ts";
 
@@ -29,10 +39,28 @@ export function signFakeQuote(r: QuoteResponse, seed: Uint8Array = FAKE_ONECLICK
   return r;
 }
 
+/** A public test private key for EVM payout proofs (the first account of the anvil and hardhat dev mnemonic). Never funded by this code. */
+export const FAKE_EVM_PAYOUT_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+/**
+ * What a wallet's `personal_sign` of the EVM payout proof gives, signed with a test private key: for tests and the local
+ * stack only. Answers the key's address (lowercased) and the signature.
+ */
+export async function signTestEvmPayoutProof(scope: Omit<EvmPayoutProofScope, "address">, privateKey: string = FAKE_EVM_PAYOUT_KEY): Promise<{ address: string; signature: string }> {
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const address = account.address.toLowerCase();
+  return { address, signature: await account.signMessage({ message: evmPayoutProofMessage({ ...scope, address }) }) };
+}
+
 /** The 1Click fee account the live API injected into `appFees` on 2026-11-10. */
 const LIVE_APP_FEE_RECIPIENT = "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd";
 /** The delivery fee to a NEAR account observed on every live quote (0.004628 USDC). */
 const WITHDRAW_FEE_USDC = 4_628n;
+/** Delivery fees to an address on an EVM destination, in USDC base units: close to the chains' gas, not recorded live. */
+const EVM_WITHDRAW_FEE_USDC: Record<string, bigint> = { base: 10_000n, arb: 10_000n, op: 10_000n, pol: 10_000n, eth: 400_000n };
+/** The address simulated EVM deliveries come from. */
+export const FAKE_EVM_SOLVER = "0x5011e70000000000000000000000000000c0ffee";
 
 /**
  * The recorded live token list, trimmed to the entries checkout offers or refuses. Prices are the live ones of
@@ -50,6 +78,8 @@ export const FAKE_TOKENS: OneClickToken[] = [
   { assetId: "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", decimals: 6, blockchain: "base", symbol: "USDC", price: 0.999553, priceUpdatedAt: "2026-11-10T15:18:00.903Z", contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", coingeckoId: "usd-coin" },
   { assetId: "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near", decimals: 6, blockchain: "sol", symbol: "USDC", price: 0.999553, priceUpdatedAt: "2026-11-10T15:18:00.903Z", contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", coingeckoId: "usd-coin" },
   { assetId: "nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near", decimals: 6, blockchain: "pol", symbol: "USDC", price: 0.999553, priceUpdatedAt: "2026-11-10T15:18:00.903Z", contractAddress: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", coingeckoId: "usd-coin" },
+  // A payout destination only (recorded 2026-11-13).
+  { assetId: "nep245:v2_1.omni.hot.tg:10_A2ewyUyDp6qsue1jqZsGypkCxRJ", decimals: 6, blockchain: "op", symbol: "USDC", price: 0.999553, priceUpdatedAt: "2026-11-10T15:18:00.903Z", contractAddress: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", coingeckoId: "usd-coin" },
 ];
 
 /** Per origin chain: refund fee in USD and the time estimate in seconds, close to what the live quotes showed. */
@@ -87,6 +117,9 @@ export type FakeOneClickOptions = {
 };
 
 export type FakeResponse = { status: number; headers: Record<string, string>; body: string };
+
+/** A simulated ERC-20 delivery on an EVM chain, as `eth_getTransactionReceipt` serves it. */
+type EvmTx = { hash: string; block: number; token: string; from: string; to: string; amount: bigint };
 
 type Swap = {
   response: QuoteResponse;
@@ -138,6 +171,9 @@ export class FakeOneClick {
   readonly #tokens: OneClickToken[];
   readonly #log: (line: string) => void;
   readonly #swaps = new Map<string, Swap>();
+  /** Simulated EVM transactions by chain and hash, and each chain's block height. */
+  readonly #evmTxs = new Map<string, Map<string, EvmTx>>();
+  readonly #evmHeads = new Map<string, number>();
   readonly #inflight = new Set<Promise<void>>();
   #offsetMs = 0;
   #requests = 0;
@@ -212,7 +248,7 @@ export class FakeOneClick {
   }
 
   /** What `POST /_fake/deposits` does: a deposit of `amount` (origin base units) arrived at the address. */
-  async deposit(depositAddress: string, amount: bigint, o: { txHash?: string; fail?: boolean } = {}): Promise<ExecutionStatus> {
+  async deposit(depositAddress: string, amount: bigint, o: { txHash?: string; fail?: boolean; slippage?: boolean } = {}): Promise<ExecutionStatus> {
     const s = this.#swaps.get(depositAddress);
     if (!s) throw new HttpError(404, `Deposit address ${depositAddress} not found`);
     if (amount <= 0n) throw new HttpError(400, "amount must be positive");
@@ -231,6 +267,15 @@ export class FakeOneClick {
       this.#run(s, async () => {
         await sleep(this.#stepMs);
         this.#set(s, "FAILED");
+      });
+    } else if (o.slippage && s.deposited >= minIn) {
+      // The price moved past the slippage tolerance during the swap: the whole deposit goes back, less the refund fee.
+      this.#run(s, async () => {
+        this.#set(s, "KNOWN_DEPOSIT_TX");
+        await sleep(this.#stepMs);
+        this.#set(s, "PROCESSING");
+        await sleep(this.#stepMs);
+        this.#refund(s, s.deposited, "SLIPPAGE");
       });
     } else if (s.deposited < minIn) {
       this.#set(s, "INCOMPLETE_DEPOSIT");
@@ -266,15 +311,29 @@ export class FakeOneClick {
     const q = s.response.quote;
     const req = s.response.quoteRequest;
     const amount = BigInt(q.amountOut);
-    let tx: { txHash: string; explorerUrl?: string };
-    if (this.#deliver) tx = await this.#deliver({ recipient: req.recipient, amount, depositAddress: q.depositAddress!, destinationAsset: req.destinationAsset, correlationId: s.response.correlationId });
-    else tx = { txHash: this.#hash(`delivery ${q.depositAddress}`, "near") };
+    const dest = payoutDestinationOf(req.destinationAsset);
+    if (dest && isEvmPayoutChain(dest.blockchain)) {
+      // Off NEAR: 1Click settles on NEAR, then withdraws to the destination chain. The withdrawal is simulated here.
+      const hash = this.#hash(`delivery ${q.depositAddress}`, dest.blockchain);
+      const block = (this.#evmHeads.get(dest.blockchain) ?? 30_000_000) + 1;
+      this.#evmHeads.set(dest.blockchain, block);
+      if (!this.#evmTxs.has(dest.blockchain)) this.#evmTxs.set(dest.blockchain, new Map());
+      this.#evmTxs.get(dest.blockchain)!.set(hash, { hash, block, token: dest.contractAddress, from: FAKE_EVM_SOLVER, to: req.recipient.toLowerCase(), amount });
+      s.destinationTxs.push({ hash, explorerUrl: "" });
+      s.nearTxs.push(this.#hash(`withdrawal ${q.depositAddress}`, "near"));
+      this.#log(`delivered ${amount} USDC on ${dest.blockchain} to ${req.recipient} in simulated tx ${hash}`);
+    } else {
+      let tx: { txHash: string; explorerUrl?: string };
+      if (this.#deliver) tx = await this.#deliver({ recipient: req.recipient, amount, depositAddress: q.depositAddress!, destinationAsset: req.destinationAsset, correlationId: s.response.correlationId });
+      else tx = { txHash: this.#hash(`delivery ${q.depositAddress}`, "near") };
+      s.destinationTxs.push({ hash: tx.txHash, explorerUrl: tx.explorerUrl ?? "" });
+      s.nearTxs.push(tx.txHash);
+    }
     s.delivered = amount;
-    s.destinationTxs.push({ hash: tx.txHash, explorerUrl: tx.explorerUrl ?? "" });
-    s.nearTxs.push(tx.txHash);
-    // EXACT_OUTPUT: what is above amountIn goes back to the refund address after the swap.
-    const excess = s.deposited - BigInt(q.amountIn);
-    if (excess > 0n) s.refunded = excess;
+    // EXACT_OUTPUT: what the swap did not use goes back to the refund address after it. The swap is modelled as needing
+    // exactly minAmountIn, so the unused price buffer comes back too, not only what is above amountIn.
+    const unused = s.deposited - BigInt(q.minAmountIn);
+    if (unused > 0n) s.refunded = unused;
     this.#set(s, "SUCCESS");
   }
 
@@ -349,13 +408,19 @@ export class FakeOneClick {
         const b = parse();
         const amount = String(b.amount ?? "");
         if (!/^[1-9][0-9]*$/.test(amount)) throw new HttpError(400, "amount must be a positive integer of origin base units");
-        const status = await this.deposit(String(b.depositAddress ?? ""), BigInt(amount), { ...(typeof b.txHash === "string" ? { txHash: b.txHash } : {}), fail: b.fail === true });
+        const status = await this.deposit(String(b.depositAddress ?? ""), BigInt(amount), { ...(typeof b.txHash === "string" ? { txHash: b.txHash } : {}), fail: b.fail === true, slippage: b.slippage === true });
         return json(200, { depositAddress: b.depositAddress, status });
       }
       if (method === "POST" && path === "/_fake/clock") {
         const b = parse();
         if (typeof b.advanceMs === "number") this.#offsetMs += b.advanceMs;
         return json(200, { now: new Date(this.now()).toISOString() });
+      }
+      const rpc = /^\/_fake\/rpc\/([a-z]+)$/.exec(path);
+      if (rpc && method === "POST") {
+        const dest = payoutDestinationOf(rpc[1]!);
+        if (!dest || !isEvmPayoutChain(dest.blockchain)) return fail(404, `no simulated chain ${rpc[1]}`);
+        return json(200, this.#evmRpc(dest.blockchain, dest.chainId!, parse()));
       }
       if (method === "GET" && path === "/_fake/state") {
         return json(200, { swaps: [...this.#swaps.entries()].map(([address, s]) => ({ depositAddress: address, status: s.status, history: s.history, deposited: s.deposited.toString() })) });
@@ -380,17 +445,26 @@ export class FakeOneClick {
     const dest = this.#tokens.find((t) => t.assetId === r.destinationAsset);
     if (!origin) throw new HttpError(400, `Token ${r.originAsset} is not supported`);
     if (!dest) throw new HttpError(400, `Token ${r.destinationAsset} is not supported`);
-    if (r.swapType !== "EXACT_OUTPUT" || r.depositType !== "ORIGIN_CHAIN" || r.refundType !== "ORIGIN_CHAIN") throw new HttpError(400, "this fake simulates EXACT_OUTPUT from an origin chain only");
-    if (!this.#validRefund(origin.blockchain, String(r.refundTo))) throw new HttpError(400, "refundTo is not valid");
-    if (dest.blockchain !== "near" || r.recipientType !== "DESTINATION_CHAIN") throw new HttpError(400, "this fake delivers to NEAR accounts only");
+    if (r.swapType !== "EXACT_OUTPUT" || r.depositType !== "ORIGIN_CHAIN" || (r.refundType !== "ORIGIN_CHAIN" && r.refundType !== "INTENTS")) throw new HttpError(400, "this fake simulates EXACT_OUTPUT from an origin chain only");
+    // INTENTS refunds go to a NEAR account's balance on the Verifier, as the live API takes them.
+    if (r.refundType === "INTENTS" ? !isAccountId(String(r.refundTo)) : !this.#validRefund(origin.blockchain, String(r.refundTo))) throw new HttpError(400, "refundTo is not valid");
+    if (r.recipientType !== "DESTINATION_CHAIN") throw new HttpError(400, "this fake delivers to a destination chain only");
     const recipient = String(r.recipient);
-    const implicit = /^[0-9a-f]{64}$/.test(recipient) || /^0x[0-9a-f]{40}$/.test(recipient);
-    // The live API answers a named account that does not exist with a bare 500-style message and HTTP 400.
-    if (!isAccountId(recipient) || (!implicit && !(await this.#accountExists(recipient)))) throw new HttpError(400, "Internal server error");
+    let withdrawFee = WITHDRAW_FEE_USDC;
+    if (dest.blockchain === "near") {
+      const implicit = /^[0-9a-f]{64}$/.test(recipient) || /^0x[0-9a-f]{40}$/.test(recipient);
+      // The live API answers a named account that does not exist with a bare 500-style message and HTTP 400.
+      if (!isAccountId(recipient) || (!implicit && !(await this.#accountExists(recipient)))) throw new HttpError(400, "Internal server error");
+    } else {
+      const payout = payoutDestinationOf(dest.assetId);
+      if (!payout || !isEvmPayoutChain(payout.blockchain)) throw new HttpError(400, `this fake does not deliver ${dest.symbol} on ${dest.blockchain}`);
+      if (!isEvmAddress(recipient)) throw new HttpError(400, "recipient is not valid");
+      withdrawFee = EVM_WITHDRAW_FEE_USDC[payout.blockchain] ?? WITHDRAW_FEE_USDC;
+    }
 
     const amount = BigInt(r.amount);
     const usdcPrice = dest.price;
-    const outUsd = (Number(amount + WITHDRAW_FEE_USDC) / 10 ** dest.decimals) * usdcPrice;
+    const outUsd = (Number(amount + withdrawFee) / 10 ** dest.decimals) * usdcPrice;
     if (origin.blockchain === "tron" && outUsd < TRON_MIN_USD) throw new HttpError(400, `Temporary swap limits: minimum swap amount is $${TRON_MIN_USD}`);
     if (origin.blockchain === "btc" && amount < BTC_BRIDGE_MIN_OUT) throw new HttpError(400, `Amount is too low for bridge, try at least ${BTC_BRIDGE_MIN_OUT}`);
     const stable = /^USD/.test(origin.symbol);
@@ -399,7 +473,8 @@ export class FakeOneClick {
     const minAmountIn = BigInt(Math.ceil((minInUsd / origin.price) * 10 ** origin.decimals));
     const amountIn = BigInt(Math.ceil(Number(minAmountIn) * (1 + r.slippageTolerance / 10_000)));
     const terms = CHAIN_TERMS[origin.blockchain] ?? { refundUsd: 0.01, seconds: 60 };
-    const refundFee = BigInt(Math.ceil((terms.refundUsd / origin.price) * 10 ** origin.decimals));
+    // A refund to a NEAR Intents balance stays inside NEAR Intents: the live API quotes it with no refund fee.
+    const refundFee = r.refundType === "INTENTS" ? 0n : BigInt(Math.ceil((terms.refundUsd / origin.price) * 10 ** origin.decimals));
 
     const { dry, ...rest } = r;
     const quoteRequest: QuoteRequest = {
@@ -423,7 +498,7 @@ export class FakeOneClick {
       minAmountOut: amount.toString(),
       timeEstimate: terms.seconds,
       refundFee: refundFee.toString(),
-      withdrawFee: WITHDRAW_FEE_USDC.toString(),
+      withdrawFee: withdrawFee.toString(),
     };
     if (!dry) {
       const seed = createHash("sha256").update(`deposit ${correlationId}`).digest();
@@ -460,6 +535,31 @@ export class FakeOneClick {
       this.#log(`wet quote ${correlationId}: deposit ${quote.amountIn} of ${origin.symbol} on ${origin.blockchain} to ${address}`);
     }
     return response;
+  }
+
+  /** One JSON-RPC request to a simulated EVM chain: only the reads the node's delivery check makes. */
+  #evmRpc(chain: string, chainId: number, b: Record<string, unknown>): Record<string, unknown> {
+    const id = b.id ?? null;
+    const hex = (n: number | bigint) => `0x${n.toString(16)}`;
+    const ok = (result: unknown) => ({ jsonrpc: "2.0", id, result });
+    const params = Array.isArray(b.params) ? b.params : [];
+    if (b.method === "eth_chainId") return ok(hex(chainId));
+    // Well past every delivery, so each one has the confirmations a reader asks for.
+    if (b.method === "eth_blockNumber") return ok(hex((this.#evmHeads.get(chain) ?? 30_000_000) + 64));
+    if (b.method === "eth_getTransactionReceipt") {
+      const t = this.#evmTxs.get(chain)?.get(String(params[0] ?? "").toLowerCase());
+      if (!t) return ok(null);
+      const word = (v: string) => `0x${v.replace(/^0x/, "").toLowerCase().padStart(64, "0")}`;
+      return ok({
+        transactionHash: t.hash,
+        blockNumber: hex(t.block),
+        status: "0x1",
+        from: t.from,
+        to: t.token,
+        logs: [{ address: t.token, topics: [ERC20_TRANSFER_TOPIC, word(t.from), word(t.to)], data: word(t.amount.toString(16)), transactionHash: t.hash, blockNumber: hex(t.block), logIndex: "0x0", removed: false }],
+      });
+    }
+    return { jsonrpc: "2.0", id, error: { code: -32601, message: `the simulated ${chain} chain does not serve ${String(b.method)}` } };
   }
 
   #validRefund(chain: string, address: string): boolean {
@@ -501,6 +601,9 @@ export class FakeOneClick {
       if (s.refundReason) d.refundReason = s.refundReason;
     }
     if (req.referral) d.referral = req.referral;
-    return { correlationId: s.response.correlationId, quoteResponse: s.response, status: s.status, updatedAt: new Date(s.updatedAt).toISOString(), swapDetails: d };
+    // As the live API answers (seen 2026-11-14): the embedded quote has its signature and no correlationId, and the
+    // status carries a correlationId of its own request.
+    const { correlationId: _quoteId, ...embedded } = s.response;
+    return { correlationId: randomUUID(), quoteResponse: embedded, status: s.status, updatedAt: new Date(s.updatedAt).toISOString(), swapDetails: d };
   }
 }

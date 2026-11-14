@@ -14,6 +14,7 @@ import {
   incompleteCopy,
   inFlight,
   initialTab,
+  intentsAnnouncement,
   intentsStage,
   linkPayCopy,
   mainnetTxUrl,
@@ -23,14 +24,28 @@ import {
   payoutChecklist,
   payTabs,
   refundAddressProblem,
+  refundKept,
   refundReasonText,
   returnedCopy,
+  sendNow,
   shortAmount,
   showsDeposit,
   timeEstimateText,
   unitsOf,
   verificationText,
+  depositFeeLines,
+  depositOnItsWay,
+  excessReturned,
+  isInFlightError,
+  manualRefundFromError,
+  manualRefundOf,
+  originTxProblem,
+  returnedLabel,
+  showsTabBar,
+  WALLET_HELD,
+  wrongDepositCopy,
 } from "@/lib/intents";
+import { ApiError } from "@/lib/http";
 import { checkoutViewSchema, intentsPayoutSchema, intentsQuoteSchema, type CheckoutView, type IntentsQuote, type IntentsQuoteStatus } from "@/lib/schemas";
 
 const NOW = Date.parse("2026-11-10T22:08:01.512Z");
@@ -245,11 +260,27 @@ describe("screen E copy, exactly as designed", () => {
     const q = quote({ status: "incomplete_deposit", send_exactly: { amount: "5010154", formatted: "5.010154", symbol: "USDC" }, deposited: { amount: "3000000", formatted: "3.000000", symbol: "USDC" }, refund_to: "0x12...ab", deadline: "2026-11-10T15:49:00.000Z" });
     expect(incompleteCopy(q)).toBe("We received 3.00 of 5.010154 USDC. Send the remaining 2.010154 USDC to the same address before 15:49 UTC, or it will be returned to 0x12...ab.");
   });
+  it("the amount to send now: the full amount first, only what is missing after a short deposit", () => {
+    expect(sendNow(quote())).toEqual({ amount: "4.509585", symbol: "USDC", remaining: false });
+    const short = quote({ status: "incomplete_deposit", send_exactly: { amount: "5010154", formatted: "5.010154", symbol: "USDC" }, deposited: { amount: "3000000", formatted: "3.000000", symbol: "USDC" } });
+    expect(sendNow(short)).toEqual({ amount: "2.010154", symbol: "USDC", remaining: true });
+    // More than enough already arrived: nothing is left to send, so the screen never asks for zero or a negative amount.
+    expect(sendNow({ ...short, deposited: { amount: "6000000", formatted: "6.000000", symbol: "USDC" } })).toEqual({ amount: "5.010154", symbol: "USDC", remaining: false });
+  });
   it("returned: amount, address, chain and the reason in plain words", () => {
     const q = quote({ status: "refunded", refunded: { amount: "4997600", formatted: "4.997600", symbol: "USDC" }, refund_to: "0x12...ab", refund_reason: "PARTIAL_DEPOSIT" });
-    expect(returnedCopy(q)).toBe("Your deposit was returned: 4.9976 USDC sent back to 0x12...ab on Base. Reason: the deposit was below the required amount.");
-    expect(returnedCopy({ ...q, refunded: null, refund_reason: null })).toBe("Your deposit was returned to 0x12...ab on Base.");
+    // The screen's heading already says "Your deposit was returned", so the line under it does not say it again.
+    expect(returnedCopy(q)).toBe("4.9976 USDC went back to 0x12...ab on Base, because the deposit was below the required amount.");
+    expect(returnedCopy({ ...q, refunded: null, refund_reason: null })).toBe("It went back to 0x12...ab on Base.");
     expect(refundReasonText("SOMETHING_NEW")).toBe("1Click reported SOMETHING_NEW");
+    // The live region has no heading, so it says it in full.
+    expect(intentsAnnouncement(q)).toBe("Your deposit was returned. 4.9976 USDC went back to 0x12...ab on Base, because the deposit was below the required amount.");
+  });
+  it("returned: what NEAR Intents kept, so sent and returned add up", () => {
+    const q = quote({ status: "refunded", deposited: { amount: "1204100", formatted: "1.204100", symbol: "USDC" }, refunded: { amount: "1194090", formatted: "1.194090", symbol: "USDC" } });
+    expect(refundKept(q)).toBe("0.01001 USDC");
+    expect(refundKept({ ...q, refunded: null })).toBeNull();
+    expect(refundKept({ ...q, refunded: { amount: "1204100", formatted: "1.204100", symbol: "USDC" } })).toBeNull();
   });
   it("failed: who to contact and the reference", () => {
     expect(failedCopy(view())).toBe("This payment could not be completed. Contact hello@northwind.example with reference pay_boxykimcem2hjper3q3nb53l.");
@@ -324,13 +355,132 @@ describe("the business's side", () => {
 });
 
 describe("the payment link page", () => {
-  const offered = { mode: "live" as const, label: "Live - NEAR mainnet", offered: true, reason: null };
+  const offered = { mode: "simulated" as const, label: "Simulated - no real money", offered: true, reason: null };
+  const live = { mode: "live" as const, label: "Live - NEAR mainnet", offered: true, reason: null };
   it("says the buyer pays from a NEAR wallet, or from another chain when the link offers it", () => {
-    expect(linkPayCopy(null)).toEqual({ lead: "Next you pay from your NEAR wallet. A plain transfer from an exchange cannot carry this order, so it would not count as this payment.", chip: "Pay from your NEAR wallet" });
+    expect(linkPayCopy(null)).toEqual({ lead: "Next you pay from your NEAR wallet. A plain transfer from an exchange cannot carry this order, so it would not count as this payment.", chip: "Pay from your NEAR wallet", icon: "wallet" });
     expect(linkPayCopy({ ...offered, offered: false, reason: "This business does not take payments from other chains." }).chip).toBe("Pay from your NEAR wallet");
     const any = linkPayCopy(offered);
     expect(any.chip).toBe("Pay from NEAR or any chain");
+    expect(any.icon).toBe("globe");
     expect(any.lead).toBe("Next you pay from your NEAR wallet, or from another chain with USDC, USDT or ETH through NEAR Intents.");
     expect(any.lead).not.toContain("pay from your NEAR wallet.");
+  });
+  it("in live mode the link pays from another chain only, so it never mentions the NEAR wallet", () => {
+    const any = linkPayCopy(live);
+    expect(any).toEqual({ lead: "Pay with USDC, USDT or ETH on Base, Ethereum, Arbitrum, Solana or Polygon.", chip: "Pay from any chain", icon: "globe" });
+    const off = linkPayCopy({ ...live, offered: false, reason: "This business does not take payments from other chains yet." });
+    expect(off.lead).toBe("This business does not take payments from other chains yet.");
+    expect(off.lead).not.toMatch(/NEAR wallet/);
+    expect(linkPayCopy({ ...live, offered: false, reason: null }).lead).toBe("Paying from another chain is not available for this link right now.");
+  });
+});
+
+describe("live mode: Any chain alone has no tab bar (Q2)", () => {
+  it("shows the tab bar only when the business also offers the NEAR wallet", () => {
+    const only = view({ methods: ["oneclick"] });
+    expect(payTabs(only, false)).toEqual(["oneclick"]);
+    expect(initialTab(only, false)).toBe("oneclick");
+    expect(showsTabBar(only, payTabs(only, false))).toBe(false);
+    expect(showsTabBar(view(), payTabs(view(), true))).toBe(true);
+    expect(showsTabBar(view({ methods: ["wallet"] }), ["wallet"])).toBe(false);
+    // The wallet is offered but cannot pay this payment any more: its tab stays, disabled, so the panel keeps its shape.
+    expect(showsTabBar(view(), ["oneclick"])).toBe(true);
+  });
+});
+
+describe("a deposit from another chain on its way holds the NEAR wallet (A5)", () => {
+  const withQuote = (q: IntentsQuote) => view({ intents: { ...view().intents!, active_quote: q } });
+  it("holds it while the deposit was seen, converts or is delivered, and after a short deposit", () => {
+    for (const status of ["deposit_detected", "processing", "delivered"] as const) expect(depositOnItsWay(withQuote(quote({ status })))).toBe(true);
+    expect(depositOnItsWay(withQuote(quote({ status: "incomplete_deposit", deposited: { amount: "3000000", formatted: "3.000000", symbol: "USDC" } })))).toBe(true);
+  });
+  it("lets the buyer pay with the wallet before anything was sent, and once it ended", () => {
+    expect(depositOnItsWay(view())).toBe(false);
+    for (const status of ["awaiting_deposit", "confirmed", "refunded", "failed", "expired"] as const) expect(depositOnItsWay(withQuote(quote({ status })))).toBe(false);
+    expect(depositOnItsWay(withQuote(quote({ status: "incomplete_deposit", deposited: null })))).toBe(false);
+    expect(depositOnItsWay(view({ intents: null }))).toBe(false);
+  });
+  it("keeps the wallet tab, so it can say why it does not pay", () => {
+    const busy = withQuote(quote({ status: "processing" }));
+    expect(payTabs(busy, false)).toEqual(["wallet", "oneclick"]);
+    expect(initialTab(busy, false)).toBe("oneclick");
+    expect(payTabs({ ...busy, methods: ["oneclick"] }, false)).toEqual(["oneclick"]);
+    expect(WALLET_HELD).toBe("A payment from another chain is on its way. Wait for it to finish.");
+  });
+  it("treats the node's 409 INTENTS_IN_FLIGHT the same way", () => {
+    expect(isInFlightError(new ApiError(409, "INTENTS_IN_FLIGHT", "A deposit is on its way."))).toBe(true);
+    expect(isInFlightError(new ApiError(409, "PAYMENT_NOT_OPEN", "x"))).toBe(false);
+    expect(isInFlightError(new Error("INTENTS_IN_FLIGHT"))).toBe(false);
+  });
+});
+
+describe("the deposit screen's fee lines (B1)", () => {
+  it("adds the refund fee when the quote carries one", () => {
+    const rows = depositFeeLines(quote().fees, "Northwind Coffee");
+    expect(rows.map((r) => r.label)).toEqual(["Northwind Coffee receives", "Swap and delivery cost", "Price buffer", "Refund fee if your deposit is returned", "Arrives in"]);
+    const fee = rows.find((r) => r.label === "Refund fee if your deposit is returned")!;
+    expect(fee.value).toBe("0.002402 USDC");
+    expect(fee.hint).toBe("Kept by NEAR Intents only if your deposit comes back.");
+    expect(rows[0]!.value).toBe("4.50 USDC on NEAR");
+    expect(rows[1]!.value).toBe("0.00508 USDC");
+  });
+  it("leaves it out when there is none", () => {
+    expect(depositFeeLines({ ...quote().fees, refund_fee: null }, "Northwind Coffee").map((r) => r.label)).not.toContain("Refund fee if your deposit is returned");
+  });
+});
+
+describe("the excess or unused buffer 1Click returned on a paid payment (B2)", () => {
+  const paid = quote({ status: "confirmed", refunded: { amount: "4505", formatted: "0.004505", symbol: "USDC" }, refund_to: "0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f" });
+  it("tells the buyer what came back and where", () => {
+    expect(excessReturned(paid)).toEqual({ amount: "0.004505 USDC", to: "0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", chain: "Base" });
+    expect(excessReturned({ ...paid, refunded: null })).toBeNull();
+    // A returned deposit is not an excess: the payment was not paid.
+    expect(excessReturned({ ...paid, status: "refunded" })).toBeNull();
+  });
+  it("calls it an excess for the business, never a refund", () => {
+    expect(returnedLabel(paid)).toBe("Excess returned to the buyer");
+    expect(returnedLabel({ ...paid, status: "refunded" })).toBe("Returned to buyer");
+    expect(returnedLabel(paid)).not.toMatch(/refund/i);
+  });
+});
+
+describe("wrong token, wrong network or too late (B4)", () => {
+  it("names the support email and the deposit address in one sentence", () => {
+    expect(wrongDepositCopy(view(), quote())).toBe("Sent the wrong token, on the wrong network or too late? Contact hello@northwind.example and quote the deposit address 0x87151c5ac911a4459762ce215649313cd369dc05.");
+  });
+  it("falls back to the business's name", () => {
+    expect(wrongDepositCopy({ merchant: { name: "Northwind Coffee", support_email: null } }, quote())).toContain("Contact Northwind Coffee and quote");
+    expect(wrongDepositCopy(view(), quote())).not.toMatch(/\u2014/);
+  });
+});
+
+describe("refunds of an any-chain payment are sent by hand (Q1)", () => {
+  const paid = quote({ status: "confirmed", refund_to: "0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", origin_txs: [{ hash: `0x${"ab".repeat(32)}`, explorer_url: `https://basescan.org/tx/0x${"ab".repeat(32)}` }] });
+  const payment = { method: "oneclick" as const, payer: "base:0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", intents: { mode: "simulated" as const, label: "Simulated - no real money", quotes: [quote({ status: "expired", id: "iq_old" }), paid] } };
+  it("reads the buyer's refund address, chain, token and deposit from the quote that paid", () => {
+    expect(manualRefundOf(payment, 4500000n)).toEqual({ chain: "base", chain_name: "Base", symbol: "USDC", refund_to: "0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", deposit_tx: paid.origin_txs[0], refundable: "4500000" });
+  });
+  it("falls back to the payer when the quotes are missing, and is null for a NEAR payment", () => {
+    expect(manualRefundOf({ ...payment, payer: "sol:So11111111111111111111111111111111111111112", intents: null }, 1n)).toEqual({ chain: "sol", chain_name: "Solana", symbol: null, refund_to: "So11111111111111111111111111111111111111112", deposit_tx: null, refundable: "1" });
+    expect(manualRefundOf({ method: "wallet", payer: "alice.testnet", intents: null }, 1n)).toBeNull();
+    expect(manualRefundOf({ method: "oneclick", payer: null, intents: null }, 1n)).toBeNull();
+  });
+  it("reads the details of 409 REFUND_MANUAL_REQUIRED, and nothing else", () => {
+    const details = { chain: "base", chain_name: "Base", symbol: "USDC", refund_to: "0x5f2b1c0e8a3d4b6f7a9c1e2d3b4a5f6e7d8c554f", deposit_tx: null, refundable: "4500000" };
+    expect(manualRefundFromError(new ApiError(409, "REFUND_MANUAL_REQUIRED", "Send it by hand.", details))).toEqual(details);
+    expect(manualRefundFromError(new ApiError(409, "REFUND_MANUAL_REQUIRED", "Send it by hand.", { chain: "base" }))).toBeNull();
+    expect(manualRefundFromError(new ApiError(422, "REFUND_TOO_LARGE", "x", details))).toBeNull();
+    expect(manualRefundFromError(new Error("x"))).toBeNull();
+  });
+  it("checks the transaction hash's format on the buyer's chain", () => {
+    expect(originTxProblem("base", "Base", `0x${"ab".repeat(32)}`)).toBeNull();
+    expect(originTxProblem("base", "Base", ` 0x${"AB".repeat(32)} `)).toBeNull();
+    expect(originTxProblem("base", "Base", "")).toBe("Enter the transaction hash on Base.");
+    expect(originTxProblem("eth", "Ethereum", "0x123")).toBe("That is not an Ethereum transaction hash. It is 0x followed by 64 characters, 0 to 9 and a to f.");
+    expect(originTxProblem("sol", "Solana", "5".repeat(88))).toBeNull();
+    expect(originTxProblem("sol", "Solana", `0x${"ab".repeat(32)}`)).toBe("That is not a Solana transaction signature. It is 64 to 90 letters and digits, like the one your wallet shows.");
+    expect(originTxProblem("xyz", "Xyz", "a".repeat(64))).toBeNull();
+    expect(originTxProblem("xyz", "Xyz", "not a hash!")).toBe("That does not look like a transaction hash on Xyz.");
   });
 });

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useApi, useCan } from "@/lib/session";
@@ -49,11 +51,18 @@ export function PayoutSettings() {
         title="Payout account"
         description="The wallet where your money arrives. Changing it needs a signature from the new wallet, so a stolen dashboard session cannot redirect your money."
         actions={
-          can("payout.change") && (
-            <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-              Change payout wallet
+          <>
+            <Button asChild size="sm" variant="ghost">
+              <Link href="/balance">
+                Balance <ArrowRight />
+              </Link>
             </Button>
-          )
+            {can("payout.change") && (
+              <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+                Change payout wallet
+              </Button>
+            )}
+          </>
         }
       >
         <Fields>
@@ -158,7 +167,8 @@ function MethodsPanel({ merchantId }: { merchantId: string }) {
   const can = useCan();
   // A business may only switch methods on and off (fees are the platform's), so only those switches are sent.
   const save = useMutation({
-    mutationFn: (rows: MethodRow[]) => api.operator.setMethodsEnabled(merchantId, rows),
+    // A locked method cannot change, so it is never sent (the node would refuse it with its reason).
+    mutationFn: (rows: MethodRow[]) => api.operator.setMethodsEnabled(merchantId, rows.filter((r) => !r.locked_reason)),
     onSuccess: () => {
       toast.success("Payment methods saved");
       setDraft(null);

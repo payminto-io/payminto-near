@@ -104,6 +104,13 @@ describe("payInQuoteRequest", () => {
     expect(() => payInQuoteRequest({ ...ok, slippageBps: 10_001 })).toThrow(/slippage/);
     expect(() => payInQuoteRequest({ ...ok, deadline: "yesterday" })).toThrow(/deadline/);
   });
+
+  it("returns a failed deposit to the business's NEAR Intents balance when no buyer address is given", () => {
+    const ok = { origin: BASE_USDC, amount: 5_000_000n, recipient: MERCHANT, slippageBps: 10, deadline: "2026-11-10T15:49:42.000Z", dry: true };
+    expect(payInQuoteRequest({ ...ok, refundTo: MERCHANT, refundType: "INTENTS" })).toMatchObject({ refundTo: MERCHANT, refundType: "INTENTS", depositType: "ORIGIN_CHAIN" });
+    expect(payInQuoteRequest({ ...ok, refundTo: "0x1111111111111111111111111111111111111111" }).refundType).toBe("ORIGIN_CHAIN");
+    expect(() => payInQuoteRequest({ ...ok, refundTo: "Not An Account", refundType: "INTENTS" })).toThrow(/NEAR account/);
+  });
 });
 
 describe("checkPayInQuote against the recorded live dry quotes", () => {

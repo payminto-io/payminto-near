@@ -18,3 +18,8 @@ coverage/
 
 # Receipt files that pnpm agent market work writes for pnpm verify:near --receipt receipts/<file>.
 /receipts/
+
+# Demo video: raw screen recordings, renders and the video tool's own dependencies stay local
+media/demo-video/raw/
+media/demo-video/out/
+media/demo-video/node_modules/

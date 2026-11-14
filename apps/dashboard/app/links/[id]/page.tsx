@@ -21,6 +21,7 @@ import { StatStrip } from "@/components/app/stat-strip";
 import { BlockSkeleton, EmptyState, ErrorState, RowsSkeleton } from "@/components/app/states";
 import { CopyAction } from "@/components/checkout/parts";
 import { ShareSheet } from "@/components/gateway/share-sheet";
+import { LinkQr } from "@/components/gateway/link-qr";
 import { EmbedSnippet } from "@/components/gateway/embed-snippet";
 import { PaymentRow } from "@/components/gateway/payment-row";
 
@@ -140,6 +141,9 @@ function LinkDetail() {
           )}
         </Panel>
         <div className="flex min-w-0 flex-col gap-5">
+          <Panel title="QR code" description="Print it or put it on a counter. Customers scan it to pay on their phone.">
+            <LinkQr url={l.url} file={`payminto-${l.slug}`} />
+          </Panel>
           <Panel title="Details">
             <Fields>
               <Field label="URL"><span className="hash text-[0.8125rem] break-all">{l.url}</span></Field>

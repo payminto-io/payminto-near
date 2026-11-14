@@ -20,7 +20,7 @@ import { nowIso } from "../store.ts";
 import type { Gateway } from "./index.ts";
 import type { MerchantRow } from "./merchants.ts";
 import { reconciliationOf, type QuoteRow } from "./intents.ts";
-import type { CreditRow, PaymentRow, RefundRow } from "./model.ts";
+import { ORIGIN_CHAINS, originExplorerUrl, type CreditRow, type PaymentRow, type RefundRow } from "./model.ts";
 
 /** The longest range one report covers. */
 export const REPORT_MAX_DAYS = 366;
@@ -81,6 +81,36 @@ const decimalOf2 = (v: string, decimals: number) => decimalOf(BigInt(v), decimal
 export const csvCell = reportCsvCell;
 
 type Range = { merchantId: string; from: string; to: string };
+
+/**
+ * An any-chain deposit that never reached the business: 1Click returned it to the buyer (`returned`, for example a
+ * short deposit) or the swap failed (`failed`). Amounts are in the origin token's own units; `refund_fee` is what 1Click
+ * kept of the deposit (deposited minus returned). Listed on its own CSV line under its payment, outside the totals.
+ */
+export type ReportDeposit = {
+  quote_id: string;
+  status: "returned" | "failed";
+  origin_asset: string;
+  chain: string;
+  chain_name: string;
+  symbol: string;
+  deposit_address: string;
+  /** The buyer's refund address, prefixed by its chain like a payer (`base:0x...`). */
+  refund_to: string;
+  deposited: string | null;
+  returned: string | null;
+  refund_fee: string | null;
+  base_units: { deposited: string | null; returned: string | null; refund_fee: string | null };
+  refund_reason: string | null;
+  origin_txs: Array<{ hash: string; explorer_url: string | null }>;
+  /** 1Click's transactions after the deposit (the return to the buyer, when it reports one). */
+  other_txs: Array<{ hash: string; explorer_url: string | null }>;
+  created_at: string;
+  updated_at: string;
+};
+
+/** A report row: the protocol's ReconciliationRow plus the any-chain deposits of the payment that never reached the business. */
+export type ReportRow = ReconciliationRow & { deposits: ReportDeposit[] };
 const IN_RANGE = "p.merchant_id = ? AND p.draft = 0 AND p.created_at >= ? AND p.created_at < ?";
 
 /**
@@ -97,7 +127,7 @@ export class ReconciliationReports {
     this.#publicUrl = publicUrl.replace(/\/+$/, "");
   }
 
-  build(m: MerchantRow, range: ReportRange): ReconciliationReport {
+  build(m: MerchantRow, range: ReportRange): ReconciliationReport & { rows: ReportRow[] } {
     const g = this.#g;
     const db = g.db;
     const r: Range = { merchantId: m.id, from: range.from, to: range.to };
@@ -120,8 +150,11 @@ export class ReconciliationReports {
         ...args,
       ),
     );
-    // Any-chain quotes that delivered: where the money came from (only with INTENTS_CHECKOUT on; the table exists anyway).
-    const quotes = group(db.all<QuoteRow>(`SELECT q.* FROM intents_quotes q JOIN payments p ON p.id = q.payment_id WHERE ${IN_RANGE} AND q.status = 'confirmed' ORDER BY q.created_at, q.rowid`, ...args));
+    // Any-chain quotes that delivered (where the money came from), and deposits that were returned or failed (only with
+    // INTENTS_CHECKOUT on; the table exists anyway).
+    const quotes = group(
+      db.all<QuoteRow>(`SELECT q.* FROM intents_quotes q JOIN payments p ON p.id = q.payment_id WHERE ${IN_RANGE} AND q.status IN ('confirmed', 'refunded', 'failed') ORDER BY q.created_at, q.rowid`, ...args),
+    );
     const rows = payments.map((p) => this.#row(p, credits.get(p.id) ?? [], refunds.get(p.id) ?? [], screened.get(p.id) ?? [], quotes.get(p.id) ?? []));
     return {
       object: "reconciliation_report",
@@ -155,12 +188,14 @@ export class ReconciliationReports {
     refunds: RefundRow[],
     rules: Array<{ rule: string }>,
     quotes: QuoteRow[],
-  ): ReconciliationRow {
+  ): ReportRow {
     const g = this.#g;
     const d = g.token.decimals;
-    const intents = reconciliationOf(quotes, decimalOf2);
-    // NEAR mainnet deliveries link to NearBlocks mainnet; the local chain of the simulated mode has no explorer.
-    const deliveryExplorer = (hash: string) => (intents?.live ? `https://nearblocks.io/txns/${hash}` : null);
+    const intents = reconciliationOf(quotes.filter((q) => q.status === "confirmed"), decimalOf2);
+    // A delivery links to the explorer of the chain it landed on: NearBlocks for NEAR, the chain's own explorer for USDC
+    // received on Base, Arbitrum and the rest. Simulated deliveries are on no public chain, so they have no link.
+    const destinationOf = (c: CreditRow) => quotes.find((q) => q.id === c.intents_quote_id)?.destination_chain ?? "near";
+    const deliveryExplorer = (chain: string, hash: string) => (!intents?.live ? null : chain === "near" ? `https://nearblocks.io/txns/${hash}` : originExplorerUrl(chain, hash));
     const fees = chargedFees(p);
     const refunded = sum(refunds.filter((f) => f.status === "succeeded"));
     const pending = sum(refunds.filter((f) => f.status === "pending"));
@@ -197,8 +232,9 @@ export class ReconciliationReports {
         amount_base_units: f.amount,
         status: f.status,
         approval: f.approval ?? "not_required",
-        tx_hash: f.tx_hash,
-        explorer_url: f.tx_hash ? explorerTx(g.network, f.tx_hash) : null,
+        // A manual refund of an any-chain payment: the business's transaction on the origin chain.
+        tx_hash: f.tx_hash ?? f.manual_tx_hash ?? null,
+        explorer_url: f.tx_hash ? explorerTx(g.network, f.tx_hash) : f.manual_chain && f.manual_tx_hash ? originExplorerUrl(f.manual_chain, f.manual_tx_hash) : null,
         created_at: f.created_at,
       })),
       transactions: [
@@ -218,17 +254,18 @@ export class ReconciliationReports {
         ...credits.map((c) => {
           const tx = c.tx_hash ?? c.batch_tx ?? null;
           const oneclick = c.method === "oneclick";
+          const destination = oneclick ? destinationOf(c) : "near";
           return {
             method: c.method as string,
             amount: decimalOf(BigInt(c.amount), d),
             amount_base_units: c.amount,
             status: c.status,
             tx_hash: tx,
-            explorer_url: tx ? (oneclick ? deliveryExplorer(tx) : explorerTx(g.network, tx)) : null,
+            explorer_url: tx ? (oneclick ? deliveryExplorer(destination, tx) : explorerTx(g.network, tx)) : null,
             batch_id: c.batch_id,
             call_id: c.call_id,
             receipt_proof_url: c.call_id && this.#publicUrl ? `${this.#publicUrl}/v1/receipts/${c.call_id}/proof` : null,
-            ...(oneclick ? { leg: "near_delivery" as const } : {}),
+            ...(oneclick ? { leg: destination === "near" ? ("near_delivery" as const) : ("destination_delivery" as const) } : {}),
           };
         }),
       ],
@@ -239,6 +276,35 @@ export class ReconciliationReports {
       origin_asset: intents?.origin_asset ?? null,
       origin_amount: intents?.origin_amount ?? null,
       deposit_address: intents?.deposit_address ?? null,
+      deposits: quotes.filter((q) => q.status === "refunded" || q.status === "failed").map((q) => this.#deposit(q)),
+    };
+  }
+
+  #deposit(q: QuoteRow): ReportDeposit {
+    const units = (v: string | null) => (v === null ? null : decimalOf(BigInt(v), q.origin_decimals));
+    const fee = q.deposited_amount !== null && q.refunded_amount !== null ? BigInt(q.deposited_amount) - BigInt(q.refunded_amount) : null;
+    // Deposits are on the origin chain, so a missing explorer link is built for it; other transactions keep 1Click's.
+    const txs = (json: string, fallback: (hash: string) => string | null) =>
+      (JSON.parse(json) as Array<{ hash: string; explorerUrl?: string }>).map((t) => ({ hash: t.hash, explorer_url: t.explorerUrl || fallback(t.hash) }));
+    const fee_ = fee === null || fee < 0n ? null : fee.toString();
+    return {
+      quote_id: q.id,
+      status: q.status === "refunded" ? "returned" : "failed",
+      origin_asset: q.origin_asset,
+      chain: q.origin_chain,
+      chain_name: this.#g.intents?.kit.originOf(q.origin_asset)?.chainName ?? ORIGIN_CHAINS[q.origin_chain]?.name ?? q.origin_chain,
+      symbol: q.origin_symbol,
+      deposit_address: q.deposit_address,
+      refund_to: `${q.origin_chain}:${q.refund_to}`,
+      deposited: units(q.deposited_amount),
+      returned: units(q.refunded_amount),
+      refund_fee: units(fee_),
+      base_units: { deposited: q.deposited_amount, returned: q.refunded_amount, refund_fee: fee_ },
+      refund_reason: q.refund_reason,
+      origin_txs: txs(q.origin_txs, (hash) => originExplorerUrl(q.origin_chain, hash)),
+      other_txs: txs(q.destination_txs, () => null),
+      created_at: q.created_at,
+      updated_at: q.updated_at,
     };
   }
 
@@ -299,7 +365,7 @@ export class ReconciliationReports {
     };
   }
 
-  csv(report: ReconciliationReport): string {
+  csv(report: ReconciliationReport & { rows: ReportRow[] }): string {
     const lines = [REPORT_CSV_COLUMNS.map(csvCell).join(",")];
     const join = (xs: Array<string | null>) => xs.filter((x): x is string => !!x).join(" ");
     for (const row of report.rows) {
@@ -329,6 +395,30 @@ export class ReconciliationReports {
         deposit_address: row.deposit_address,
       };
       lines.push(REPORT_CSV_COLUMNS.map((k) => csvCell(cells[k])).join(","));
+      // Returned and failed any-chain deposits, each on its own line under its payment: no money reached the business,
+      // so the money columns stay empty and the totals do not count them.
+      for (const dep of row.deposits) {
+        const amount = (v: string | null) => (v === null ? "unknown" : `${v} ${dep.symbol}`);
+        const line: Partial<Record<ReportCsvColumn, string | null>> = {
+          payment_id: row.payment_id,
+          reference: row.reference,
+          link_id: row.link_id,
+          description:
+            `Deposit ${dep.status === "returned" ? "returned" : "failed"}, sent back to ${dep.refund_to}: deposited ${amount(dep.deposited)}, ` +
+            `returned ${amount(dep.returned)}, refund fee kept ${amount(dep.refund_fee)}${dep.refund_reason ? ` (${dep.refund_reason})` : ""}`,
+          created_at: dep.created_at,
+          status: dep.status === "returned" ? "deposit_returned" : "deposit_failed",
+          method: "oneclick",
+          payer: dep.refund_to,
+          currency: `${dep.symbol} (${dep.chain_name})`,
+          tx_hashes: join([...new Set([...dep.origin_txs, ...dep.other_txs].map((t) => t.hash))]),
+          explorer_urls: join([...new Set([...dep.origin_txs, ...dep.other_txs].map((t) => t.explorer_url))]),
+          origin_asset: dep.origin_asset,
+          origin_amount: dep.deposited === null ? null : `${dep.deposited} ${dep.symbol}`,
+          deposit_address: dep.deposit_address,
+        };
+        lines.push(REPORT_CSV_COLUMNS.map((k) => csvCell(line[k] ?? null)).join(","));
+      }
     }
     // The totals row: money columns only (prices of unpaid payments are not money received).
     const t = report.totals;

@@ -114,11 +114,51 @@ describe("the simulated swap", () => {
     await fake.idle();
     const s: StatusResponse = await client.status(address);
     expect(s.status).toBe("SUCCESS");
-    expect(s.quoteResponse).toEqual(res);
+    // As the live API answers: the same signed quote, without its correlationId; the status has an id of its own.
+    const { correlationId: quoteId, ...signed } = res;
+    expect(s.quoteResponse).toEqual(signed);
+    expect(s.correlationId).not.toBe(quoteId);
     expect(s.swapDetails).toMatchObject({ amountOut: "5000000", depositedAmount: res.quote.amountIn, destinationChainTxHashes: [{ hash: `DeliveryTx${delivered.length}` }], referral: "payminto" });
     expect(s.swapDetails.originChainTxHashes).toHaveLength(1);
     expect(delivered.at(-1)).toEqual({ recipient: "shop.near", amount: 5_000_000n });
     expect(fake.history(address)).toEqual(["PENDING_DEPOSIT", "KNOWN_DEPOSIT_TX", "PROCESSING", "SUCCESS"]);
+    // EXACT_OUTPUT: the unused price buffer (amountIn above minAmountIn) goes back to the refund address after the swap.
+    expect(s.swapDetails.refundedAmount).toBe(String(BigInt(res.quote.amountIn) - BigInt(res.quote.minAmountIn)));
+    expect(s.swapDetails.refundReason).toBeUndefined();
+  });
+
+  it("on SUCCESS returns everything above what the swap needed (minAmountIn): the excess and the unused buffer", async () => {
+    const { res } = await wetQuote("shop.near");
+    const address = res.quote.depositAddress!;
+    const sent = BigInt(res.quote.amountIn) + 2_000_000n;
+    await fake.deposit(address, sent);
+    await fake.idle();
+    const s = await client.status(address);
+    expect(s.status).toBe("SUCCESS");
+    expect(s.swapDetails).toMatchObject({ amountOut: "5000000", depositedAmount: String(sent), refundedAmount: String(sent - BigInt(res.quote.minAmountIn)) });
+    // A deposit of exactly minAmountIn is used in full: nothing comes back.
+    const exact = await wetQuote("shop.near");
+    await fake.deposit(exact.res.quote.depositAddress!, BigInt(exact.res.quote.minAmountIn));
+    await fake.idle();
+    const e = await client.status(exact.res.quote.depositAddress!);
+    expect(e.status).toBe("SUCCESS");
+    expect(e.swapDetails.refundedAmount).toBeUndefined();
+  });
+
+  it("returns the deposit less the refund fee with reason SLIPPAGE on request, also through the control API", async () => {
+    const a = await wetQuote("shop.near");
+    await fake.deposit(a.res.quote.depositAddress!, BigInt(a.res.quote.amountIn), { slippage: true });
+    const b = await wetQuote("shop.near");
+    const ctl = await fetch(`${fake.url}/_fake/deposits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ depositAddress: b.res.quote.depositAddress, amount: b.res.quote.amountIn, slippage: true }) });
+    expect(ctl.status).toBe(200);
+    await fake.idle();
+    for (const q of [a, b]) {
+      const s = await client.status(q.res.quote.depositAddress!);
+      expect(s.status).toBe("REFUNDED");
+      expect(s.swapDetails).toMatchObject({ refundReason: "SLIPPAGE", depositedAmount: q.res.quote.amountIn, refundedAmount: String(BigInt(q.res.quote.amountIn) - BigInt(q.res.quote.refundFee!)) });
+      expect(s.swapDetails.amountOut).toBeUndefined();
+      expect(fake.history(q.res.quote.depositAddress!)).toEqual(["PENDING_DEPOSIT", "KNOWN_DEPOSIT_TX", "PROCESSING", "REFUNDED"]);
+    }
   });
 
   it("a short deposit is incomplete, then returned less the refund fee; a top-up in time completes it", async () => {

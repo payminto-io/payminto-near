@@ -9,7 +9,7 @@ import {
   type SubmitDepositRequest,
 } from "./types.ts";
 
-export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
+export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{
   status: number;
   text(): Promise<string>;
 }>;
@@ -26,15 +26,50 @@ export class OneClickError extends Error {
   }
 }
 
+/** A request to 1Click that did not answer in time. Not a OneClickError: 1Click said nothing, like a network failure. */
+export class OneClickTimeoutError extends Error {
+  readonly timeoutMs: number;
+  constructor(method: string, path: string, timeoutMs: number) {
+    super(`1Click did not answer within ${timeoutMs} ms: ${method} ${path.split("?")[0]}`);
+    this.name = "OneClickTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** How long one 1Click request (answer and body) may take by default. */
+export const ONECLICK_TIMEOUT_MS = 15_000;
+
 export type OneClickClientOptions = {
   baseUrl?: string;
   /**
-   * Partner JWT from the 1Click partner dashboard, sent as `X-API-Key`. Without one the docs say 1Click adds 25 bps;
-   * live quotes on 2026-11-10 showed 1 bp on stablecoin routes and 20 bps on others. Read fees from each quote.
+   * Partner JWT from the 1Click partner dashboard, sent as `X-API-Key`. Without one 1Click adds 25 bps to every swap
+   * (https://docs.near-intents.org/resources/fees.md); the 20 bps, or 1 bp on stablecoin pairs, is the schedule with a
+   * key. Read the fees from each quote, never from this comment.
    */
   apiKey?: string;
   fetch?: FetchLike;
+  /** Per request, from sending it to reading the whole body. Default ONECLICK_TIMEOUT_MS. */
+  timeoutMs?: number;
 };
+
+/** Settles like `p`, or rejects with `onAbort()` once `signal` aborts, whether or not the fetch honours the signal. */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal, onAbort: () => Error): Promise<T> {
+  if (signal.aborted) return Promise.reject(onAbort());
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(onAbort());
+    signal.addEventListener("abort", abort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", abort);
+        resolve(v);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(signal.aborted ? onAbort() : err);
+      },
+    );
+  });
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -46,7 +81,8 @@ function need(cond: unknown, what: string): asserts cond {
 
 export function parseQuoteResponse(v: unknown): QuoteResponse {
   need(isObject(v), "quote response is not an object");
-  need(isStr(v.signature) && v.signature.startsWith("ed25519:"), "signature");
+  // `ed25519:<base58>` or bare base58: the official SDK accepts both.
+  need(isStr(v.signature) && /^(ed25519:)?[1-9A-HJ-NP-Za-km-z]{32,100}$/.test(v.signature), "signature");
   need(isStr(v.timestamp), "timestamp");
   need(isObject(v.quoteRequest), "quoteRequest");
   need(isObject(v.quote), "quote");
@@ -78,19 +114,23 @@ export class OneClickClient {
   readonly baseUrl: string;
   readonly #apiKey: string | undefined;
   readonly #fetch: FetchLike;
+  readonly #timeoutMs: number;
 
   constructor(opts: OneClickClientOptions = {}) {
     this.baseUrl = (opts.baseUrl ?? ONECLICK_BASE_URL).replace(/\/+$/, "");
     this.#apiKey = opts.apiKey;
     this.#fetch = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
+    this.#timeoutMs = opts.timeoutMs ?? ONECLICK_TIMEOUT_MS;
   }
 
   async #call(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (body !== undefined) headers["content-type"] = "application/json";
     if (this.#apiKey) headers["x-api-key"] = this.#apiKey;
-    const res = await this.#fetch(`${this.baseUrl}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    const text = await res.text();
+    const signal = AbortSignal.timeout(this.#timeoutMs);
+    const timedOut = () => new OneClickTimeoutError(method, path, this.#timeoutMs);
+    const res = await untilAborted(this.#fetch(`${this.baseUrl}${path}`, { method, headers, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), signal, timedOut);
+    const text = await untilAborted(res.text(), signal, timedOut);
     let parsed: unknown;
     try {
       parsed = text.length ? JSON.parse(text) : null;

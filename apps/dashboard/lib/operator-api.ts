@@ -6,6 +6,7 @@ import { z } from "zod";
 import { isAccountId, payoutChangeMessage as protocolPayoutMessage, type AccountId, type Network, type PayoutProof } from "@payminto/protocol";
 import { feePlanSchema, merchantMethodSchema, merchantSchema, platformFeesSchema, platformSchema, type FeePlan, type Merchant, type MerchantMethod, type Platform, type PlatformFees } from "./schemas";
 import { requestJson, type RequestOptions } from "./http";
+import { feeMonthsSchema, merchantBalanceSchema, payoutHistorySchema } from "./platform-schemas";
 
 export type CreateMerchantBody = Pick<Merchant, "name" | "slug" | "payout" | "fee_plan_id"> & Partial<Pick<Merchant, "support_email" | "brand_color" | "logo_url">> & {
   /** Proof that the payout account is controlled by whoever registers it. */
@@ -118,7 +119,8 @@ export class HttpOperatorApi implements OperatorApi {
   setMethods(merchantId: string, rows: Omit<MerchantMethod, "merchant_id">[]) {
     return this.req(`/v1/merchants/${encodeURIComponent(merchantId)}/methods`, listOf(merchantMethodSchema), {
       method: "PUT",
-      body: JSON.stringify({ methods: rows }),
+      // `locked_reason` is the node's to say, never sent back.
+      body: JSON.stringify({ methods: rows.map(({ locked_reason: _l, ...r }) => (void _l, r)) }),
       headers: { "Merchant-Id": merchantId },
     }).then(byMethodOrder);
   }
@@ -137,5 +139,20 @@ export class HttpOperatorApi implements OperatorApi {
   }
   updateFeePlan(id: string, patch: Partial<FeePlanBody>) {
     return this.send("PATCH", `/v1/fee-plans/${encodeURIComponent(id)}`, feePlanSchema, patch);
+  }
+
+  // Read through lib/balance-api.ts, which also answers in mock mode; not on OperatorApi, so the mock server needs nothing.
+
+  /** `GET /v1/merchant/balance` for one business (Merchant-Id): hub credit, payouts and any-chain deliveries. */
+  merchantBalance(merchantId: string) {
+    return this.req("/v1/merchant/balance", merchantBalanceSchema, { headers: { "Merchant-Id": merchantId } });
+  }
+  /** `GET /v1/platform/fees/months`: platform fees by month and business. */
+  feeMonths() {
+    return this.req("/v1/platform/fees/months", feeMonthsSchema);
+  }
+  /** The payout account and its signed history, from `GET /v1/merchant` for one business. */
+  payoutHistory(merchantId: string) {
+    return this.req("/v1/merchant", payoutHistorySchema, { headers: { "Merchant-Id": merchantId } });
   }
 }

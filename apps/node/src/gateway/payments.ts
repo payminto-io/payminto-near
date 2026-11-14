@@ -30,6 +30,9 @@ import type { WebhookService } from "./webhooks.ts";
  */
 export const WATCH_AFTER_CLOSE_SEC = 3_600;
 
+/** A receipt email can be saved while the payment can still be paid, and once it is paid. */
+const EMAIL_STATUSES: readonly PaymentStatus[] = ["open", "partially_paid", "processing", "paid", "overpaid"];
+
 /**
  * The payment state machine as a pure function of the confirmed total, the number of pending credits and whether the
  * payment is past its expiry.
@@ -145,9 +148,12 @@ export class PaymentService {
 
   // ------------------------------------------------------------------ quotes and fees
 
-  /** Methods that can carry this payment: enabled for the merchant, within its limits, and able to take the fee. */
-  feasibleMethods(m: MerchantRow, amount: bigint): PaymentMethod[] {
-    return PAYMENT_METHODS.filter((method) => {
+  /**
+   * Methods that can carry this payment: offered by this node, enabled for the merchant, within its limits, and able to
+   * take the fee. `oneclick` counts on a node with the any-chain checkout on.
+   */
+  feasibleMethods(m: MerchantRow, amount: bigint): CheckoutMethod[] {
+    return this.#merchants.listed().filter((method) => {
       try {
         this.quote(m, amount, method);
         return true;
@@ -162,6 +168,8 @@ export class PaymentService {
     const plan = this.#merchants.feePlan(m.fee_plan_id);
     let terms = null;
     if (method) {
+      const locked = this.#merchants.lockedReason(method);
+      if (locked) throw new ApiError(409, "METHOD_NOT_OFFERED", locked, { method });
       const row = this.#merchants.method(m.id, method);
       if (!row.enabled) throw new ApiError(409, "METHOD_DISABLED", `${method} payments are disabled for this merchant`);
       if (row.min_amount !== null && amount < BigInt(row.min_amount)) throw new ApiError(400, "AMOUNT_TOO_SMALL", `${method} needs at least ${row.min_amount}`);
@@ -517,6 +525,7 @@ export class PaymentService {
       );
       const row = this.row(paymentId)!;
       if (status !== p.status && status !== "open" && !row.draft) this.#webhooks.emit(p.merchant_id, `payment.${status}`, p.id, p.id, this.json(row));
+      if (paidNow) this.receipts?.(row);
       this.#changed(paymentId);
       return row;
     });
@@ -543,17 +552,29 @@ export class PaymentService {
     return due.length;
   }
 
+  /**
+   * The buyer's receipt email, from the public checkout: while the payment can still be paid or once it is paid. Saved
+   * on a paid payment, the receipt goes out at once (exactly once: see `receipts`).
+   */
   setEmail(id: string, email: string): PaymentRow {
     return this.#db.tx(() => {
       const p = this.row(id);
       if (!p) throw new ApiError(404, "NOT_FOUND", "payment not found");
-      if (p.status !== "open") throw new ApiError(409, "PAYMENT_NOT_OPEN", "a receipt email can only be added while the payment is open");
+      if (!EMAIL_STATUSES.includes(p.status)) throw new ApiError(409, "PAYMENT_NOT_OPEN", `a receipt email cannot be added to a payment that is ${p.status}`);
       // Public route: it may add an email, never replace one (the merchant's or an earlier payer's).
       if (p.customer_email) throw new ApiError(409, "EMAIL_ALREADY_SET", "this payment already has a receipt email");
       this.#db.run("UPDATE payments SET customer_email = ?, updated_at = ? WHERE id = ?", email, nowIso(), id);
-      return this.row(id)!;
+      const row = this.row(id)!;
+      if (row.paid_at) this.receipts?.(row);
+      return row;
     });
   }
+
+  /**
+   * Queues the receipt email of a paid payment, inside the caller's transaction; set by the gateway. It sends at most
+   * once per payment (payments.receipt_sent_at) and nothing without a customer email.
+   */
+  receipts: ((p: PaymentRow) => void) | null = null;
 
   /** Records the transaction the payer's wallet reported, for the success screen. Never evidence of payment. */
   setWalletTxHash(id: string, hash: string): void {

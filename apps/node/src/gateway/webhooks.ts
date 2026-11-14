@@ -36,7 +36,7 @@ export const SUBSCRIBABLE_EVENTS: readonly string[] = [
 ];
 
 /** Events a platform endpoint (no business) may subscribe to: clearing alerts for the node's Budgets, and failed any-chain swaps. */
-export const PLATFORM_EVENTS: readonly string[] = ["budget.refused", "payment.deposit_failed"];
+export const PLATFORM_EVENTS: readonly string[] = ["budget.refused", "payment.deposit_failed", "intents.alert"];
 
 /** A business id, or null for the platform's own endpoints and events. */
 export type WebhookScope = string | null;
@@ -265,7 +265,7 @@ export class WebhookService {
   /** Timeline of one payment: its payment.* and refund.* events. */
   timeline(paymentId: string) {
     return this.#db
-      .all<GatewayEventRow>("SELECT * FROM gateway_events WHERE payment_id = ? ORDER BY seq", paymentId)
+      .all<GatewayEventRow>("SELECT * FROM gateway_events WHERE payment_id = ? AND merchant_id IS NOT NULL ORDER BY seq", paymentId)
       .map((e) => {
         const obj = (JSON.parse(e.body) as { data: { object: Record<string, unknown> } }).data.object;
         return { id: e.id, type: e.type, created_at: e.created_at, data: { status: obj.status ?? null, amount_paid: obj.amount_paid ?? null, amount: obj.amount ?? null } };

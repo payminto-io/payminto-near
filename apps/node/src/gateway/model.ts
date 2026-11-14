@@ -66,6 +66,8 @@ export type PaymentRow = {
   /** 1 while this is a draft an unpaid x402 request created. */
   draft: number;
   draft_key: string | null;
+  /** When the receipt email was queued (once per payment); null until then. */
+  receipt_sent_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -116,11 +118,12 @@ export type RefundRow = {
   payment_id: string;
   amount: string;
   reason: string | null;
+  /** A NEAR account, or for a manual refund of an any-chain payment the buyer's address prefixed by its chain (`base:0x...`). */
   to_addr: AccountId;
   status: RefundStatus;
-  method: "transfer" | null;
+  method: "transfer" | "manual" | null;
   tx_hash: string | null;
-  verification: "transfer_checked" | "finality_only" | null;
+  verification: "transfer_checked" | "finality_only" | "manual" | null;
   submitted_unix: number | null;
   failure_reason: string | null;
   note: string | null;
@@ -128,6 +131,10 @@ export type RefundRow = {
   requested_by: string | null;
   approved_by: string | null;
   approved_at: string | null;
+  /** Manual refunds only (migrations/008): the origin chain, the business's transaction on it, and who recorded it. */
+  manual_chain?: string | null;
+  manual_tx_hash?: string | null;
+  recorded_by?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -314,7 +321,46 @@ export function linkJson(
   };
 }
 
-export function refundJson(r: RefundRow, m: ModelContext): Refund & { note: string | null; approval: RefundRow["approval"]; requested_by: string | null; approved_by: string | null; approved_at: string | null; merchant_id: string } {
+/** `manual` on a refund: the business sent it from its own wallet on the payment's origin chain, and recorded it here. */
+export type ManualRefundJson = { chain: string; chain_name: string; tx_hash: string; explorer_url: string | null; recorded_by: string | null };
+
+/** The chains an any-chain payment can come from (the 1Click origins), as the node names and links them. */
+export const ORIGIN_CHAINS: Readonly<Record<string, { name: string; format: "evm" | "solana"; explorer: string }>> = {
+  base: { name: "Base", format: "evm", explorer: "https://basescan.org/tx/" },
+  eth: { name: "Ethereum", format: "evm", explorer: "https://etherscan.io/tx/" },
+  arb: { name: "Arbitrum", format: "evm", explorer: "https://arbiscan.io/tx/" },
+  pol: { name: "Polygon", format: "evm", explorer: "https://polygonscan.com/tx/" },
+  op: { name: "Optimism", format: "evm", explorer: "https://optimistic.etherscan.io/tx/" },
+  sol: { name: "Solana", format: "solana", explorer: "https://solscan.io/tx/" },
+};
+
+/** A transaction hash of an origin chain: 0x and 64 hex on EVM chains, a base58 signature of 64 to 88 characters on Solana. */
+export function isOriginTxHash(chain: string, hash: string): boolean {
+  const c = ORIGIN_CHAINS[chain];
+  if (!c) return false;
+  return c.format === "evm" ? /^0x[0-9a-fA-F]{64}$/.test(hash) : /^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(hash);
+}
+
+export function originExplorerUrl(chain: string, hash: string): string | null {
+  const c = ORIGIN_CHAINS[chain];
+  return c ? `${c.explorer}${hash}` : null;
+}
+
+export type RefundJson = Omit<Refund, "method" | "verification"> & {
+  /** `transfer` once the merchant submitted its NEAR refund transaction; `manual` when it was recorded by hand. */
+  method: "transfer" | "manual" | null;
+  /** `manual`: the business sent it on the origin chain and recorded it; the node read nothing. */
+  verification: "transfer_checked" | "finality_only" | "manual" | null;
+  manual: ManualRefundJson | null;
+  note: string | null;
+  approval: RefundRow["approval"];
+  requested_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  merchant_id: string;
+};
+
+export function refundJson(r: RefundRow, m: ModelContext): RefundJson {
   return {
     merchant_id: r.merchant_id,
     note: r.note ?? null,
@@ -332,6 +378,16 @@ export function refundJson(r: RefundRow, m: ModelContext): Refund & { note: stri
     method: r.method,
     tx_hash: r.tx_hash,
     verification: r.verification,
+    manual:
+      r.method === "manual" && r.manual_chain && r.manual_tx_hash
+        ? {
+            chain: r.manual_chain,
+            chain_name: ORIGIN_CHAINS[r.manual_chain]?.name ?? r.manual_chain,
+            tx_hash: r.manual_tx_hash,
+            explorer_url: originExplorerUrl(r.manual_chain, r.manual_tx_hash),
+            recorded_by: r.recorded_by ?? null,
+          }
+        : null,
     failure_reason: r.failure_reason,
     created_at: r.created_at,
     updated_at: r.updated_at,

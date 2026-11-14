@@ -16,6 +16,9 @@ How an agent uses it is in `docs/AGENTS.md`, and the wire format is in `docs/DEV
 | `pay_link { linkId \| url, amountAtomic?, maxAmountAtomic? }` | Pays a gateway payment link with vouchers only (never x402 `exact`): one to the merchant and, with a fee, one to the platform, both on the allowlist and together under the per-call cap; returns the payment id, status, amount, fee breakdown and proof URL | yes |
 | `get_budget` | Cap, spent (settled plus pending), remaining, per-call, hourly and daily caps, the maximum price per call, rate and repeat limits, expiry, allowed payees, the hosts the operator allowed, and on-chain escrow when the chain is readable | no |
 | `get_receipts { limit }` | Node-signed receipts paid in this session, newest first | no |
+| `invoice_pay_options { invoice }` | The tokens that can pay a live invoice of this server from another chain (NEAR Intents), each with an estimate or the reason it is greyed. `invoice` is a payment id, or a checkout or fixed-amount payment link URL of `NODE_URL`'s server; any other host is refused | no |
+| `invoice_deposit { payment_id, origin, refund_to }` | A deposit address for one origin such as `base:USDC`: send exactly, token, network, deposit address, deadline, the EIP-681 or Solana Pay URI, and a plain warning. The agent sends the deposit from its own wallet | no |
+| `invoice_status { payment_id, quote_id? }` | `paid` (with the NEAR delivery transaction), `waiting`, `returned`, `failed` or `expired` | no |
 | `prove_receipt { callId }` | Proves a call this wallet holds the receipt for against the root the hub stores for its batch, read through the read-only chain reader: proven only if the node's answer is for that call and that receipt, the settler the Budget names on chain settled the batch, the node key signed the receipt, the agent signed the voucher, and the hub's `verify_receipt` accepts the path; it also reports whether the node served the same root | no |
 
 ## What the wallet decides without the model
@@ -209,6 +212,7 @@ The numbers are compared as USDC amounts: the Budget's caps are in its hub's USD
 | `PAYEE_CHECK_INDEXER` | `nearblocks` on `near:testnet`, `off` on `near:sandbox` | Where account ages come from. NearBlocks learns the account ids that are checked |
 | `PAYEE_CHECK_INDEXER_KEY` | unset | Optional NearBlocks API key; the keyless tier is rate limited |
 | `AGENT_MARKET` | `on` | `quote_market_agent`. `off` leaves the tool out |
+| `ANY_CHAIN_INVOICES` | `on` | `invoice_pay_options`, `invoice_deposit` and `invoice_status`. They call only the public checkout routes of `NODE_URL`, without a key, and sign and send nothing. `off` leaves them out |
 | `AGENT_MARKET_RPC_URL` | the public NEAR mainnet endpoints | Read-only mainnet RPC for the payee check of a market quote |
 | `RECEIPT_STORE_PATH` | `$PAYMINTO_DATA_DIR/mcp/receipts-<network>-<agent>.db` | SQLite file (WAL) with this agent's receipts, and the highest cumulative it signed per payee; every process using the same agent key must point at the same file |
 | `PAYMINTO_DATA_DIR` | `~/.payminto` | Base directory for the key file and the receipt store when their paths are unset |
@@ -360,4 +364,5 @@ pnpm --filter @payminto/mcp test
 
 `test/mcp.test.ts` starts the Clearing Node in-process on a temp database over an in-memory `FakeChain` hub, serves paid providers behind the SDK paywall, and drives every tool through the MCP SDK's in-memory transport and one Streamable HTTP round trip: payments, structured refusals, settlement, proofs against the hub's root (including a chain reader that sees another root, and one that cannot be reached), the key file and the configuration.
 `pay_link` (in `test/mcp.test.ts`) and the merchant tools (`test/merchant.test.ts`) run against the node's gateway on the same in-process node.
+`test/invoice.test.ts` drives the three invoice tools against an in-memory stand-in for the public checkout routes and checks that no request carries a key or leaves them.
 `test/wallet-security.test.ts`, `test/payee-guard.test.ts` and `test/http-auth.test.ts` cover the wallet's own limits, the payee check before signing, and the bearer token for HTTP mode.

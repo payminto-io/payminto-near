@@ -14,7 +14,7 @@ describe("buildNav per role (PRODUCT.md 3.2 to 3.4)", () => {
     expect(labels(m)).toEqual([
       ["Payments", true, ["Payments", "Payment links", "Refunds", "Customers"]],
       ["Agents", true, ["Budgets", "Paid services", "Next settlement", "Settlements", "Payouts", "Refusal alerts"]],
-      ["Platform", true, ["Businesses", "Platform team", "Sign-up requests", "Email outbox"]],
+      ["Platform", true, ["Businesses", "Pricing plans", "Earnings", "Platform team", "Sign-up requests", "Email outbox"]],
       ["Records", false, ["Blocked", "Balances", "Verify", "Activity log"]],
       ["Developers", false, ["API keys", "Webhooks"]],
     ]);
@@ -40,7 +40,7 @@ describe("buildNav per role (PRODUCT.md 3.2 to 3.4)", () => {
   it("gives a business Admin payments, AI agents, records and developers", () => {
     const m = buildNav({ ...base, grants: grantsFor({ platformRole: null, memberships: [{ merchantId: A, role: "admin" }] }), scope: business });
     expect(labels(m)).toEqual([
-      ["Payments", true, ["Payments", "Payment links", "Refunds", "Customers"]],
+      ["Payments", true, ["Payments", "Balance", "Payment links", "Refunds", "Customers"]],
       ["Agents", false, ["AI agents"]],
       ["Records", false, ["Blocked", "Verify", "Activity log"]],
       ["Developers", false, ["API keys", "Webhooks"]],
@@ -51,11 +51,21 @@ describe("buildNav per role (PRODUCT.md 3.2 to 3.4)", () => {
     for (const role of ["staff", "viewer"] as const) {
       const m = buildNav({ ...base, grants: grantsFor({ platformRole: null, memberships: [{ merchantId: A, role }] }), scope: business });
       expect(labels(m)).toEqual([
-        ["Payments", true, ["Payments", "Payment links", "Refunds", "Customers"]],
+        ["Payments", true, ["Payments", "Balance", "Payment links", "Refunds", "Customers"]],
         ["Agents", false, ["AI agents"]],
         ["Records", false, ["Verify"]],
       ]);
     }
+  });
+  it("shows Pricing plans and Earnings to the platform owner only, and Balance only inside a business", () => {
+    const owner = buildNav({ ...base, grants: grantsFor({ platformRole: "owner", memberships: [] }), scope: platform });
+    expect(navPages(owner).map((p) => p.href)).toEqual(expect.arrayContaining(["/platform/pricing", "/platform/earnings"]));
+    expect(navPages(owner).some((p) => p.href === "/balance")).toBe(false);
+    const admin = buildNav({ ...base, grants: grantsFor({ platformRole: "admin", memberships: [] }), scope: platform });
+    expect(navPages(admin).some((p) => p.href === "/platform/pricing" || p.href === "/platform/earnings")).toBe(false);
+    const inside = buildNav({ ...base, grants: grantsFor({ platformRole: "owner", memberships: [] }), scope: business });
+    expect(inside.sections.find((s) => s.id === "payments")?.items.map((i) => i.label)).toEqual(["Payments", "Balance", "Payment links", "Refunds", "Customers"]);
+    expect(sectionOf(inside, "/balance")).toBe("payments");
   });
   it("keeps the Agents section for a platform role that opened one business", () => {
     const m = buildNav({ ...base, grants: grantsFor({ platformRole: "owner", memberships: [] }), scope: business });

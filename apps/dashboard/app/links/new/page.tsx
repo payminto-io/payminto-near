@@ -1,5 +1,6 @@
 "use client";
 
+import { RequirePermission } from "@/components/app/states";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,6 +12,7 @@ import { useApi } from "@/lib/session";
 import { gk, useMerchant } from "@/lib/gateway-queries";
 import { useInfo, useToken } from "@/lib/queries";
 import { gatewayNetwork, linkExpiry, parseAmountInput, safeRedirectUrl, type ExpiryChoice } from "@/lib/gateway";
+import { checkoutWords } from "@/lib/disclosures";
 import { ExpiryField } from "@/components/gateway/link-expiry";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,7 +25,7 @@ import { LinkPanel, LinkSummary } from "@/components/checkout/link-screen";
 import { FormRow, Segmented } from "@/components/gateway/kit";
 import { ScaledFrame } from "@/components/gateway/scaled-frame";
 
-export default function NewLinkPage() {
+function NewLinkPagePage() {
   const api = useApi();
   const qc = useQueryClient();
   const router = useRouter();
@@ -82,8 +84,12 @@ export default function NewLinkPage() {
     collect_name: collectName,
     active: true,
     token: { address: info.data?.token.address ?? NEAR_TESTNET_USDC, symbol: t.symbol, decimals: t.decimals },
+    // On a live any-chain server the link offers only payments from other chains; the preview says so too.
+    ...(info.data?.mode?.any_chain === "live" ? { intents: { mode: "live" as const, label: "Live - NEAR mainnet", offered: true, reason: null } } : {}),
   };
   const network = gatewayNetwork(info.data);
+  // Where the money is paid: NEAR mainnet on a live any-chain server, whatever network its hub runs on.
+  const networkName = info.data ? checkoutWords(info.data).networkName : network.name;
 
   async function create() {
     setSubmitted(true);
@@ -163,7 +169,7 @@ export default function NewLinkPage() {
               />
             </div>
             {kind === "fixed" ? (
-              <FormRow id="l-amount" label="Amount" error={amount || submitted ? errors.amount : null} hint={`Paid in ${t.symbol} on ${network.name}.`}>
+              <FormRow id="l-amount" label="Amount" error={amount || submitted ? errors.amount : null} hint={`Paid in ${t.symbol} on ${networkName}.`}>
                 <Suffix symbol={t.symbol}>
                   <Input id="l-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="25.00" className="num pr-16" aria-invalid={Boolean(errors.amount && (amount || submitted))} />
                 </Suffix>
@@ -241,7 +247,7 @@ export default function NewLinkPage() {
             <div aria-hidden inert className={cn("mx-auto overflow-hidden rounded-lg border bg-background shadow-sm", device === "phone" ? "max-w-[390px]" : "max-w-full")}>
               <ScaledFrame width={device === "phone" ? 390 : 1040}>
                 <div className="@container">
-                  <CheckoutLayout preview merchant={preview.merchant} summary={<LinkSummary link={preview} networkName={network.name} />} panel={<LinkPanel link={preview} preview />} />
+                  <CheckoutLayout preview merchant={preview.merchant} summary={<LinkSummary link={preview} networkName={networkName} />} panel={<LinkPanel link={preview} preview />} />
                 </div>
               </ScaledFrame>
             </div>
@@ -270,5 +276,13 @@ function Toggle({ id, checked, onChange, label, hint }: { id: string; checked: b
       </label>
       <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </div>
+  );
+}
+
+export default function NewLinkPage() {
+  return (
+    <RequirePermission permission={"links.write"}>
+      <NewLinkPagePage />
+    </RequirePermission>
   );
 }

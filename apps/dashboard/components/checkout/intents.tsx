@@ -1,39 +1,47 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
-import { AlertTriangle, ArrowLeft, Check, Clock3, ExternalLink, FlaskConical, LoaderCircle, Mail, RotateCw, Undo2, X, XCircle } from "lucide-react";
+import { depositEvmTransaction, depositPaymentUri } from "@payminto/protocol";
+import { AlertTriangle, Check, ChevronDown, Clock3, ExternalLink, FlaskConical, LoaderCircle, Mail, RotateCw, Smartphone, Undo2, Wallet, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/http";
 import type { CheckoutApi } from "@/lib/gateway-api";
+import { checkEvmTransaction, evmProvider, evmWalletErrorMessage, payWithEvmWallet } from "@/lib/evm-wallet";
 import type { CheckoutView, IntentsOption, IntentsQuote, IntentsStep, IntentsTx } from "@/lib/schemas";
 import {
   amountText,
-  approxUnits,
+  DEPOSIT_QR_CAPTION,
   deadlineModel,
+  depositFeeLines,
+  depositQr,
   exactUnits,
   expiredCopy,
   failedCopy,
   incompleteCopy,
   intentsStage,
   modeChip,
-  refundAddressProblem,
-  refundPlaceholder,
+  preselectOrigin,
+  refundWhere,
+  refundKept,
   returnedCopy,
+  sendNow,
+  sendNowAtomic,
   shortAmount,
-  timeEstimateText,
+  wrongDepositCopy,
 } from "@/lib/intents";
 import { useNow } from "@/components/app/time-ago";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { BrandButton, CopyAction, CopyIcon, Notice, StateIcon } from "./parts";
-import { Bar, Shimmer, Swap, T, useCalm } from "./motion";
+import { Shimmer, T } from "./motion";
 
 /**
- * The any-chain checkout on the hosted page (docs/DEVELOPERS.md, "Any-chain checkout"): pick a token and chain (screen
- * B), send to a deposit address (C), follow it to the merchant (C's steps), or see why it came back (E). The success
- * screen (D) is the checkout's own. The node talks to 1Click and checks every quote; this page only shows what it says.
+ * The any-chain checkout on the hosted page, on one screen (docs/superpowers/specs/2026-11-14-one-screen-checkout.md): pay
+ * with a token and chain, and its deposit address is already there to scan; or see why a deposit came back. The success
+ * screen is the checkout's own. The node talks to 1Click and checks every quote; this page only shows what it says.
  */
 
 // ---------------------------------------------------------------------------
@@ -69,22 +77,11 @@ function newest(...qs: (IntentsQuote | null | undefined)[]): IntentsQuote | null
 }
 
 /**
- * The quote on screen, kept current: the checkout's SSE stream carries `intents.active_quote`; when the stream is not
- * open the page asks for the quote every few seconds until it reaches an end.
+ * Money is on its way through this quote: it stays on screen whatever the buyer picks. A quote that ended without paying
+ * (returned, failed) shows until the buyer tries again or picks another chain.
  */
-function useQuoteOnScreen(api: CheckoutApi, view: CheckoutView, local: IntentsQuote | null, streaming: boolean): IntentsQuote | null {
-  const fromView = view.intents?.active_quote ?? null;
-  const target = local && (!fromView || local.id === fromView.id || local.created_at >= fromView.created_at) ? local : fromView;
-  const ended = target ? ["confirmed", "refunded", "failed", "expired"].includes(target.status) : true;
-  const poll = useQuery({
-    queryKey: ["intents-quote", view.id, target?.id ?? null],
-    queryFn: () => api.intentsQuote(view.id, target!.id),
-    enabled: Boolean(target) && !streaming && !ended,
-    refetchInterval: 3_000,
-  });
-  if (!target) return null;
-  return newest(...[fromView, local, poll.data].filter((q) => q?.id === target.id));
-}
+const MONEY_IN = new Set(["deposit_detected", "incomplete_deposit", "processing", "delivered", "confirmed"]);
+const ENDED = new Set(["confirmed", "refunded", "failed", "expired"]);
 
 export function useIntentsOptions(api: CheckoutApi, paymentId: string, enabled: boolean) {
   return useQuery({
@@ -98,207 +95,213 @@ export function useIntentsOptions(api: CheckoutApi, paymentId: string, enabled: 
   });
 }
 
+/**
+ * The any-chain checkout on one screen (docs/superpowers/specs/2026-11-14-one-screen-checkout.md): "Pay with" a token
+ * and chain, and the deposit address for it, already there to scan. The address is made as the screen opens and again
+ * when the buyer picks another chain (the node reuses one per chain). Nothing is asked of the buyer: a deposit that
+ * cannot complete goes back to the business's NEAR Intents balance. NEAR Intents converts it in the background.
+ */
 export function AnyChainPanel({ view, api, streaming, options, onRefresh }: { view: CheckoutView; api: CheckoutApi; streaming: boolean; options: ReturnType<typeof useIntentsOptions>; onRefresh: () => void }) {
-  const [local, setLocal] = useState<IntentsQuote | null>(null);
-  const [picking, setPicking] = useState(false);
-  const [origin, setOrigin] = useState<string | null>(null);
-  const [refund, setRefund] = useState("");
-  const q = useQuoteOnScreen(api, view, local, streaming);
-  const mode = view.intents?.mode ?? q?.mode ?? "simulated";
+  const qc = useQueryClient();
+  const rows = options.data?.options ?? [];
+  const fromView = view.intents?.active_quote ?? null;
+  const [picked, setPicked] = useState<string | null>(null);
+  const [byOrigin, setByOrigin] = useState<Record<string, IntentsQuote>>({});
   const open = view.status === "open";
+  const unavailable = view.intents && !view.intents.available ? view.intents.reason : null;
 
-  const show = (next: IntentsQuote) => {
-    setLocal(next);
-    setPicking(false);
+  // A quote that money reached stays on screen; otherwise the buyer's pick, else the one already waiting, else the default.
+  const locked = fromView && MONEY_IN.has(fromView.status) ? fromView : null;
+  const waiting = fromView && fromView.status === "awaiting_deposit" && !fromView.deadline_passed ? fromView.origin.asset : null;
+  const firstOpen = rows.find((o) => o.available)?.origin.asset ?? null;
+  const chosen = locked?.origin.asset ?? picked ?? waiting ?? preselectOrigin(rows, view.intents?.default_origin) ?? firstOpen;
+  const row = rows.find((o) => o.origin.asset === chosen) ?? null;
+
+  const create = useMutation({
+    mutationFn: (asset: string) => api.createIntentsQuote(view.id, { origin_asset: asset }, `${view.id}:${asset}:${newKey()}`),
+    onSuccess: (q) => {
+      setByOrigin((m) => ({ ...m, [q.origin.asset]: q }));
+      qc.setQueryData(["intents-quote", view.id, q.id], q);
+    },
+  });
+
+  const local = chosen ? byOrigin[chosen] : undefined;
+  const target = locked ?? (local && fromView?.id === local.id ? newest(local, fromView) : (local ?? (fromView && fromView.origin.asset === chosen ? fromView : null)));
+  const ended = target ? ENDED.has(target.status) : true;
+  const poll = useQuery({
+    queryKey: ["intents-quote", view.id, target?.id ?? null],
+    queryFn: () => api.intentsQuote(view.id, target!.id),
+    enabled: Boolean(target) && !streaming && !ended,
+    refetchInterval: 3_000,
+  });
+  const q = target ? newest(target, poll.data?.id === target.id ? poll.data : null, fromView?.id === target.id ? fromView : null) : null;
+
+  // The address for the chosen chain, as soon as it is chosen: once per chain, unless the buyer asks again.
+  const wants = open && !unavailable && !locked && Boolean(row?.available) && !q && !create.isPending && !(create.isError && create.variables === chosen);
+  useEffect(() => {
+    if (wants && chosen) create.mutate(chosen);
+  }, [wants, chosen, create]);
+
+  const choose = (asset: string) => {
+    if (asset === chosen) return;
+    create.reset();
+    setPicked(asset);
   };
-  const startOver = () => {
-    setPicking(true);
-    if (q) setOrigin(q.origin.asset);
+  const again = () => {
+    if (!chosen) return;
+    setByOrigin((m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== chosen)));
+    create.reset();
+    create.mutate(chosen);
   };
 
   const stage = q ? intentsStage(q) : null;
-  const choosing = !q || picking;
   return (
-    <Swap id={choosing ? "choose" : `quote-${q?.id}-${stage}`} className="flex flex-col gap-5">
-      {choosing ? (
-        <ChooseOrigin
-          view={view}
-          api={api}
-          mode={mode}
-          options={options}
-          origin={origin}
-          setOrigin={setOrigin}
-          refund={refund}
-          setRefund={setRefund}
-          onQuote={show}
-          back={q && (stage === "deposit" || stage === "incomplete") ? () => setPicking(false) : null}
-        />
-      ) : stage === "deposit" || stage === "incomplete" ? (
-        <DepositScreen view={view} api={api} q={q!} onQuote={setLocal} onChangeToken={startOver} onRefresh={onRefresh} />
-      ) : stage === "done" ? (
-        <DepositScreen view={view} api={api} q={q!} onQuote={setLocal} onChangeToken={null} onRefresh={onRefresh} />
-      ) : (
-        <Ended view={view} q={q!} stage={stage!} onTryAgain={open ? startOver : null} />
+    <div className="flex flex-col gap-4">
+      {!locked && (
+        <PayWith rows={rows} value={chosen} onChange={choose} loading={options.isPending} error={options.isError ? (options.error instanceof Error ? options.error.message : "The prices could not be loaded.") : null} onRetry={() => void options.refetch()} merchant={view.merchant.name} />
       )}
-    </Swap>
+      {/* While money it already took is confirming, the node offers no new address; the deposit on screen stays. */}
+      {unavailable && !locked ? (
+        <Notice tone="neutral" icon={<AlertTriangle />}>
+          {unavailable}
+        </Notice>
+      ) : row && !row.available && !locked ? (
+        <Notice tone="neutral" icon={<AlertTriangle />}>
+          {row.reason ?? "This token is not available for this payment. Pick another one."}
+        </Notice>
+      ) : create.isError && !q ? (
+        <Notice tone="negative" icon={<AlertTriangle />}>
+          <p>{quoteErrorText(create.error)} No money moved.</p>
+          <button type="button" onClick={again} className="mt-1 inline-flex min-h-11 items-center gap-1 font-medium underline underline-offset-2 md:min-h-8">
+            <RotateCw className="size-3.5" aria-hidden /> Try again
+          </button>
+        </Notice>
+      ) : !q ? (
+        <SendSkeleton />
+      ) : stage === "returned" || stage === "failed" || stage === "expired" ? (
+        <Ended view={view} q={q} stage={stage} onTryAgain={open ? again : null} />
+      ) : RECEIVED.has(q.status) ? (
+        <ReceivedScreen view={view} q={q} />
+      ) : (
+        <SendScreen view={view} api={api} q={q} onQuote={(next) => setByOrigin((m) => ({ ...m, [next.origin.asset]: next }))} onRefresh={onRefresh} />
+      )}
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Screen B: one list of tokens and chains, one refund address, one button
-// ---------------------------------------------------------------------------
+/** How long a wallet's transaction may stay unknown to the chain before the page says the wallet did not send it. */
+const UNSEEN_AFTER_MS = 60_000;
+
+const noChange = () => () => undefined;
+/** Whether this browser has an EVM wallet (an extension, or a wallet app's own browser); false while rendering on the server. */
+function useHasEvmWallet(): boolean {
+  return useSyncExternalStore(noChange, () => evmProvider() !== null, () => false);
+}
 
 function newKey(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function ChooseOrigin({
-  view,
-  api,
-  mode,
-  options,
-  origin,
-  setOrigin,
-  refund,
-  setRefund,
-  onQuote,
-  back,
-}: {
-  view: CheckoutView;
-  api: CheckoutApi;
-  mode: "simulated" | "live";
-  options: ReturnType<typeof useIntentsOptions>;
-  origin: string | null;
-  setOrigin: (a: string) => void;
-  refund: string;
-  setRefund: (v: string) => void;
-  onQuote: (q: IntentsQuote) => void;
-  back: (() => void) | null;
-}) {
-  const qc = useQueryClient();
-  const refundId = useId();
-  const [touched, setTouched] = useState(false);
-  // One key per attempt: a retry of the same press (a lost answer, a double click) gets the same deposit address.
-  const [attempt, setAttempt] = useState<{ key: string; body: string } | null>(null);
-  const rows = options.data?.options ?? [];
-  const picked = rows.find((o) => o.origin.asset === origin && o.available) ?? null;
-  const problem = picked ? refundAddressProblem(picked.origin, refund) : null;
-  const ready = Boolean(picked) && problem === null;
-  const create = useMutation({
-    mutationFn: () => {
-      const body = { origin_asset: picked!.origin.asset, refund_to: refund.trim() };
-      const text = JSON.stringify(body);
-      const key = attempt && attempt.body === text ? attempt.key : newKey();
-      if (!attempt || attempt.key !== key) setAttempt({ key, body: text });
-      return api.createIntentsQuote(view.id, body, key);
-    },
-    onSuccess: (q) => {
-      setAttempt(null);
-      qc.setQueryData(["intents-quote", view.id, q.id], q);
-      onQuote(q);
-    },
-  });
-  const error = create.error;
-  const unavailable = view.intents && !view.intents.available ? view.intents.reason : null;
+// ---------------------------------------------------------------------------
+// "Pay with": the token, then the chain, on the same screen
+// ---------------------------------------------------------------------------
 
-  return (
-    <>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold tracking-[-0.01em]">Pay from another chain</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Pick a token you hold. {view.merchant.name} receives USDC on NEAR.</p>
-        </div>
-      </div>
-      {back && (
-        <button type="button" onClick={back} className="-mt-2 inline-flex min-h-11 items-center gap-1.5 self-start rounded text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2">
-          <ArrowLeft className="size-4" aria-hidden /> Back to your deposit address
+function PayWith({
+  rows,
+  value,
+  onChange,
+  loading,
+  error,
+  onRetry,
+  merchant,
+}: {
+  rows: IntentsOption[];
+  value: string | null;
+  onChange: (asset: string) => void;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  merchant: string;
+}) {
+  const current = rows.find((o) => o.origin.asset === value) ?? null;
+  const tokens = [...new Set(rows.map((o) => o.origin.symbol))];
+  const token = current?.origin.symbol ?? tokens[0] ?? null;
+  const chains = rows.filter((o) => o.origin.symbol === token);
+  const pickToken = (symbol: string) => {
+    const same = rows.find((o) => o.origin.symbol === symbol && o.origin.chain === current?.origin.chain && o.available);
+    const any = rows.find((o) => o.origin.symbol === symbol && o.available) ?? rows.find((o) => o.origin.symbol === symbol);
+    const next = same ?? any;
+    if (next) onChange(next.origin.asset);
+  };
+  if (error) {
+    return (
+      <Notice tone="negative" icon={<AlertTriangle />}>
+        <p>{error}</p>
+        <button type="button" onClick={onRetry} className="mt-1 inline-flex items-center gap-1 font-medium underline underline-offset-2">
+          <RotateCw className="size-3.5" aria-hidden /> Try again
         </button>
-      )}
-      {unavailable ? (
-        <Notice tone="neutral" icon={<AlertTriangle />}>
-          {unavailable}
-        </Notice>
-      ) : options.isError ? (
-        <Notice tone="negative" icon={<AlertTriangle />}>
-          <p>{options.error instanceof Error ? options.error.message : "The prices could not be loaded."}</p>
-          <button type="button" onClick={() => void options.refetch()} className="mt-1 inline-flex items-center gap-1 font-medium underline underline-offset-2">
-            <RotateCw className="size-3.5" aria-hidden /> Try again
-          </button>
-        </Notice>
-      ) : (
-        <fieldset className="min-w-0">
-          <legend className="mb-2 flex w-full items-center justify-between gap-3 text-sm font-medium">
-            Token and network
-            {options.data && <span className="text-xs font-normal text-muted-foreground">Prices are estimates</span>}
-          </legend>
-          {options.isPending ? (
-            <div aria-busy="true" aria-label="Loading prices" className="divide-y overflow-hidden rounded-xl border">
-              {Array.from({ length: 5 }, (_, i) => (
-                <div key={i} className="flex h-[3.75rem] items-center gap-3 px-3.5">
-                  <Shimmer className="size-8 rounded-full" />
-                  <Shimmer className="h-4 w-28" />
-                  <Shimmer className="ml-auto h-4 w-24" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <OriginList rows={rows} value={origin} onChange={(a) => (setOrigin(a), create.reset())} />
-          )}
-        </fieldset>
-      )}
-      <AnimatePresence initial={false}>
-        {picked && (
-          <motion.div key="refund" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={T.base} className="overflow-hidden">
-            <div className="flex flex-col gap-1.5 p-px">
-              <label htmlFor={refundId} className="text-sm font-medium">
-                Refund address on {picked.origin.chain_name}
-              </label>
-              <Input
-                id={refundId}
-                value={refund}
-                onChange={(e) => (setRefund(e.target.value), create.reset())}
-                onBlur={() => setTouched(true)}
-                placeholder={refundPlaceholder(picked.origin)}
-                aria-invalid={touched && refund.trim() !== "" && problem !== null}
-                aria-describedby={`${refundId}-hint`}
-                className="hash h-11 text-base md:text-[0.8125rem]"
-                spellCheck={false}
-                autoCapitalize="none"
-                autoComplete="off"
-                autoCorrect="off"
-              />
-              <p id={`${refundId}-hint`} className={cn("text-xs", touched && refund.trim() !== "" && problem ? "text-negative" : "text-muted-foreground")}>
-                {touched && refund.trim() !== "" && problem ? problem : "If anything goes wrong, the money goes back here. Use the address you pay from."}
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence initial={false}>
-        {error && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={T.base} className="overflow-hidden">
-            <Notice tone="negative" icon={<AlertTriangle />}>
-              {quoteErrorText(error)} No money moved.
-            </Notice>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <div className="sticky bottom-0 z-10 -mx-1 bg-card px-1 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:static lg:pb-0">
-        <BrandButton onClick={() => create.mutate()} disabled={!ready || create.isPending || Boolean(unavailable)} className={cn(create.isPending && "disabled:opacity-100")}>
-          {create.isPending ? (
-            <>
-              <LoaderCircle className="animate-spin" aria-hidden /> Getting your address
-            </>
-          ) : (
-            "Get deposit address"
-          )}
-        </BrandButton>
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          You send from your own wallet. NEAR Intents swaps it to USDC for {view.merchant.name}
-          {mode === "simulated" ? ". Simulated: no real money moves." : "."}
-        </p>
+      </Notice>
+    );
+  }
+  if (loading) {
+    return (
+      <div aria-busy="true" aria-label="Loading ways to pay" className="flex flex-col gap-2.5">
+        <Shimmer className="h-4 w-28" />
+        <Shimmer className="h-10 w-full rounded-xl" />
+        <Shimmer className="h-10 w-full rounded-xl" />
       </div>
-    </>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div>
+        <h1 className="text-lg font-semibold tracking-[-0.01em]">Pay with</h1>
+        <p className="text-xs text-muted-foreground">Whatever you pick, NEAR Intents converts it and {merchant} receives USDC.</p>
+      </div>
+      {tokens.length > 1 && (
+        <div role="radiogroup" aria-label="Token" className="grid gap-1 rounded-xl bg-muted p-1" style={{ gridTemplateColumns: `repeat(${tokens.length}, minmax(0, 1fr))` }}>
+          {tokens.map((t) => {
+            const on = t === token;
+            return (
+              <button
+                key={t}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => pickToken(t)}
+                className={cn("h-11 rounded-lg text-sm font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring md:h-9", on ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+              >
+                {t}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div role="radiogroup" aria-label="Network" className="flex flex-wrap gap-1.5">
+        {chains.map((o) => {
+          const on = o.origin.asset === value;
+          return (
+            <button
+              key={o.origin.asset}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              aria-label={`${o.origin.symbol} on ${o.origin.chain_name}`}
+              disabled={!o.available}
+              title={o.available ? undefined : (o.reason ?? "Not available for this payment.")}
+              onClick={() => onChange(o.origin.asset)}
+              className={cn(
+                "inline-flex h-11 items-center gap-2 rounded-full border px-3 pr-3.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-45 md:h-9",
+                on ? "border-[var(--ink)] bg-[color-mix(in_srgb,var(--ink)_8%,var(--card))] text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <ChainDot chain={o.origin.chain} />
+              {o.origin.chain_name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -317,71 +320,20 @@ function quoteErrorText(e: unknown): string {
   }
 }
 
-/** One radio row per token and chain: the estimate and the time, or the reason it cannot be used. */
-function OriginList({ rows, value, onChange }: { rows: IntentsOption[]; value: string | null; onChange: (asset: string) => void }) {
-  const name = useId();
-  return (
-    <div role="radiogroup" aria-label="Token and network" className="divide-y overflow-hidden rounded-xl border">
-      {rows.map((o) => {
-        const id = `${name}-${o.origin.asset}`;
-        const checked = value === o.origin.asset;
-        const eta = timeEstimateText(o.time_estimate_sec);
-        return (
-          <label
-            key={o.origin.asset}
-            htmlFor={id}
-            className={cn(
-              "relative flex min-h-[3.75rem] items-center gap-3 px-3.5 py-2.5 transition-colors duration-150",
-              o.available ? "cursor-pointer hover:bg-muted/50" : "cursor-not-allowed",
-              checked && "bg-[color-mix(in_srgb,var(--ink)_7%,var(--card))] hover:bg-[color-mix(in_srgb,var(--ink)_9%,var(--card))]",
-            )}
-          >
-            <input
-              id={id}
-              type="radio"
-              name={name}
-              value={o.origin.asset}
-              checked={checked}
-              disabled={!o.available}
-              onChange={() => onChange(o.origin.asset)}
-              className="peer sr-only"
-              aria-label={`${o.origin.symbol} on ${o.origin.chain_name}`}
-              aria-describedby={`${id}-d`}
-            />
-            {/* The selected row: an ink frame, drawn inside so rows never shift; the keyboard focus ring sits inside it too. */}
-            <span aria-hidden className={cn("pointer-events-none absolute inset-0 border-2 transition-colors duration-150", checked ? "border-[var(--ink)]" : "border-transparent", "peer-focus-visible:outline-2 peer-focus-visible:-outline-offset-4 peer-focus-visible:outline-ring")} />
-            <OriginMark symbol={o.origin.symbol} chain={o.origin.chain} muted={!o.available} />
-            {/* The token and chain are never cut; a long amount (18 decimals of ETH) wraps on its side instead. */}
-            <span className={cn(o.available ? "shrink-0" : "min-w-0 flex-1 text-muted-foreground")}>
-              <span className="block text-sm whitespace-nowrap">
-                <span className="font-medium">{o.origin.symbol}</span> <span className="text-muted-foreground">on {o.origin.chain_name}</span>
-              </span>
-              {o.available ? (
-                eta && <span className="block text-xs text-muted-foreground">{eta}</span>
-              ) : (
-                <span id={`${id}-d`} className="block text-xs text-pretty text-muted-foreground">
-                  {o.reason ?? "Not available for this payment."}
-                </span>
-              )}
-            </span>
-            {o.available && o.amount_in && (
-              <span id={`${id}-d`} className="min-w-0 flex-1 text-right">
-                <span className="block text-xs text-muted-foreground">about</span>
-                <span className="num block text-[0.8125rem] font-medium [overflow-wrap:anywhere]">{`${approxUnits(o.amount_in.formatted)} ${o.amount_in.symbol}`}</span>
-              </span>
-            )}
-          </label>
-        );
-      })}
-    </div>
-  );
-}
-
 const CHAIN_TINT: Record<string, string> = { base: "#2151f5", eth: "#5b6b8c", arb: "#1b4add", sol: "#7c3aed", pol: "#7b3fe4" };
 const TOKEN_TINT: Record<string, string> = { USDC: "#2775ca", USDT: "#26a17b", ETH: "#454a75" };
 
+/** The chain's initial on its tint; no third-party logo. */
+function ChainDot({ chain }: { chain: string }) {
+  return (
+    <span aria-hidden className="flex size-5 shrink-0 items-center justify-center rounded-full text-[0.5625rem] leading-none font-bold text-white" style={{ background: CHAIN_TINT[chain] ?? "#475569" }}>
+      {chain.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
 /** A plain coin mark with the chain's initial beside it; no third-party logo. */
-function OriginMark({ symbol, chain, muted }: { symbol: string; chain: string; muted?: boolean }) {
+export function OriginMark({ symbol, chain, muted }: { symbol: string; chain: string; muted?: boolean }) {
   return (
     <span aria-hidden className={cn("relative flex size-8 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold text-white", muted && "opacity-45 grayscale")} style={{ background: TOKEN_TINT[symbol] ?? "#475569" }}>
       {symbol.slice(0, 1)}
@@ -396,79 +348,286 @@ function OriginMark({ symbol, chain, muted }: { symbol: string; chain: string; m
 // Screen C: send exactly this, to this address, before this time
 // ---------------------------------------------------------------------------
 
-function DepositScreen({ view, api, q, onQuote, onChangeToken, onRefresh }: { view: CheckoutView; api: CheckoutApi; q: IntentsQuote; onQuote: (q: IntentsQuote) => void; onChangeToken: (() => void) | null; onRefresh: () => void }) {
-  const now = useNow();
-  const d = deadlineModel(q, now);
-  const amount = exactUnits(q.send_exactly.formatted);
+/** While the address for the chosen chain is being made: the shape of the send block, so nothing jumps. */
+function SendSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Getting your payment address" className="flex flex-col gap-3">
+      <Shimmer className="h-6 w-64" />
+      <div className="flex items-center gap-4 rounded-xl border p-3.5">
+        <Shimmer className="size-[6.5rem] rounded-lg" />
+        <div className="flex flex-1 flex-col gap-2">
+          <Shimmer className="h-4 w-32" />
+          <Shimmer className="h-3 w-40" />
+        </div>
+      </div>
+      <Shimmer className="h-14 w-full rounded-xl" />
+    </div>
+  );
+}
+
+/**
+ * The deposit for the chosen chain, on the same screen as the picker: what to send, the wallet button, one status
+ * line, and the rest (fees, progress, a transaction hash) folded under "Details".
+ */
+function SendScreen({ view, api, q, onQuote, onRefresh }: { view: CheckoutView; api: CheckoutApi; q: IntentsQuote; onQuote: (q: IntentsQuote) => void; onRefresh: () => void }) {
+  const send = sendNow(q);
   const waiting = q.status === "awaiting_deposit" || q.status === "incomplete_deposit";
-  const chain = q.origin.chain_name;
   return (
     <>
-      <div>
-        <div className="flex items-start justify-between gap-3">
-          <h1 className="min-w-0 text-lg leading-snug font-semibold tracking-[-0.01em] text-balance">
-            Send exactly{" "}
-            <span className="num whitespace-nowrap">
-              {amount} {q.send_exactly.symbol}
-            </span>{" "}
-            on {chain}
-          </h1>
-          <CopyAction value={amount} label="Copy amount" toast="Amount copied" className="shrink-0" />
-        </div>
-        {waiting && <DeadlineLine d={d} />}
-      </div>
+      <h2 className="text-base leading-snug font-semibold text-balance">
+        {send.remaining ? "Send the remaining" : "Send exactly"}{" "}
+        <span className="num whitespace-nowrap">
+          {send.amount} {send.symbol}
+        </span>{" "}
+        on {q.origin.chain_name}
+      </h2>
       {q.status === "incomplete_deposit" && (
         <Notice tone="warning" icon={<AlertTriangle />}>
           {incompleteCopy(q)}
         </Notice>
       )}
-      <DepositAddress q={q} dim={!waiting} />
-      <Notice tone="warning" icon={<AlertTriangle />}>
-        {q.warning}
-      </Notice>
-      <Steps steps={q.steps} />
-      <FeeLines q={q} merchant={view.merchant.name} />
+      {waiting && <PayFromWallet view={view} api={api} q={q} onQuote={onQuote} onRefresh={onRefresh} />}
+      <SendBlock q={q} amount={`${send.amount} ${send.symbol}`} copyAmount={send.amount} dim={!waiting} />
+      <StatusLine q={q} merchant={view.merchant.name} />
+      {waiting && <p className="text-xs text-pretty text-muted-foreground">{q.warning}</p>}
       {waiting && q.mode === "simulated" && <SimulatePanel view={view} api={api} q={q} onQuote={onQuote} />}
-      {waiting && <SentIt view={view} api={api} q={q} onQuote={onQuote} onRefresh={onRefresh} />}
-      {onChangeToken && waiting && (
-        <button type="button" onClick={onChangeToken} className="-mt-2 inline-flex min-h-11 items-center gap-1.5 self-start rounded text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2">
-          <Undo2 className="size-4" aria-hidden /> Change token
-        </button>
-      )}
+      <details className="group rounded-xl border text-sm [&_summary::-webkit-details-marker]:hidden">
+        <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3.5 font-medium text-muted-foreground hover:text-foreground">
+          Details
+          <ChevronDown className="size-4 transition-transform duration-200 group-open:rotate-180" aria-hidden />
+        </summary>
+        <div className="flex flex-col gap-4 border-t p-3.5">
+          <FeeLines q={q} merchant={view.merchant.name} />
+          <Steps steps={q.steps} />
+          <p className="text-xs text-pretty text-muted-foreground">{refundWhere(q, view.merchant.name)}</p>
+          {q.status !== "confirmed" && <WrongDeposit view={view} q={q} />}
+          {waiting && <SentIt view={view} api={api} q={q} onQuote={onQuote} onRefresh={onRefresh} />}
+        </div>
+      </details>
     </>
   );
 }
 
-function DeadlineLine({ d }: { d: ReturnType<typeof deadlineModel> }) {
-  const calm = useCalm();
-  const color = d.tone === "danger" ? "text-negative" : d.tone === "warning" ? "text-warning" : "text-muted-foreground";
-  const bar = d.tone === "danger" ? "bg-negative" : d.tone === "warning" ? "bg-warning" : "bg-[var(--ink)]";
+/** The buyer's money arrived in full: their part is done, whatever NEAR Intents and the business still do with it. */
+const RECEIVED = new Set(["deposit_detected", "processing", "delivered"]);
+
+/**
+ * "Payment received", as soon as the deposit is seen in full: the buyer is done. Converting it and delivering USDC to the
+ * business happens in the background (the node keeps following it); the page moves on to the receipt once it lands.
+ */
+function ReceivedScreen({ view, q }: { view: CheckoutView; q: IntentsQuote }) {
+  const sent = q.deposited ?? q.send_exactly;
+  const tx = q.origin_txs[0] ?? null;
   return (
-    <div className="mt-2 flex flex-col gap-1.5">
-      <p className={cn("flex items-center gap-1.5 text-xs transition-colors duration-[400ms]", color)}>
-        <Clock3 className="size-3.5 shrink-0" aria-hidden />
-        <span>
-          Send before <span className="num font-medium">{d.clock}</span> <span className="num" aria-hidden>({d.text} left)</span>
-          <span className="sr-only">, {Math.ceil(d.seconds / 60)} minutes left</span>
-        </span>
+    <div className="flex flex-col items-center gap-4 pt-2 text-center">
+      <StateIcon tone="positive" className="size-14">
+        <Check />
+      </StateIcon>
+      <div>
+        <h2 className="text-xl font-semibold tracking-[-0.01em]">Payment received</h2>
+        <p className="mt-1 text-sm text-pretty text-muted-foreground">
+          You&apos;re done. We received {amountText(sent)} on {q.origin.chain_name}. NEAR Intents is now converting it to USDC for {view.merchant.name}, usually within a minute; you can close this page.
+        </p>
+      </div>
+      <dl className="w-full divide-y rounded-xl border text-left text-sm">
+        <Line k="You sent" v={<span className="num font-medium">{amountText(sent)} on {q.origin.chain_name}</span>} />
+        {tx && <Line k={`${q.origin.chain_name} transaction`} v={<TxValue tx={tx} />} />}
+        <Line k={`${view.merchant.name} receives`} v={<span className="num font-medium">{amountText(q.amount_out)}</span>} />
+      </dl>
+      <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+        <LoaderCircle className="size-3.5 animate-spin" aria-hidden /> Finishing in the background: converting, then delivering to {view.merchant.name}.
       </p>
-      {!calm && <Bar fraction={d.fraction} linear className="h-1" barClassName={cn("transition-colors duration-[400ms]", bar)} />}
     </div>
   );
 }
 
-function DepositAddress({ q, dim }: { q: IntentsQuote; dim: boolean }) {
+/** One line for where the payment is, instead of a list of steps: waiting (with the time left), received, or done. */
+function StatusLine({ q, merchant }: { q: IntentsQuote; merchant: string }) {
+  const now = useNow();
+  const d = deadlineModel(q, now);
+  const waiting = q.status === "awaiting_deposit" || q.status === "incomplete_deposit";
+  const done = q.status === "confirmed";
+  const color = waiting ? (d.tone === "danger" ? "text-negative" : d.tone === "warning" ? "text-warning" : "text-muted-foreground") : done ? "text-positive" : "text-foreground";
   return (
-    <div className={cn("flex flex-col items-center gap-4 rounded-xl border p-4 transition-opacity duration-300 sm:flex-row sm:items-start", dim && "opacity-60")}>
-      {/* Two modules of quiet zone inside the white tile, plus its padding, keep the code readable by phone cameras. */}
-      <div className="shrink-0 rounded-lg border bg-white p-1.5">
-        <QRCodeSVG value={q.deposit_address} size={132} level="M" marginSize={2} title={`QR code of the deposit address ${q.deposit_address}`} className="block size-[7.5rem] sm:size-[6.5rem]" />
+    <p role="status" className={cn("flex items-center gap-2 text-sm transition-colors duration-[400ms]", color)}>
+      {done ? <Check className="size-4 shrink-0" aria-hidden /> : <LoaderCircle className={cn("size-4 shrink-0", waiting ? "animate-[spin_2.4s_linear_infinite]" : "animate-spin")} aria-hidden />}
+      {waiting ? (
+        <span>
+          Waiting for your payment. Send before <span className="num font-medium">{d.clock}</span> <span className="num">({d.text} left)</span>
+        </span>
+      ) : done ? (
+        <span>Paid. {merchant} received it.</span>
+      ) : (
+        <span>Payment received. Converting it for {merchant}, usually under a minute.</span>
+      )}
+    </p>
+  );
+}
+
+/**
+ * What to send, as one block: the QR, then the amount, the token on its network, and the address, each with its copy
+ * button. Nothing here can be read apart from the rest, so the network is never far from the address.
+ */
+function SendBlock({ q, amount, copyAmount, dim }: { q: IntentsQuote; amount: string; copyAmount: string; dim: boolean }) {
+  const [addressOnly, setAddressOnly] = useState(false);
+  const toggleId = useId();
+  const titleId = useId();
+  // A wallet payment request only where it names the deposit address itself; the buyer can still ask for the bare address.
+  const offered = depositQr(q, false, depositPaymentUri).wallet;
+  const qr = depositQr(q, addressOnly, depositPaymentUri);
+  return (
+    <section role="group" aria-labelledby={titleId} className={cn("flex flex-col rounded-xl border transition-opacity duration-300", dim && "opacity-60")}>
+      <h2 id={titleId} className="sr-only">
+        What to send
+      </h2>
+      <div className="flex items-center gap-4 p-3.5">
+        {/* Two modules of quiet zone inside the white tile, plus its padding, keep the code readable by phone cameras. */}
+        <div className="shrink-0 rounded-lg border bg-white p-1.5">
+          <QRCodeSVG
+            value={qr.value}
+            size={132}
+            level="M"
+            marginSize={2}
+            title={qr.wallet ? `QR code of the payment request ${qr.value}` : `QR code of the deposit address ${q.deposit_address}`}
+            className="block size-[6.5rem]"
+          />
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <p className="text-sm font-medium">{qr.wallet ? "Scan with your wallet app" : "Scan the address with your wallet app"}</p>
+          <p className="text-xs text-pretty text-muted-foreground">{qr.wallet ? DEPOSIT_QR_CAPTION : "The code holds the address only. Type the exact amount in your wallet."}</p>
+          {offered && (
+            <label htmlFor={toggleId} className="-my-1 inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-2 self-start text-xs font-medium text-muted-foreground md:min-h-9">
+              Address only
+              <Switch id={toggleId} size="sm" checked={addressOnly} onCheckedChange={setAddressOnly} />
+            </label>
+          )}
+        </div>
       </div>
-      <div className="flex w-full min-w-0 flex-col gap-2">
-        <p className="text-xs font-medium text-muted-foreground">Deposit address on {q.origin.chain_name}</p>
-        <p className="hash text-[0.8125rem] leading-relaxed [overflow-wrap:anywhere] select-all">{q.deposit_address}</p>
-        <CopyAction value={q.deposit_address} label="Copy address" toast="Address copied" className="self-start" />
+      <dl className="divide-y border-t text-sm">
+        <SendRow label="Amount, exactly" copy={<CopyAction value={copyAmount} label="Copy amount" short="Copy" toast="Amount copied" className="max-sm:h-11" />}>
+          <span className="num text-[0.9375rem] font-semibold whitespace-nowrap">{amount}</span>
+        </SendRow>
+        <SendRow label="Token and network">
+          <span className="font-medium">
+            {q.origin.symbol} on {q.origin.chain_name}
+          </span>
+        </SendRow>
+        <SendRow label={`Address on ${q.origin.chain_name}`} copy={<CopyAction value={q.deposit_address} label="Copy address" short="Copy" toast="Address copied" className="max-sm:h-11" />}>
+          <span className="hash text-[0.8125rem] leading-relaxed [overflow-wrap:anywhere] select-all">{q.deposit_address}</span>
+        </SendRow>
+      </dl>
+    </section>
+  );
+}
+
+function SendRow({ label, children, copy }: { label: string; children: ReactNode; copy?: ReactNode }) {
+  return (
+    <div className="flex min-h-14 items-center gap-3 px-3.5 py-2.5">
+      <div className="min-w-0 flex-1">
+        <dt className="text-xs text-muted-foreground">{label}</dt>
+        <dd className="mt-0.5">{children}</dd>
       </div>
+      {copy && <div className="shrink-0">{copy}</div>}
+    </div>
+  );
+}
+
+/**
+ * "Pay with your wallet": the browser wallet (an extension, or a wallet app's own browser on a phone) sends the exact
+ * transfer, so the buyer types no address and no amount. Live money only: a simulated deposit address is not real, and a
+ * real wallet must never be asked to pay it. Solana and tokens without a transfer to build fall back to the address.
+ */
+function PayFromWallet({ view, api, q, onQuote, onRefresh }: { view: CheckoutView; api: CheckoutApi; q: IntentsQuote; onQuote: (q: IntentsQuote) => void; onRefresh: () => void }) {
+  const has = useHasEvmWallet();
+  const [hash, setHash] = useState<string | null>(null);
+  const [sentAt, setSentAt] = useState(0);
+  // The wallet answered a hash: follow it on the chain, so a send that fails in the wallet is said, not waited on forever.
+  const onChain = useQuery({
+    queryKey: ["wallet-tx", hash],
+    queryFn: () => checkEvmTransaction(hash!),
+    enabled: Boolean(hash),
+    refetchInterval: (query) => (query.state.data === "mined" || query.state.data === "reverted" ? false : 3_000),
+  });
+  const now = useNow();
+  const o = q.origin;
+  const tx = q.mode === "live" ? depositEvmTransaction({ chain: o.chain, chainId: o.chain_id ?? null, contractAddress: o.contract_address ?? null, decimals: o.decimals, symbol: o.symbol }, q.deposit_address, sendNowAtomic(q)) : null;
+  const send = sendNow(q);
+  const pay = useMutation({
+    mutationFn: async () => {
+      const need = { token: o.contract_address ?? null, amount: BigInt(sendNowAtomic(q)), decimals: o.decimals, symbol: o.symbol, chainName: o.chain_name };
+      const r = await payWithEvmWallet(tx!, o.chain_name, need);
+      setHash(r.hash);
+      setSentAt(Date.now());
+      // The money has left the wallet: telling the server only helps it see the deposit sooner, so a failure here is quiet.
+      const next = await api.submitIntentsDeposit(view.id, q.id, r.hash).catch(() => null);
+      if (next) onQuote(next);
+      onRefresh();
+    },
+  });
+  if (!tx) return null;
+  if (!has) {
+    return (
+      <p className="flex items-start gap-2 rounded-xl border border-dashed px-3.5 py-2.5 text-xs text-pretty text-muted-foreground md:hidden">
+        <Smartphone className="mt-px size-4 shrink-0 text-[var(--ink)]" aria-hidden />
+        <span>On your phone? Open this page in your wallet app&apos;s browser to pay with one tap, or send to the address below.</span>
+      </p>
+    );
+  }
+  // Unknown to the chain a minute after the wallet answered: the wallet did not send it (its "Send failed").
+  const failed = onChain.data === "reverted" || (onChain.data === "unknown" && now - sentAt > UNSEEN_AFTER_MS);
+  if (hash && failed) {
+    return (
+      <div role="alert" className="flex flex-col gap-2 rounded-xl border border-negative/40 bg-negative-soft/40 px-3.5 py-3 text-sm">
+        <p className="flex items-start gap-2">
+          <XCircle className="mt-0.5 size-4 shrink-0 text-negative" aria-hidden />
+          <span className="min-w-0 text-pretty">
+            {onChain.data === "reverted"
+              ? `Your wallet's transaction failed on ${o.chain_name}. No money moved.`
+              : `${o.chain_name} has not seen your wallet's transaction. If your wallet shows it failed, no money moved: check its balance of ${o.symbol} on ${o.chain_name} and try again.`}
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setHash(null);
+            pay.reset();
+          }}
+          className="inline-flex min-h-11 items-center gap-1.5 self-start rounded text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-2 md:min-h-8"
+        >
+          <RotateCw className="size-3.5" aria-hidden /> Try again
+        </button>
+      </div>
+    );
+  }
+  if (hash) {
+    return (
+      <p role="status" className="flex items-start gap-2 rounded-xl border px-3.5 py-2.5 text-sm">
+        <Check className="mt-0.5 size-4 shrink-0 text-positive" aria-hidden />
+        <span className="min-w-0 [overflow-wrap:anywhere]">
+          {onChain.data === "mined" ? `Confirmed on ${o.chain_name}. NEAR Intents is converting it now: ` : `Sent from your wallet. Waiting for ${o.chain_name} to confirm it: `}
+          <span className="hash text-[0.8125rem]">{hash}</span>
+        </span>
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <BrandButton onClick={() => pay.mutate()} disabled={pay.isPending} className={cn(pay.isPending && "disabled:opacity-100")}>
+        {pay.isPending ? (
+          <>
+            <LoaderCircle className="animate-spin" aria-hidden /> Confirm in your wallet
+          </>
+        ) : (
+          <>
+            <Wallet aria-hidden /> Pay {send.amount} {send.symbol} with your wallet
+          </>
+        )}
+      </BrandButton>
+      {pay.error ? (
+        <p className="text-center text-xs text-negative">{evmWalletErrorMessage(pay.error, "pay")}</p>
+      ) : (
+        <p className="text-center text-xs text-muted-foreground">Your wallet fills in the address, network and amount. Or send it yourself below.</p>
+      )}
     </div>
   );
 }
@@ -504,28 +663,24 @@ function Steps({ steps }: { steps: IntentsStep[] }) {
 }
 
 function FeeLines({ q, merchant }: { q: IntentsQuote; merchant: string }) {
-  const f = q.fees;
-  const swap = f.swap_cost.unit === "USD" ? `$${exactUnits(f.swap_cost.formatted)}` : `${exactUnits(f.swap_cost.formatted)} ${f.swap_cost.unit}`;
-  const eta = timeEstimateText(f.time_estimate_sec);
-  const rows: [ReactNode, ReactNode, ReactNode?][] = [
-    [`${merchant} receives`, `${amountText(f.merchant_receives)} on NEAR`],
-    ["Swap and delivery cost", swap, "Paid by you, from the quote NEAR Intents signed."],
-    ["Price buffer", amountText(f.price_buffer), "Returned to your refund address if unused."],
-    ...(eta ? ([["Arrives in", eta, "After your deposit is confirmed on its chain."]] as [ReactNode, ReactNode, ReactNode][]) : []),
-  ];
   return (
     <dl className="divide-y rounded-xl border text-sm">
-      {rows.map(([k, v, hint], i) => (
-        <div key={i} className="flex flex-col gap-0.5 px-3.5 py-2.5">
+      {depositFeeLines(q.fees, merchant, q.destination).map(({ label, value, hint }) => (
+        <div key={label} className="flex flex-col gap-0.5 px-3.5 py-2.5">
           <div className="flex items-baseline justify-between gap-4">
-            <dt className="min-w-0 text-muted-foreground">{k}</dt>
-            <dd className="num shrink-0 text-right font-medium">{v}</dd>
+            <dt className="min-w-0 text-muted-foreground">{label}</dt>
+            <dd className="num shrink-0 text-right font-medium">{value}</dd>
           </div>
           {hint && <p className="text-xs text-subtle">{hint}</p>}
         </div>
       ))}
     </dl>
   );
+}
+
+/** Who to contact after a deposit that cannot count, with the address to quote; the address wraps, never scrolls. */
+function WrongDeposit({ view, q }: { view: CheckoutView; q: IntentsQuote }) {
+  return <p className="text-xs text-pretty text-muted-foreground [overflow-wrap:anywhere]">{wrongDepositCopy(view, q)}</p>;
 }
 
 /** Simulated mode only: what the buyer's wallet would do on another chain, done by the fake 1Click server. */
@@ -641,10 +796,12 @@ function Ended({ view, q, stage, onTryAgain }: { view: CheckoutView; q: IntentsQ
         <h1 className="text-xl font-semibold tracking-[-0.01em] text-balance">{title}</h1>
         <p className="mt-1 text-sm text-pretty text-muted-foreground">{copy}</p>
       </div>
+      {stage === "expired" && <WrongDeposit view={view} q={q} />}
       {stage === "returned" && (
         <dl className="w-full divide-y rounded-xl border text-left text-sm">
           {q.deposited && <Line k="You sent" v={<span className="num font-medium">{amountText(q.deposited)}</span>} />}
           {q.refunded && <Line k="Returned" v={<span className="num font-medium">{amountText(q.refunded)}</span>} />}
+          {refundKept(q) && <Line k="Refund fee, kept by NEAR Intents" v={<span className="num">{refundKept(q)}</span>} />}
           <Line k="To" v={<span className="hash text-[0.8125rem]">{q.refund_to}</span>} />
           {refundTx && <Line k="Your deposit" v={<TxValue tx={refundTx} />} />}
         </dl>

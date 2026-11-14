@@ -23,6 +23,7 @@ import {
   type IntentsDepositEvent,
   type IntentsOption,
   type IntentsOptions,
+  type IntentsOrigin,
   type IntentsPayout,
   type IntentsPayoutProof,
   type IntentsPlatformStatus,
@@ -35,14 +36,15 @@ import {
   type PaymentIntents,
   type PublicLinkIntents,
 } from "@payminto/protocol";
-import type { IntentsConfig } from "../config.ts";
+import { INTENTS_EVM_RPC_DEFAULTS, type IntentsConfig, type IntentsEvmChain } from "../config.ts";
 import type { Database } from "../db/database.ts";
 import { ApiError } from "../errors.ts";
 import type { Logger } from "../logger.ts";
+import { addCollector, INTENTS_ALERT_KINDS, intentsAlertsMetric, type IntentsAlertKind } from "../metrics.ts";
 import { Mutex } from "../mutex.ts";
 import { nowIso } from "../store.ts";
 import type { CheckoutRail } from "./checkout.ts";
-import type { IntentsChainReader } from "./intents-rpc.ts";
+import { EvmRpc, type IntentsChainReader, type RpcFetch } from "./intents-rpc.ts";
 import type { MerchantRow, MerchantService } from "./merchants.ts";
 import { isoOf, type CreditRow, type PaymentRow } from "./model.ts";
 import type { PaymentService } from "./payments.ts";
@@ -53,13 +55,51 @@ type FetchLike = Kit.FetchLike;
 type QuoteResponse = Kit.QuoteResponse;
 type StatusResponse = Kit.StatusResponse;
 type CheckoutOrigin = Kit.CheckoutOrigin;
+type PayoutDestination = Kit.PayoutDestination;
+
+/** An origin in JSON: `IntentsOrigin` with the token contract on its chain and the EVM chain id (null when not EVM). */
+export type IntentsOriginJson = IntentsOrigin & { contract_address: string | null; chain_id: number | null };
+/** Where the USDC of a quote lands. */
+export type IntentsQuoteDestination = { chain: string; chain_name: string; symbol: "USDC"; address: string };
+/** `IntentsQuote` with origin token details and its destination (packages/protocol does not carry these yet). */
+export type IntentsQuoteJson = IntentsQuote & { origin: IntentsOriginJson; destination: IntentsQuoteDestination };
+/** How the node confirms a delivery on a destination: reading it (`rpc`), or on 1Click's word (`provider_only`). */
+export type DestinationVerify = "rpc" | "provider_only";
+/** The business's destination on `GET /v1/merchant/intents-payout`. */
+export type IntentsPayoutDestination = { chain: string; chain_name: string; symbol: "USDC"; asset: string; address: string | null; proven: boolean; verify: DestinationVerify };
+/** One destination a business can choose. */
+export type IntentsDestinationOption = { chain: string; chain_name: string; symbol: "USDC"; asset: string; decimals: 6; verify: DestinationVerify };
+/** `IntentsPayout` with the default token and the destination (packages/protocol does not carry these yet). */
+export type IntentsPayoutJson = IntentsPayout & { default_origin: string | null; destination: IntentsPayoutDestination; destinations: IntentsDestinationOption[] };
+/** `IntentsCheckout` with the token the checkout pre-selects. */
+export type IntentsCheckoutJson = IntentsCheckout & { default_origin: string | null };
+
+/**
+ * Names and EVM chain ids of the destinations, for code that runs without the kit (reports). The kit's
+ * PAYOUT_DESTINATIONS is the source of asset ids and contracts; a test pins both to the same chains.
+ */
+export const DESTINATION_CHAINS: Record<string, { name: string; chainId: number | null; explorer: string | null }> = {
+  near: { name: "NEAR", chainId: null, explorer: "https://nearblocks.io/txns/" },
+  base: { name: "Base", chainId: 8453, explorer: "https://basescan.org/tx/" },
+  arb: { name: "Arbitrum", chainId: 42161, explorer: "https://arbiscan.io/tx/" },
+  eth: { name: "Ethereum", chainId: 1, explorer: "https://etherscan.io/tx/" },
+  pol: { name: "Polygon", chainId: 137, explorer: "https://polygonscan.com/tx/" },
+  op: { name: "Optimism", chainId: 10, explorer: "https://optimistic.etherscan.io/tx/" },
+};
+
+/** Where the USDC of a quote lands, as `settlement_network`: `near:mainnet`, `eip155:8453`, with ` (simulated)` when it is. */
+export function settlementNetworkOf(mode: "live" | "simulated", chain: string): string {
+  const id = DESTINATION_CHAINS[chain]?.chainId;
+  const network = chain === "near" || id === undefined ? "near:mainnet" : `eip155:${id}`;
+  return mode === "live" ? network : `${network} (simulated)`;
+}
 
 /** A wet quote is refused with less than this left before the payment expires. */
 export const MIN_QUOTE_WINDOW_SEC = 600;
 /** The longest a deposit address is asked for. */
 export const QUOTE_TTL_SEC = 1_800;
 /** Active quotes a payment may have at once. */
-export const MAX_ACTIVE_QUOTES = 5;
+export const MAX_ACTIVE_QUOTES = 8;
 /** Dry prices are reused this long per origin, amount and recipient. */
 export const OPTIONS_CACHE_SEC = 30;
 /** A 404 for a new deposit address is "not seen yet" for this long. */
@@ -68,6 +108,16 @@ export const NOT_FOUND_GRACE_SEC = 120;
 export const PROVIDER_ONLY_AFTER_SEC = 600;
 /** A quote whose address never saw a deposit is watched this long after its deadline, then marked expired. */
 export const WATCH_AFTER_DEADLINE_SEC = 86_400;
+/** A deposit address is only issued after the payout account's USDC registration was read this recently. */
+export const REGISTRATION_CACHE_SEC = 300;
+/** A quote that saw a deposit and is still not final this long after its deadline raises a `stuck` alert. */
+export const STUCK_AFTER_SEC = 6 * 3600;
+/** After a 401 or 403 from 1Click (a revoked or wrong API key) a quote is read again this often, not backed off. */
+export const AUTH_RETRY_SEC = 900;
+/** Quotes the watcher polls at once, so one hung 1Click or RPC call never stalls the others. */
+export const WATCH_CONCURRENCY = 4;
+/** The platform event of an operator alert, stored once per quote and kind; a platform webhook endpoint with `*` receives it. */
+export const INTENTS_ALERT_EVENT = "intents.alert";
 /** NEP-145 registration of native USDC on NEAR mainnet: 0.00125 NEAR (storage_balance_bounds, read live 2026-11-10). */
 export const USDC_STORAGE_DEPOSIT = "1250000000000000000000";
 
@@ -80,8 +130,11 @@ export type QuoteRow = {
   origin_chain: string;
   origin_symbol: string;
   origin_decimals: number;
+  /** The business's account at quote time on the destination chain: a NEAR account, or an EVM address (lowercased). */
   recipient: AccountId;
   refund_to: string;
+  refund_type: "ORIGIN_CHAIN" | "INTENTS";
+  send_by_unix: number | null;
   slippage_bps: number;
   amount_out: string;
   amount_in: string;
@@ -114,6 +167,9 @@ export type QuoteRow = {
   poll_errors: number;
   created_at: string;
   updated_at: string;
+  /** Migration 009: `near`, or the EVM chain the USDC is delivered on, and its 1Click asset id (null on older rows). */
+  destination_chain: string;
+  destination_asset: string | null;
 };
 
 type WireTx = { hash: string; explorerUrl?: string };
@@ -138,6 +194,8 @@ const STEP_PROGRESS: Record<IntentsQuoteStatus, { done: number; failed: boolean 
   expired: { done: 0, failed: true },
 };
 const ACTIVE: readonly IntentsQuoteStatus[] = ["awaiting_deposit", "deposit_detected", "incomplete_deposit", "processing", "delivered"];
+/** Active states in which 1Click has seen a deposit: money is on its way. */
+const DEPOSIT_SEEN: readonly IntentsQuoteStatus[] = ["deposit_detected", "incomplete_deposit", "processing", "delivered"];
 const inList = (xs: readonly string[]) => xs.map((s) => `'${s}'`).join(", ");
 
 const mask = (a: string) => (a.length > 14 ? `${a.slice(0, 6)}...${a.slice(-4)}` : a);
@@ -160,6 +218,8 @@ export type IntentsDeps = {
   hub: AccountId;
   /** Unix seconds. */
   clock: () => number;
+  /** Per 1Click request. Default the client's 15 s. */
+  oneClickTimeoutMs?: number;
 };
 
 /** What the hosted page needs to offer `oneclick` on a payment, or null when this rail cannot take it now. */
@@ -185,6 +245,8 @@ export class IntentsService {
   readonly config: IntentsConfig;
   readonly kit: IntentsKit;
   readonly #reader: IntentsChainReader;
+  /** Deliveries on EVM destinations: the chains' JSON-RPC live, the fake server's simulated chains when simulated. */
+  readonly #evm: EvmRpc;
   readonly #client: Kit.OneClickClient;
   readonly #fetch: FetchLike;
   readonly #db: Database;
@@ -198,6 +260,11 @@ export class IntentsService {
   readonly #options = new Map<string, { at: number; rows: Promise<IntentsOption[]> }>();
   #lastCall: LastCall | null = null;
   #rateRemaining: number | null = null;
+  /** The USDC registration of payout accounts as last read, by account. */
+  readonly #registration = new Map<AccountId, { at: number; registered: boolean }>();
+  /** Alerts raised by this process, for the metric; `#alerted` also holds those found already in the event log. */
+  readonly #alertCounts = Object.fromEntries(INTENTS_ALERT_KINDS.map((k) => [k, 0])) as Record<IntentsAlertKind, number>;
+  readonly #alerted = new Set<string>();
 
   constructor(d: IntentsDeps) {
     const k = d.kit;
@@ -224,7 +291,20 @@ export class IntentsService {
     this.#hub = d.hub;
     this.#clock = d.clock;
     this.#fetch = this.#recording(d.fetch ?? (globalThis.fetch as unknown as FetchLike));
-    this.#client = new k.OneClickClient({ baseUrl: d.config.baseUrl, ...(d.config.apiKey ? { apiKey: d.config.apiKey } : {}), fetch: this.#fetch });
+    // Simulated mode never reads a real chain: the fake 1Click server serves the receipts of its simulated deliveries.
+    const evmUrls =
+      d.config.evmRpcUrls ??
+      (this.mode === "live"
+        ? INTENTS_EVM_RPC_DEFAULTS
+        : (Object.fromEntries(k.EVM_PAYOUT_CHAINS.map((c) => [c, `${d.config.baseUrl}/_fake/rpc/${c}`])) as Record<IntentsEvmChain, string>));
+    this.#evm = new EvmRpc(evmUrls, { fetch: (d.fetch ?? globalThis.fetch) as unknown as RpcFetch });
+    this.#client = new k.OneClickClient({
+      baseUrl: d.config.baseUrl,
+      ...(d.config.apiKey ? { apiKey: d.config.apiKey } : {}),
+      ...(d.oneClickTimeoutMs ? { timeoutMs: d.oneClickTimeoutMs } : {}),
+      fetch: this.#fetch,
+    });
+    addCollector(d.db, () => [intentsAlertsMetric(this.#alertCounts)]);
   }
 
   /** Every 1Click call goes through here: a timeout, the last call and the rate limit left, for the platform status. */
@@ -265,9 +345,40 @@ export class IntentsService {
 
   // ------------------------------------------------------------------ the merchant's NEAR account
 
-  /** The account, proven, existing and registered with USDC: only then can `oneclick` be on. */
+  /**
+   * Where the business receives USDC now: its NEAR account (the default), or its proven address on an EVM chain. Null
+   * `recipient` until one is set.
+   */
+  destinationOf(m: MerchantRow): { dest: PayoutDestination; recipient: string | null; proven: boolean } {
+    const chain = m.intents_destination_chain ?? "near";
+    const evm = chain !== "near" ? this.kit.payoutDestinationOf(chain) : undefined;
+    if (evm) return { dest: evm, recipient: m.intents_destination_address ?? null, proven: !!m.intents_destination_address && !!m.intents_destination_proven_at };
+    return { dest: this.kit.payoutDestinationOf("near")!, recipient: m.intents_payout ?? null, proven: !!m.intents_payout && !!m.intents_payout_proven_at };
+  }
+
+  /** `rpc` when the node reads deliveries on this destination chain itself; `provider_only` when it takes 1Click's word. */
+  verifyOn(chain: string): DestinationVerify {
+    return chain === "near" || this.#evm.canRead(chain) ? "rpc" : "provider_only";
+  }
+
+  /**
+   * The destination is ready: on NEAR the account is proven, exists and is registered with USDC; on an EVM chain the
+   * address is proven. Only then can `oneclick` be on.
+   */
   verified(m: MerchantRow): boolean {
+    const d = this.destinationOf(m);
+    if (d.dest.blockchain !== "near") return d.proven;
     return !!m.intents_payout && !!m.intents_payout_proven_at && m.intents_payout_registered === 1;
+  }
+
+  /** The token the checkout pre-selects, when it is still offered. */
+  defaultOrigin(m: MerchantRow): string | null {
+    const a = m.intents_default_origin ?? null;
+    return a && this.origins.some((o) => o.assetId === a) ? a : null;
+  }
+
+  #destinationsJson(): IntentsDestinationOption[] {
+    return this.kit.PAYOUT_DESTINATIONS.map((d) => ({ chain: d.blockchain, chain_name: d.chainName, symbol: "USDC", asset: d.assetId, decimals: 6, verify: this.verifyOn(d.blockchain) }));
   }
 
   #scope() {
@@ -279,7 +390,7 @@ export class IntentsService {
     return intentsPayoutProofRequest(merchantId, account, timestamp, this.#scope());
   }
 
-  async payoutView(m: MerchantRow, fresh = true): Promise<IntentsPayout> {
+  async payoutView(m: MerchantRow, fresh = true): Promise<IntentsPayoutJson> {
     const account = m.intents_payout ?? null;
     let exists: boolean | null = null;
     let registered: boolean | null = account ? m.intents_payout_registered === 1 : null;
@@ -287,6 +398,7 @@ export class IntentsService {
       // Read now: a human may have just sent the storage_deposit. A failed read leaves the stored answer.
       try {
         [exists, registered] = await Promise.all([this.#reader.accountExists(account), this.#reader.storageRegistered(this.usdcContract, account)]);
+        this.#registration.set(account, { at: this.#clock(), registered });
         if ((registered ? 1 : 0) !== m.intents_payout_registered) {
           this.#db.run("UPDATE merchants SET intents_payout_registered = ?, updated_at = ? WHERE id = ?", registered ? 1 : 0, nowIso(), m.id);
           m = this.#merchants.merchant(m.id);
@@ -297,17 +409,19 @@ export class IntentsService {
       }
     }
     const proven = !!account && !!m.intents_payout_proven_at;
+    const d = this.destinationOf(m);
+    const onNear = d.dest.blockchain === "near";
     return {
       object: "intents_payout",
       mode: this.mode,
       label: this.label,
       settlement_network: this.settlementNetwork,
       account,
-      verified: this.verified(m) && exists !== false,
+      verified: this.verified(m) && (!onNear || exists !== false),
       checks: { exists, usdc_registered: registered, proven, proven_at: m.intents_payout_proven_at ?? null },
       usdc: { contract: this.usdcContract, asset_id: `nep141:${this.kit.NEAR_MAINNET_USDC}`, decimals: 6 },
       storage_step:
-        account && registered === false
+        onNear && account && registered === false
           ? {
               why: `${account} is not registered with USDC yet, so a delivery to it would fail. Send this storage_deposit from ${account} (it costs 0.00125 NEAR, once).`,
               deposit_near: "0.00125",
@@ -317,6 +431,9 @@ export class IntentsService {
       enabled: this.#merchants.method(m.id, "oneclick")?.enabled === 1,
       proof_scope: { settlement_network: this.settlementNetwork, hub: this.#hub },
       checked_at: nowIso(),
+      default_origin: this.defaultOrigin(m),
+      destination: { chain: d.dest.blockchain, chain_name: d.dest.chainName, symbol: "USDC", asset: d.dest.assetId, address: d.recipient, proven: d.proven, verify: this.verifyOn(d.dest.blockchain) },
+      destinations: this.#destinationsJson(),
     };
   }
 
@@ -325,7 +442,7 @@ export class IntentsService {
    * merchant, this account and this node), that the key is a full-access key of the account, and that the account
    * exists. USDC registration is stored as read; without it the account is saved but not verified.
    */
-  async setPayout(m: MerchantRow, account: AccountId, proof: IntentsPayoutProof): Promise<IntentsPayout> {
+  async setPayout(m: MerchantRow, account: AccountId, proof: IntentsPayoutProof): Promise<IntentsPayoutJson> {
     const age = this.#clock() - proof.timestamp;
     if (age > PAYOUT_PROOF_MAX_AGE_SECONDS || age < -60) throw new ApiError(400, "PAYOUT_PROOF_EXPIRED", `the signed timestamp must be within ${PAYOUT_PROOF_MAX_AGE_SECONDS}s`);
     if (!verifyIntentsPayoutSignature(account, proof, m.id, this.#scope())) {
@@ -345,8 +462,9 @@ export class IntentsService {
     }
     const registered = await read("the USDC registration", () => this.#reader.storageRegistered(this.usdcContract, account));
     const at = nowIso();
+    // NEAR becomes the destination again; a proven EVM address stays on file for the record.
     this.#db.run(
-      "UPDATE merchants SET intents_payout = ?, intents_payout_proven_at = ?, intents_payout_registered = ?, intents_payout_proof = ?, updated_at = ? WHERE id = ?",
+      "UPDATE merchants SET intents_payout = ?, intents_payout_proven_at = ?, intents_payout_registered = ?, intents_payout_proof = ?, intents_destination_chain = 'near', intents_destination_asset = NULL, updated_at = ? WHERE id = ?",
       account,
       at,
       registered ? 1 : 0,
@@ -355,12 +473,117 @@ export class IntentsService {
       m.id,
     );
     this.#log.info("any-chain payout account set", { merchantId: m.id, account, registered });
+    if (m.intents_payout !== account || (m.intents_destination_chain ?? "near") !== "near") this.payoutChanged(m.id, account, "near");
     // Read the chain again for the answer, so every check has one (a page never shows "not read" right after a save).
     return this.payoutView(this.#merchants.merchant(m.id));
   }
 
+  /**
+   * Makes USDC on an EVM chain the destination, delivered to `address`, after checking the EIP-191 proof: signed by the
+   * address, within the same window as the NEAR proof, for this business, this chain and this node. Nothing is read on
+   * the chain: an EVM address needs no registration. Open quotes to the old destination expire.
+   */
+  async setEvmPayout(m: MerchantRow, chain: string, address: string, proof: { timestamp: number; signature: string }): Promise<IntentsPayoutJson> {
+    const dest = this.kit.isEvmPayoutChain(chain) ? this.kit.payoutDestinationOf(chain) : undefined;
+    if (!dest || dest.chainId === null) {
+      const offered = this.kit.EVM_PAYOUT_CHAINS.join(", ");
+      throw new ApiError(400, "DESTINATION_NOT_OFFERED", `USDC on ${chain} is not a destination here; choose one of ${offered}, or send { account, proof } for NEAR`);
+    }
+    if (!this.kit.isEvmAddress(address)) throw new ApiError(400, "INVALID_ADDRESS", `the address is not a valid ${dest.chainName} address`);
+    const lower = address.toLowerCase();
+    const age = this.#clock() - proof.timestamp;
+    if (age > PAYOUT_PROOF_MAX_AGE_SECONDS || age < -60) throw new ApiError(400, "PAYOUT_PROOF_EXPIRED", `the signed timestamp must be within ${PAYOUT_PROOF_MAX_AGE_SECONDS}s`);
+    const ok = await this.kit.verifyEvmPayoutProof({ merchantId: m.id, address: lower, timestamp: proof.timestamp, chainId: dest.chainId, hub: this.#hub, signature: proof.signature });
+    if (!ok) throw new ApiError(400, "PAYOUT_PROOF_INVALID", "the signature does not match the any-chain payout message for this business, address, chain and node");
+    const at = nowIso();
+    this.#db.run(
+      `UPDATE merchants SET intents_destination_chain = ?, intents_destination_asset = ?, intents_destination_address = ?, intents_destination_proof = ?,
+              intents_destination_proven_at = ?, updated_at = ? WHERE id = ?`,
+      dest.blockchain,
+      dest.assetId,
+      lower,
+      JSON.stringify({ type: "eip191", timestamp: proof.timestamp, signature: proof.signature, chain_id: dest.chainId, hub: this.#hub }),
+      at,
+      at,
+      m.id,
+    );
+    this.#log.info("any-chain payout destination set", { merchantId: m.id, chain: dest.blockchain, address: lower });
+    if ((m.intents_destination_chain ?? "near") !== dest.blockchain || m.intents_destination_address !== lower) this.payoutChanged(m.id, lower, dest.blockchain);
+    return this.payoutView(this.#merchants.merchant(m.id));
+  }
+
+  /** `PATCH /v1/merchant/intents-payout`: the token the checkout pre-selects, one of the offered origins, or none. */
+  async setDefaultOrigin(m: MerchantRow, asset: string | null): Promise<IntentsPayoutJson> {
+    if (asset !== null && !this.origins.some((o) => o.assetId === asset)) throw new ApiError(400, "ORIGIN_NOT_OFFERED", `${asset} is not an origin this checkout offers`);
+    this.#db.run("UPDATE merchants SET intents_default_origin = ?, updated_at = ? WHERE id = ?", asset, nowIso(), m.id);
+    return this.payoutView(this.#merchants.merchant(m.id));
+  }
+
+  /**
+   * The business now receives any-chain payments at `account` on `chain` (`near` by default; null account: none). Every
+   * open quote of the business to another account or chain that has seen no deposit (`awaiting_deposit`) is expired, so
+   * no new money goes to the old destination; quotes with a deposit already seen keep theirs and are logged. Returns how
+   * many expired. setPayout and setEvmPayout call it; call it too wherever else the destination changes.
+   */
+  payoutChanged(merchantId: string, account: string | null, chain = "near"): number {
+    const stale = this.#db.all<QuoteRow>(
+      `SELECT * FROM intents_quotes WHERE merchant_id = ? AND (recipient IS NOT ? OR destination_chain IS NOT ?) AND status IN (${inList(ACTIVE)})`,
+      merchantId,
+      account,
+      chain,
+    );
+    const open = stale.filter((r) => r.status === "awaiting_deposit");
+    let expired = 0;
+    this.#db.tx(() => {
+      for (const r of open) expired += Number(this.#db.run("UPDATE intents_quotes SET status = 'expired', updated_at = ? WHERE id = ? AND status = 'awaiting_deposit'", nowIso(), r.id).changes);
+      for (const paymentId of new Set(open.map((r) => r.payment_id))) this.#payments.notify(paymentId);
+    });
+    if (expired) this.#log.info("payout destination changed: open any-chain deposit addresses to the old destination expired", { merchantId, account, chain, expired, quoteIds: open.map((r) => r.id) });
+    for (const r of stale.filter((x) => x.status !== "awaiting_deposit")) {
+      this.#log.warn("payout destination changed while a deposit is on its way; it is still delivered to the old destination", { merchantId, quoteId: r.id, paymentId: r.payment_id, status: r.status, recipient: r.recipient, destinationChain: r.destination_chain, account, chain });
+    }
+    return expired;
+  }
+
+  /**
+   * Before a deposit address is issued: the payout account's USDC registration, read again at most every
+   * REGISTRATION_CACHE_SEC. Gone: the stored flag is cleared, so the method is greyed like an unfinished setup, and the
+   * request is refused with the reason the availability check gives. A failed read keeps the stored answer.
+   */
+  async #ensureRegistered(p: PaymentRow, m: MerchantRow): Promise<void> {
+    // Only a NEAR account needs a USDC registration; an EVM address takes an ERC-20 transfer as it is.
+    if (this.destinationOf(m).dest.blockchain !== "near") return;
+    const account = m.intents_payout;
+    if (!account) return;
+    const now = this.#clock();
+    let cached = this.#registration.get(account);
+    if (!cached || now - cached.at >= REGISTRATION_CACHE_SEC) {
+      try {
+        cached = { at: now, registered: await this.#reader.storageRegistered(this.usdcContract, account) };
+        this.#registration.set(account, cached);
+      } catch (err) {
+        // The stored answer was "registered" (availability checked it); read again in a minute, not on every request.
+        this.#log.warn("could not read the payout account's USDC registration; using the stored answer", { merchantId: m.id, account, err });
+        this.#registration.set(account, { at: now - REGISTRATION_CACHE_SEC + 60, registered: true });
+        return;
+      }
+    }
+    if (cached.registered) return;
+    if (m.intents_payout_registered === 1) {
+      this.#db.run("UPDATE merchants SET intents_payout_registered = 0, updated_at = ? WHERE id = ? AND intents_payout = ?", nowIso(), m.id, account);
+      this.#log.warn("the any-chain payout account is no longer registered with USDC; the method is greyed until it is", { merchantId: m.id, account });
+    }
+    const a = this.availability(p, this.#merchants.merchant(m.id));
+    throw new ApiError(409, "INTENTS_UNAVAILABLE", a.reason ?? "This business has not finished setting up payments from other chains.");
+  }
+
   /** `PUT /v1/merchants/{id}/methods` turning `oneclick` on. */
   assertCanEnable(m: MerchantRow): void {
+    const d = this.destinationOf(m);
+    if (d.dest.blockchain !== "near") {
+      if (!d.proven) throw new ApiError(409, "INTENTS_PAYOUT_REQUIRED", `prove the ${d.dest.chainName} address for any-chain payments with a signed message first`);
+      return;
+    }
     if (!m.intents_payout) throw new ApiError(409, "INTENTS_PAYOUT_REQUIRED", "set a NEAR account for any-chain payments first (PUT /v1/merchant/intents-payout)");
     if (!m.intents_payout_proven_at) throw new ApiError(409, "INTENTS_PAYOUT_REQUIRED", "prove the NEAR account for any-chain payments with a signed message first");
     if (m.intents_payout_registered !== 1) throw new ApiError(409, "INTENTS_PAYOUT_NOT_REGISTERED", `${m.intents_payout} is not registered with USDC yet; send the storage_deposit shown by GET /v1/merchant/intents-payout`);
@@ -432,6 +655,33 @@ export class IntentsService {
     const r = c.intents_quote_id ? this.row(c.intents_quote_id) : undefined;
     if (!r) return null;
     const q = this.json(r);
+    if (r.destination_chain !== "near") {
+      let onChain: bigint | null = null;
+      if (q.delivery_tx && this.#evm.canRead(r.destination_chain)) {
+        const read = await this.#readEvm(r, [q.delivery_tx.hash]);
+        if (read.allFinal) onChain = read.total;
+      }
+      return {
+        method: "oneclick",
+        amount: c.amount,
+        payer: r.refund_type === "INTENTS" ? this.#payer(r) : `${r.origin_chain}:${mask(r.refund_to)}`,
+        quote_id: r.id,
+        mode: r.mode,
+        label: INTENTS_LABELS[r.mode],
+        settlement_network: q.settlement_network,
+        token: this.#evmToken(r) ?? "",
+        recipient: r.recipient,
+        origin: q.origin,
+        deposited: q.deposited,
+        origin_txs: q.origin_txs,
+        delivery_tx: q.delivery_tx,
+        delivery_senders: [],
+        oneclick: { status: r.provider_status, correlation_id: r.correlation_id, deposit_address: r.deposit_address, read_at: r.updated_at },
+        verification: r.verification,
+        delivered_on_chain: onChain === null ? null : onChain.toString(),
+        verified: onChain === null ? null : onChain >= BigInt(c.amount),
+      };
+    }
     const senders = [...new Set([...this.config.deliverySenders, r.recipient])];
     let delivered: bigint | null = null;
     if (q.delivery_tx) {
@@ -445,7 +695,7 @@ export class IntentsService {
     return {
       method: "oneclick",
       amount: c.amount,
-      payer: `${r.origin_chain}:${mask(r.refund_to)}`,
+      payer: r.refund_type === "INTENTS" ? this.#payer(r) : `${r.origin_chain}:${mask(r.refund_to)}`,
       quote_id: r.id,
       mode: r.mode,
       label: INTENTS_LABELS[r.mode],
@@ -465,10 +715,34 @@ export class IntentsService {
   }
 
   /** `intents` on the checkout view and its SSE stream. */
-  checkout(p: PaymentRow): IntentsCheckout {
-    const a = this.availability(p);
-    const row = this.#db.get<QuoteRow>("SELECT * FROM intents_quotes WHERE payment_id = ? AND status != 'expired' ORDER BY created_at DESC, rowid DESC LIMIT 1", p.id);
-    return { mode: this.mode, label: this.label, available: a.available, reason: a.reason, settlement_network: this.settlementNetwork, active_quote: row ? this.json(row) : null };
+  checkout(p: PaymentRow): IntentsCheckoutJson {
+    const m = this.#merchants.merchant(p.merchant_id);
+    const a = this.availability(p, m);
+    // The confirmed quote once there is one, so the receipt names the method and transactions that paid.
+    const row = this.#db.get<QuoteRow>(
+      "SELECT * FROM intents_quotes WHERE payment_id = ? AND status != 'expired' ORDER BY (status = 'confirmed') DESC, created_at DESC, rowid DESC LIMIT 1",
+      p.id,
+    );
+    return {
+      mode: this.mode,
+      label: this.label,
+      available: a.available,
+      reason: a.reason,
+      settlement_network: settlementNetworkOf(this.mode, this.destinationOf(m).dest.blockchain),
+      active_quote: row ? this.json(row) : null,
+      default_origin: this.defaultOrigin(m),
+    };
+  }
+
+  /**
+   * True while a quote of this payment has seen a deposit and is not final (deposit_detected, incomplete_deposit with a
+   * deposit, processing, delivered): money is on its way, so the checkout must not take a second payment.
+   */
+  inFlight(paymentId: string): boolean {
+    return !!this.#db.get<{ x: number }>(
+      `SELECT 1 AS x FROM intents_quotes WHERE payment_id = ? AND (status IN ('deposit_detected', 'processing', 'delivered') OR (status = 'incomplete_deposit' AND deposited_amount IS NOT NULL)) LIMIT 1`,
+      paymentId,
+    );
   }
 
   /** `intents` on `GET /v1/payments/{id}`: every quote with its signed 1Click response, or null when there is none. */
@@ -482,9 +756,11 @@ export class IntentsService {
     return BigInt(p.amount_due) - BigInt(p.amount_paid);
   }
 
-  #recipient(m: MerchantRow): AccountId {
-    if (!m.intents_payout) throw new ApiError(409, "INTENTS_UNAVAILABLE", "This business has not finished setting up payments from other chains.");
-    return m.intents_payout;
+  /** The destination quotes deliver to now, with the business's account or address there. */
+  #recipient(m: MerchantRow): { recipient: string; dest: PayoutDestination } {
+    const d = this.destinationOf(m);
+    if (!d.recipient) throw new ApiError(409, "INTENTS_UNAVAILABLE", "This business has not finished setting up payments from other chains.");
+    return { recipient: d.recipient, dest: d.dest };
   }
 
   /** `GET /v1/checkout/{id}/intents/options`: each offered origin with an indicative dry price, or why it is greyed. */
@@ -492,13 +768,14 @@ export class IntentsService {
     const m = this.#merchants.merchant(p.merchant_id);
     const a = this.availability(p, m);
     if (!a.available) throw new ApiError(409, "INTENTS_UNAVAILABLE", a.reason!);
+    await this.#ensureRegistered(p, m);
     const amount = this.#remaining(p);
-    const recipient = this.#recipient(m);
+    const { recipient, dest } = this.#recipient(m);
     const now = this.#clock();
-    const key = `${amount}|${recipient}`;
+    const key = `${amount}|${dest.assetId}|${recipient}`;
     let cached = this.#options.get(key);
     if (!cached || now - cached.at >= OPTIONS_CACHE_SEC) {
-      cached = { at: now, rows: Promise.all(this.origins.map((o) => this.#dryOption(o, amount, recipient))) };
+      cached = { at: now, rows: Promise.all(this.origins.map((o) => this.#dryOption(o, amount, recipient, dest))) };
       this.#options.set(key, cached);
       // Old entries go once they cannot be served any more.
       for (const [k, v] of this.#options) if (now - v.at >= OPTIONS_CACHE_SEC) this.#options.delete(k);
@@ -511,18 +788,20 @@ export class IntentsService {
       label: this.label,
       amount_out: { amount: amount.toString(), formatted: this.kit.formatUnits(amount, 6), symbol: "USDC" },
       recipient,
-      settlement_network: this.settlementNetwork,
+      settlement_network: settlementNetworkOf(this.mode, dest.blockchain),
       quoted_at: isoOf(cached.at),
       valid_until: isoOf(cached.at + OPTIONS_CACHE_SEC),
       options: rows,
     };
   }
 
-  #originJson(o: Pick<CheckoutOrigin, "assetId" | "blockchain" | "chainName" | "symbol" | "decimals">) {
-    return { asset: o.assetId, chain: o.blockchain, chain_name: o.chainName, symbol: o.symbol, decimals: o.decimals };
+  /** An origin with its token contract and EVM chain id, pinned in the kit (never fetched). */
+  #originJson(o: Pick<CheckoutOrigin, "assetId" | "blockchain" | "chainName" | "symbol" | "decimals">): IntentsOriginJson {
+    const pinned = this.kit.originOf(o.assetId);
+    return { asset: o.assetId, chain: o.blockchain, chain_name: o.chainName, symbol: o.symbol, decimals: o.decimals, contract_address: pinned?.contractAddress ?? null, chain_id: pinned?.chainId ?? null };
   }
 
-  async #dryOption(origin: CheckoutOrigin, amount: bigint, recipient: AccountId): Promise<IntentsOption> {
+  async #dryOption(origin: CheckoutOrigin, amount: bigint, recipient: string, dest: PayoutDestination): Promise<IntentsOption> {
     const slippage = this.kit.slippageFor(origin, this.config.slippage);
     const base = { origin: this.#originJson(origin), slippage_bps: slippage };
     const greyed = (reason: string): IntentsOption => ({ ...base, available: false, reason, amount_in: null, amount_in_usd: null, time_estimate_sec: null, fees: null });
@@ -530,6 +809,7 @@ export class IntentsService {
       origin,
       amount,
       recipient,
+      destination: dest,
       refundTo: this.kit.DRY_QUOTE_REFUND_TO[origin.addressFormat],
       slippageBps: slippage,
       deadline: (this.#clock() + QUOTE_TTL_SEC) * 1000,
@@ -561,25 +841,34 @@ export class IntentsService {
    * `POST /v1/checkout/{id}/intents/quotes`: a wet quote, checked before its deposit address is stored or shown. An
    * active quote for the same origin and refund address with 10 minutes or more left is reused.
    */
-  async createQuote(p0: PaymentRow, b: { origin_asset: string; refund_to: string }): Promise<{ quote: IntentsQuote; reused: boolean }> {
+  async createQuote(p0: PaymentRow, b: { origin_asset: string; refund_to?: string | undefined }): Promise<{ quote: IntentsQuote; reused: boolean }> {
     const origin = this.origins.find((o) => o.assetId === b.origin_asset);
     if (!origin) throw new ApiError(400, "ORIGIN_NOT_OFFERED", `${b.origin_asset} is not an origin this checkout offers`);
-    if (!this.kit.isOriginAddress(origin, b.refund_to)) throw new ApiError(400, "INVALID_REFUND_ADDRESS", `the refund address is not a valid ${origin.chainName} address`);
+    if (b.refund_to !== undefined && !this.kit.isOriginAddress(origin, b.refund_to)) throw new ApiError(400, "INVALID_REFUND_ADDRESS", `the refund address is not a valid ${origin.chainName} address`);
     return this.#locked(p0.id, async () => {
       const p = this.#payments.row(p0.id)!;
       const m = this.#merchants.merchant(p.merchant_id);
       const a = this.availability(p, m);
       if (!a.available) throw new ApiError(409, "INTENTS_UNAVAILABLE", a.reason!);
+      // No buyer address: a failed or short deposit goes back to the business's own NEAR Intents balance, and the business
+      // returns it to the buyer (the one-screen checkout asks the buyer for nothing).
+      const refundType = b.refund_to === undefined ? "INTENTS" : "ORIGIN_CHAIN";
+      const refundTo = b.refund_to ?? m.intents_payout;
+      if (!refundTo) throw new ApiError(400, "REFUND_ADDRESS_REQUIRED", `this business has no NEAR account for returned deposits; give a refund address on ${origin.chainName}`);
+      // Even a reused address: a delivery to an account that is no longer registered would fail after the buyer paid.
+      await this.#ensureRegistered(p, m);
       const amount = this.#remaining(p);
-      const recipient = this.#recipient(m);
+      const { recipient, dest } = this.#recipient(m);
       const now = this.#clock();
       const reuse = this.#db.get<QuoteRow>(
-        `SELECT * FROM intents_quotes WHERE payment_id = ? AND origin_asset = ? AND refund_to = ? AND recipient = ? AND amount_out = ? AND status = 'awaiting_deposit' AND deadline_unix >= ?
-         ORDER BY created_at DESC LIMIT 1`,
+        `SELECT * FROM intents_quotes WHERE payment_id = ? AND origin_asset = ? AND refund_to = ? AND refund_type = ? AND recipient = ? AND destination_chain = ? AND amount_out = ?
+           AND status = 'awaiting_deposit' AND COALESCE(send_by_unix, deadline_unix) >= ? ORDER BY created_at DESC LIMIT 1`,
         p.id,
         origin.assetId,
-        b.refund_to,
+        refundTo,
+        refundType,
         recipient,
+        dest.blockchain,
         amount.toString(),
         now + MIN_QUOTE_WINDOW_SEC,
       );
@@ -593,7 +882,9 @@ export class IntentsService {
         origin,
         amount,
         recipient,
-        refundTo: b.refund_to,
+        destination: dest,
+        refundTo,
+        refundType,
         slippageBps: slippage,
         deadline: deadline * 1000,
         dry: false,
@@ -606,6 +897,9 @@ export class IntentsService {
         if (err instanceof this.kit.OneClickError) {
           this.#log.warn("1Click refused a quote", { paymentId: p.id, origin: origin.assetId, status: err.status, message: err.message, correlationId: err.correlationId });
           if (err.status === 429 || err.status >= 500) throw new ApiError(503, "INTENTS_BUSY", "NEAR Intents is busy; try again in a minute.");
+          if (err.status === 401 || err.status === 403) {
+            this.#alert("auth", p.id, `1Click refused this node's API key (HTTP ${err.status}) creating a deposit address; check ONECLICK_API_KEY`, { paymentId: p.id, merchantId: m.id });
+          }
           throw new ApiError(502, "INTENTS_QUOTE_FAILED", this.kit.quoteErrorReason(err.message.replace(/^1Click \d+: /, "")), { provider_message: err.message });
         }
         this.#log.warn("1Click could not be reached", { paymentId: p.id, err });
@@ -624,8 +918,9 @@ export class IntentsService {
         this.#db.run(
           `INSERT INTO intents_quotes (id, payment_id, merchant_id, mode, origin_asset, origin_chain, origin_symbol, origin_decimals, recipient, refund_to, slippage_bps,
                                       amount_out, amount_in, min_amount_in, amount_in_usd, refund_fee, withdraw_fee, time_estimate_sec, deposit_address, deposit_memo,
-                                      deadline_unix, inactive_unix, correlation_id, signature_valid, quote_json, status, next_poll_unix, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, 'awaiting_deposit', ?, ?, ?)`,
+                                      deadline_unix, inactive_unix, correlation_id, signature_valid, quote_json, status, next_poll_unix, created_at, updated_at,
+                                      destination_chain, destination_asset, refund_type, send_by_unix)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, 'awaiting_deposit', ?, ?, ?, ?, ?, ?, ?)`,
           id,
           p.id,
           m.id,
@@ -635,7 +930,7 @@ export class IntentsService {
           origin.symbol,
           origin.decimals,
           recipient,
-          b.refund_to,
+          refundTo,
           res.quoteRequest.slippageTolerance,
           amount.toString(),
           q.amountIn,
@@ -652,13 +947,17 @@ export class IntentsService {
           now + 5,
           at,
           at,
+          dest.blockchain,
+          dest.assetId,
+          refundType,
+          deadline,
         );
         // The payment now shows the method a person is paying with.
         const cur = this.#payments.row(p.id)!;
         if (cur.quote_method !== "oneclick" && cur.status === "open" && this.#payments.credits(p.id).length === 0) this.#payments.requote(cur, "oneclick");
         this.#payments.notify(p.id);
       });
-      this.#log.info("any-chain deposit address issued", { paymentId: p.id, quoteId: id, origin: origin.assetId, amountIn: q.amountIn, correlationId: res.correlationId });
+      this.#log.info("any-chain deposit address issued", { paymentId: p.id, quoteId: id, origin: origin.assetId, destination: dest.blockchain, amountIn: q.amountIn, correlationId: res.correlationId });
       return { quote: this.json(this.row(id)!), reused: false };
     });
   }
@@ -735,6 +1034,9 @@ export class IntentsService {
     const r = this.row(id);
     if (!r || !ACTIVE.includes(r.status)) return;
     const now = this.#clock();
+    if (DEPOSIT_SEEN.includes(r.status) && now > r.deadline_unix + STUCK_AFTER_SEC) {
+      this.#alert("stuck", r.id, `an any-chain payment is still ${r.status} ${Math.floor((now - r.deadline_unix) / 3600)} h after its deadline`, { quote: r });
+    }
     if (r.status === "delivered") return this.#confirmDelivery(r);
     let s: StatusResponse;
     try {
@@ -744,14 +1046,22 @@ export class IntentsService {
       const fresh = now - Date.parse(r.created_at) / 1000 < NOT_FOUND_GRACE_SEC;
       if (status === 404 && fresh) return this.#touch(r, { next: this.#nextPoll(r) });
       if (r.status === "awaiting_deposit" && now > r.deadline_unix + WATCH_AFTER_DEADLINE_SEC) return this.#expire(r);
+      if (status === 401 || status === 403) {
+        // A revoked or wrong API key does not heal by backing off: read again every AUTH_RETRY_SEC and tell the operator once.
+        this.#log.error("1Click refused this node's API key reading a status; retrying slowly", { quoteId: r.id, status });
+        this.#alert("auth", r.id, `1Click refused this node's API key (HTTP ${status}) reading a payment's status; check ONECLICK_API_KEY`, { quote: r });
+        return this.#touch(r, { errors: r.poll_errors + 1, next: now + AUTH_RETRY_SEC });
+      }
       // 404 after the grace, 429, 5xx or the network: back off and never change state.
       this.#log.warn("1Click status read failed; backing off", { quoteId: r.id, status, err: err instanceof Error ? err.message : String(err) });
       return this.#touch(r, { errors: r.poll_errors + 1, next: this.#nextPoll(r, r.poll_errors + 1) });
     }
-    // The status must describe the quote this node stored, signature and all.
+    // The status must describe the quote this node stored: the same 1Click signature over it, for the same deposit address.
+    // The live API embeds the quote without its correlationId (seen 2026-11-14), so that id is compared only when present.
     const stored = JSON.parse(r.quote_json) as QuoteResponse;
     const embedded = s.quoteResponse;
-    if (embedded && (embedded.correlationId !== stored.correlationId || embedded.signature !== stored.signature || embedded.quote?.depositAddress !== r.deposit_address)) {
+    const otherId = embedded?.correlationId !== undefined && embedded.correlationId !== stored.correlationId;
+    if (embedded && (otherId || embedded.signature !== stored.signature || embedded.quote?.depositAddress !== r.deposit_address)) {
       this.#log.error("1Click's status names another quote than the one stored; ignoring it", { quoteId: r.id, stored: stored.correlationId, got: embedded.correlationId });
       return this.#touch(r, { errors: r.poll_errors + 1, next: this.#nextPoll(r, r.poll_errors + 1) });
     }
@@ -827,8 +1137,14 @@ export class IntentsService {
     if (status !== r.status) this.#log.info("any-chain payment moved", { quoteId: r.id, from: r.status, to: status, provider: s.status });
   }
 
-  #payer(r: Pick<QuoteRow, "origin_chain" | "refund_to">): string {
-    return `${r.origin_chain}:${r.refund_to}`;
+  /** The buyer as `chain:address`; a quote without a buyer address knows only the chain. */
+  #payer(r: Pick<QuoteRow, "origin_chain" | "refund_to" | "refund_type">): string {
+    return r.refund_type === "INTENTS" ? `${r.origin_chain}:unknown` : `${r.origin_chain}:${r.refund_to}`;
+  }
+
+  /** When the buyer must send by: what this node asked 1Click for, never 1Click's later refund deadline. */
+  #sendBy(r: Pick<QuoteRow, "send_by_unix" | "deadline_unix">): number {
+    return r.send_by_unix === null ? r.deadline_unix : Math.min(r.send_by_unix, r.deadline_unix);
   }
 
   #emit(type: "payment.deposit_returned" | "payment.deposit_failed", r: QuoteRow) {
@@ -840,12 +1156,45 @@ export class IntentsService {
   }
 
   /**
+   * An operator alert, once per object (a quote, or a payment for a refused deposit address) and kind: the
+   * `payminto_intents_alerts_total{kind}` metric and a platform `intents.alert` event, kept in the event log (which is
+   * also how a restarted node knows it raised one already) and sent to platform webhook endpoints that take it.
+   */
+  #alert(kind: IntentsAlertKind, objectId: string, message: string, o: { quote?: QuoteRow; paymentId?: string; merchantId?: string }) {
+    const key = `${kind} ${objectId}`;
+    if (this.#alerted.has(key)) return;
+    this.#alerted.add(key);
+    const seen = this.#db.get<{ x: number }>(
+      "SELECT 1 AS x FROM gateway_events WHERE merchant_id IS NULL AND type = ? AND object_id = ? AND json_extract(body, '$.data.object.kind') = ? LIMIT 1",
+      INTENTS_ALERT_EVENT,
+      objectId,
+      kind,
+    );
+    if (seen) return;
+    const r = o.quote ? this.row(o.quote.id) : undefined;
+    const object = {
+      object: "intents_alert",
+      kind,
+      message,
+      mode: this.mode,
+      merchant_id: r?.merchant_id ?? o.merchantId ?? null,
+      payment_id: r?.payment_id ?? o.paymentId ?? null,
+      quote: r ? this.json(r, true) : null,
+    };
+    // Not on the payment's timeline: the business does not see platform alerts.
+    this.#db.tx(() => this.#webhooks.emit(null, INTENTS_ALERT_EVENT, objectId, null, object));
+    this.#alertCounts[kind]++;
+    this.#log.error(`any-chain operator alert (${kind}): ${message}`, { kind, objectId, paymentId: object.payment_id });
+  }
+
+  /**
    * 1Click says the USDC was delivered: read each delivery transaction on NEAR and look for the NEP-141 `ft_transfer`
    * event of the USDC contract to the merchant's account for at least the invoice amount. Found: confirmed
    * (`rpc_checked`). Not readable for 10 minutes: confirmed on 1Click's word (`provider_only`), with a warning. Read
    * but short or to someone else: never confirmed; it stays delivered and is logged as an error.
    */
   async #confirmDelivery(r: QuoteRow): Promise<void> {
+    if (r.destination_chain !== "near") return this.#confirmEvmDelivery(r);
     const destination = (JSON.parse(r.destination_txs) as WireTx[]).map((t) => t.hash);
     const hashes = [...new Set([...destination, ...(JSON.parse(r.near_txs) as string[])])];
     let contradicted = false;
@@ -863,6 +1212,7 @@ export class IntentsService {
       if (total >= BigInt(r.amount_out)) return this.#confirm(r, { verification: "rpc_checked", amount: total, tx: hash });
       contradicted = true;
       this.#log.error("a delivery transaction on NEAR does not pay the merchant the invoice amount", { quoteId: r.id, hash, recipient: r.recipient, token: this.usdcContract, found: total.toString(), due: r.amount_out });
+      this.#alert("contradicted", r.id, `1Click reported a delivery, but transaction ${hash} on NEAR pays ${r.recipient} ${total} of the ${r.amount_out} due; the payment is not counted`, { quote: r });
     }
     const now = this.#clock();
     if (!contradicted && now - (r.delivered_unix ?? now) >= PROVIDER_ONLY_AFTER_SEC) {
@@ -872,10 +1222,70 @@ export class IntentsService {
     this.#touch(r, { next: contradicted ? now + 60 : this.#nextPoll(r) });
   }
 
+  /** The USDC contract of a quote's EVM destination, lowercased; null when the chain is not a destination any more. */
+  #evmToken(r: Pick<QuoteRow, "destination_chain" | "destination_asset">): string | null {
+    const d = this.kit.payoutDestinationOf(r.destination_asset ?? r.destination_chain);
+    return d && d.blockchain === r.destination_chain ? d.contractAddress.toLowerCase() : null;
+  }
+
+  /** USDC base units the final receipts of `hashes` transfer to the quote's address, and whether every hash was read final. */
+  async #readEvm(r: QuoteRow, hashes: readonly string[]): Promise<{ total: bigint; firstTx: string | null; allFinal: boolean }> {
+    const token = this.#evmToken(r);
+    const to = r.recipient.toLowerCase();
+    let total = 0n;
+    let firstTx: string | null = null;
+    let allFinal = hashes.length > 0 && token !== null;
+    for (const hash of hashes) {
+      if (!token) break;
+      try {
+        const read = await this.#evm.delivery(r.destination_chain, hash);
+        if (read.status !== "final") {
+          allFinal = false;
+          continue;
+        }
+        const paid = read.transfers.filter((t) => t.token === token && t.to === to).reduce((sum, t) => sum + t.amount, 0n);
+        if (paid > 0n) firstTx ??= hash;
+        total += paid;
+      } catch (err) {
+        allFinal = false;
+        this.#log.warn("could not read a delivery transaction", { quoteId: r.id, chain: r.destination_chain, hash, err: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { total, firstTx, allFinal };
+  }
+
+  /**
+   * A delivery on an EVM destination: read each destination transaction's receipt over JSON-RPC and sum the ERC-20
+   * Transfer logs of the chain's USDC contract to the business's address. Covers the invoice amount: confirmed
+   * (`rpc_checked`). Every receipt read and short: never confirmed, an alert. Unreadable for 10 minutes (or the chain is
+   * not read at all, INTENTS_RPC_<CHAIN>=off): confirmed on 1Click's word (`provider_only`).
+   */
+  async #confirmEvmDelivery(r: QuoteRow): Promise<void> {
+    const hashes = [...new Set((JSON.parse(r.destination_txs) as WireTx[]).map((t) => t.hash))];
+    const now = this.#clock();
+    let contradicted = false;
+    if (this.#evm.canRead(r.destination_chain)) {
+      const { total, firstTx, allFinal } = await this.#readEvm(r, hashes);
+      if (total >= BigInt(r.amount_out)) return this.#confirm(r, { verification: "rpc_checked", amount: total, tx: firstTx });
+      if (allFinal) {
+        contradicted = true;
+        this.#log.error("the delivery transactions on the destination chain do not pay the business the invoice amount", { quoteId: r.id, chain: r.destination_chain, hashes, recipient: r.recipient, found: total.toString(), due: r.amount_out });
+        this.#alert("contradicted", r.id, `1Click reported a delivery, but its transactions on ${r.destination_chain} pay ${r.recipient} ${total} of the ${r.amount_out} due; the payment is not counted`, { quote: r });
+      }
+    }
+    if (!contradicted && now - (r.delivered_unix ?? now) >= PROVIDER_ONLY_AFTER_SEC) {
+      this.#log.warn("delivery not readable on the destination chain after 10 minutes; confirming on 1Click's report (provider_only)", { quoteId: r.id, chain: r.destination_chain, hashes });
+      return this.#confirm(r, { verification: "provider_only", amount: BigInt(r.delivered_amount ?? r.amount_out), tx: hashes[0] ?? null });
+    }
+    this.#touch(r, { next: contradicted ? now + 60 : this.#nextPoll(r) });
+  }
+
   #confirm(r: QuoteRow, o: { verification: "rpc_checked" | "provider_only"; amount: bigint; tx: string | null }) {
+    let confirmed = false;
     this.#db.tx(() => {
       const cur = this.row(r.id)!;
       if (cur.status !== "delivered") return;
+      confirmed = true;
       this.#db.run(
         "UPDATE intents_quotes SET status = 'confirmed', verification = ?, delivered_amount = ?, delivery_tx = ?, updated_at = ? WHERE id = ?",
         o.verification,
@@ -889,7 +1299,12 @@ export class IntentsService {
       else this.#payments.addCredit({ paymentId: r.payment_id, method: "oneclick", payer: this.#payer(r), amount: o.amount, txHash: o.tx, intentsQuoteId: r.id, status: "confirmed", mayBeLate: true });
       this.#payments.notify(r.payment_id);
     });
+    if (!confirmed) return;
     this.#log.info("any-chain payment confirmed", { quoteId: r.id, verification: o.verification, tx: o.tx, amount: o.amount.toString() });
+    if (o.verification === "provider_only") {
+      const where = r.destination_chain === "near" ? "NEAR" : (DESTINATION_CHAINS[r.destination_chain]?.name ?? r.destination_chain);
+      this.#alert("provider_only", r.id, `an any-chain payment was confirmed on 1Click's report alone: its delivery could not be read on ${where} for ${PROVIDER_ONLY_AFTER_SEC / 60} minutes; check it by hand`, { quote: r });
+    }
   }
 
   // ------------------------------------------------------------------ JSON
@@ -904,7 +1319,13 @@ export class IntentsService {
 
   /** NEAR mainnet transactions link to NearBlocks; the local chain has no explorer. */
   nearExplorer(hash: string): string | null {
-    return this.mode === "live" ? `https://nearblocks.io/txns/${hash}` : null;
+    return this.#explorer("near", hash);
+  }
+
+  /** A live delivery links to its chain's explorer; a simulated one has none. */
+  #explorer(chain: string, hash: string): string | null {
+    const base = DESTINATION_CHAINS[chain]?.explorer;
+    return this.mode === "live" && base ? `${base}${hash}` : null;
   }
 
   #steps(status: IntentsQuoteStatus): IntentsStep[] {
@@ -918,14 +1339,15 @@ export class IntentsService {
   }
 
   /** The public JSON of a quote; `merchant` adds the full refund address and the signed 1Click response. */
-  json(r: QuoteRow, merchant = false): IntentsQuote {
+  json(r: QuoteRow, merchant = false): IntentsQuoteJson {
     const res = JSON.parse(r.quote_json) as QuoteResponse;
     const origin = this.kit.originOf(r.origin_asset);
     const o = { assetId: r.origin_asset, blockchain: r.origin_chain as CheckoutOrigin["blockchain"], chainName: origin?.chainName ?? r.origin_chain, symbol: r.origin_symbol, decimals: r.origin_decimals };
     const fees = this.kit.feeLines(res, { symbol: r.origin_symbol, decimals: r.origin_decimals, stable: origin?.stable ?? false });
     const destination = (JSON.parse(r.destination_txs) as WireTx[]).map((t) => this.#tx(t));
     const deliveryHash = r.delivery_tx ?? destination[0]?.hash ?? null;
-    const out: IntentsQuote = {
+    const chain = r.destination_chain ?? "near";
+    const out: IntentsQuoteJson = {
       id: r.id,
       object: "intents_quote",
       payment_id: r.payment_id,
@@ -943,10 +1365,13 @@ export class IntentsService {
       fees,
       slippage_bps: r.slippage_bps,
       time_estimate_sec: r.time_estimate_sec,
-      refund_to: merchant ? r.refund_to : mask(r.refund_to),
+      refund_to: merchant || r.refund_type === "INTENTS" ? r.refund_to : mask(r.refund_to),
+      refund_type: r.refund_type,
       recipient: r.recipient,
-      settlement_network: r.mode === "live" ? "near:mainnet" : "near:mainnet (simulated)",
+      destination: { chain, chain_name: DESTINATION_CHAINS[chain]?.name ?? chain, symbol: "USDC", address: r.recipient },
+      settlement_network: settlementNetworkOf(r.mode, chain),
       deadline: isoOf(r.deadline_unix),
+      send_by: isoOf(this.#sendBy(r)),
       deadline_passed: this.#clock() >= r.deadline_unix,
       inactive_at: r.inactive_unix === null ? null : isoOf(r.inactive_unix),
       deposited: this.#amount(r.deposited_amount, r.origin_decimals, r.origin_symbol),
@@ -956,10 +1381,10 @@ export class IntentsService {
       origin_txs: (JSON.parse(r.origin_txs) as WireTx[]).map((t) => this.#tx(t)),
       destination_txs: destination,
       near_txs: JSON.parse(r.near_txs) as string[],
-      delivery_tx: deliveryHash ? { hash: deliveryHash, explorer_url: destination.find((t) => t.hash === deliveryHash)?.explorer_url ?? this.nearExplorer(deliveryHash) } : null,
+      delivery_tx: deliveryHash ? { hash: deliveryHash, explorer_url: destination.find((t) => t.hash === deliveryHash)?.explorer_url ?? this.#explorer(chain, deliveryHash) } : null,
       verification: r.verification,
       steps: this.#steps(r.status),
-      warning: `Send only ${r.origin_symbol} on the ${o.chainName} network, to this address. Other tokens, other networks, or a deposit after ${hhmm(r.deadline_unix)} UTC may be lost.`,
+      warning: `Send only ${r.origin_symbol} on the ${o.chainName} network, to this address. Other tokens, other networks, or a deposit after ${hhmm(this.#sendBy(r))} UTC may be lost.`,
       correlation_id: r.correlation_id,
       signature_valid: r.signature_valid === 1,
       created_at: r.created_at,
@@ -1009,11 +1434,13 @@ function redact(u: string): string {
 export class IntentsWatcher {
   readonly #s: IntentsService;
   readonly #log: Logger;
+  readonly #concurrency: number;
   #busy: Promise<number> | null = null;
 
-  constructor(s: IntentsService, log: Logger) {
+  constructor(s: IntentsService, log: Logger, o: { concurrency?: number } = {}) {
     this.#s = s;
     this.#log = log;
+    this.#concurrency = Math.max(1, o.concurrency ?? WATCH_CONCURRENCY);
   }
 
   tick(): Promise<number> {
@@ -1023,11 +1450,17 @@ export class IntentsWatcher {
     return this.#busy;
   }
 
+  /** The due quotes in order (the longest due first), a few at a time: a hung call holds up one worker, not the pass. */
   async #run(): Promise<number> {
     const due = this.#s.due();
-    for (const r of due) {
-      await this.#s.poll(r.id).catch((err: unknown) => this.#log.warn("any-chain quote poll failed", { quoteId: r.id, err }));
-    }
+    let next = 0;
+    const worker = async () => {
+      while (next < due.length) {
+        const r = due[next++]!;
+        await this.#s.poll(r.id).catch((err: unknown) => this.#log.warn("any-chain quote poll failed", { quoteId: r.id, err }));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(this.#concurrency, due.length) }, worker));
     return due.length;
   }
 }
@@ -1038,9 +1471,11 @@ export function reconciliationOf(rows: QuoteRow[], formatUnits: (v: string, d: n
   if (!confirmed.length) return null;
   const live = confirmed.some((r) => r.mode === "live");
   const parsedOrigin = (r: QuoteRow) => JSON.parse(r.origin_txs) as WireTx[];
+  const chains = [...new Set(confirmed.map((r) => r.destination_chain ?? "near"))];
+  const where = (c: string) => (c === "near" ? "NEAR mainnet" : (DESTINATION_CHAINS[c]?.name ?? c));
   return {
-    settlement_network: live ? "near:mainnet" : "near:mainnet (simulated)",
-    currency: live ? "USDC (NEAR mainnet)" : "USDC (NEAR mainnet, simulated)",
+    settlement_network: chains.map((c) => settlementNetworkOf(live ? "live" : "simulated", c)).join(" "),
+    currency: chains.map((c) => (live ? `USDC (${where(c)})` : `USDC (${where(c)}, simulated)`)).join(" "),
     origin_asset: [...new Set(confirmed.map((r) => r.origin_asset))].join(" "),
     origin_amount: confirmed.map((r) => `${formatUnits(r.deposited_amount ?? r.amount_in, r.origin_decimals)} ${r.origin_symbol}`).join(" "),
     deposit_address: confirmed.map((r) => r.deposit_address).join(" "),

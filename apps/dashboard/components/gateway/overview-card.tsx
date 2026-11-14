@@ -13,6 +13,7 @@ import { StatStrip } from "@/components/app/stat-strip";
 import { BlockSkeleton, EmptyState, ErrorState, RowsSkeleton } from "@/components/app/states";
 import { DayBars } from "./day-bars";
 import { PaymentRow } from "./payment-row";
+import { BusinessSetupChecklist } from "./setup-checklist";
 
 /** Payment volume, last 30 days; hidden when the server runs without payments. */
 export function GatewayOverviewCard() {
@@ -83,6 +84,7 @@ export function GatewayHome() {
           )
         }
       />
+      {view?.kind === "business" && <BusinessSetupChecklist key={view.merchantId} merchantId={view.merchantId} className="mb-5" />}
       {q.isPending ? (
         <BlockSkeleton className="h-[5.75rem]" />
       ) : q.isError ? (
@@ -120,7 +122,7 @@ export function GatewayHome() {
           ) : (
             <ul className="stagger divide-y">
               {recent.data.items.map((p) => (
-                <PaymentRow key={p.id} p={p} />
+                <PaymentRow key={p.id} p={p} compact />
               ))}
             </ul>
           )}

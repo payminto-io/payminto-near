@@ -7,12 +7,13 @@
  */
 import { isAccountId } from "@payminto/chain";
 import { base58 } from "@scure/base";
+import { isEvmAddress, payoutDestinationOf, type PayoutDestination } from "./destination.ts";
 import { verifyQuoteSignature } from "./signature.ts";
-import { NEAR_MAINNET_USDC_ASSET, type ExecutionStatus, type QuoteRequest, type QuoteResponse } from "./types.ts";
+import type { ExecutionStatus, QuoteRequest, QuoteResponse } from "./types.ts";
 
 export type AddressFormat = "evm" | "solana";
 
-/** An origin a buyer may pay from. Asset ids, chains and decimals are verbatim from the live `/v0/tokens` (2026-11-10). */
+/** An origin a buyer may pay from. Asset ids, chains, decimals and contract addresses are verbatim from the live `/v0/tokens` (2026-11-10, contracts checked again 2026-11-13). */
 export type CheckoutOrigin = {
   assetId: string;
   /** The 1Click `blockchain` code. */
@@ -23,6 +24,10 @@ export type CheckoutOrigin = {
   /** A dollar stablecoin: its swap cost is shown in its own units, and its default slippage is the stable one. */
   stable: boolean;
   addressFormat: AddressFormat;
+  /** The token contract on its chain, as `/v0/tokens` `contractAddress` has it; null for a native coin (ETH). */
+  contractAddress: string | null;
+  /** The EVM chain id; null on a chain that is not EVM (Solana). */
+  chainId: number | null;
 };
 
 /**
@@ -31,14 +36,14 @@ export type CheckoutOrigin = {
  * memo chain.
  */
 export const CHECKOUT_ORIGINS: readonly CheckoutOrigin[] = [
-  { assetId: "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", blockchain: "base", chainName: "Base", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm" },
-  { assetId: "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near", blockchain: "eth", chainName: "Ethereum", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm" },
-  { assetId: "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near", blockchain: "arb", chainName: "Arbitrum", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm" },
-  { assetId: "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near", blockchain: "sol", chainName: "Solana", symbol: "USDC", decimals: 6, stable: true, addressFormat: "solana" },
-  { assetId: "nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near", blockchain: "pol", chainName: "Polygon", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm" },
-  { assetId: "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near", blockchain: "eth", chainName: "Ethereum", symbol: "USDT", decimals: 6, stable: true, addressFormat: "evm" },
-  { assetId: "nep141:base.omft.near", blockchain: "base", chainName: "Base", symbol: "ETH", decimals: 18, stable: false, addressFormat: "evm" },
-  { assetId: "nep141:eth.omft.near", blockchain: "eth", chainName: "Ethereum", symbol: "ETH", decimals: 18, stable: false, addressFormat: "evm" },
+  { assetId: "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", blockchain: "base", chainName: "Base", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm", contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", chainId: 8453 },
+  { assetId: "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near", blockchain: "eth", chainName: "Ethereum", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm", contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", chainId: 1 },
+  { assetId: "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near", blockchain: "arb", chainName: "Arbitrum", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm", contractAddress: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", chainId: 42161 },
+  { assetId: "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near", blockchain: "sol", chainName: "Solana", symbol: "USDC", decimals: 6, stable: true, addressFormat: "solana", contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", chainId: null },
+  { assetId: "nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near", blockchain: "pol", chainName: "Polygon", symbol: "USDC", decimals: 6, stable: true, addressFormat: "evm", contractAddress: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", chainId: 137 },
+  { assetId: "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near", blockchain: "eth", chainName: "Ethereum", symbol: "USDT", decimals: 6, stable: true, addressFormat: "evm", contractAddress: "0xdac17f958d2ee523a2206206994597c13d831ec7", chainId: 1 },
+  { assetId: "nep141:base.omft.near", blockchain: "base", chainName: "Base", symbol: "ETH", decimals: 18, stable: false, addressFormat: "evm", contractAddress: null, chainId: 8453 },
+  { assetId: "nep141:eth.omft.near", blockchain: "eth", chainName: "Ethereum", symbol: "ETH", decimals: 18, stable: false, addressFormat: "evm", contractAddress: null, chainId: 1 },
 ];
 
 export const originOf = (assetId: string): CheckoutOrigin | undefined => CHECKOUT_ORIGINS.find((o) => o.assetId === assetId);
@@ -77,10 +82,16 @@ export type PayInRequest = {
   origin: CheckoutOrigin | string;
   /** The invoice amount the merchant receives, in USDC base units (6 decimals). */
   amount: bigint;
-  /** The merchant's NEAR account that receives the USDC. */
+  /** The business's account on the destination chain: a NEAR account (the default), or an address on an EVM destination. */
   recipient: string;
-  /** The buyer's address on the origin chain, where 1Click returns a failed or short deposit. */
+  /** Where the USDC lands: a payout destination, its chain code or asset id. Default native USDC on NEAR. */
+  destination?: PayoutDestination | string;
+  /**
+   * Where 1Click returns a failed or short deposit: the buyer's address on the origin chain (`ORIGIN_CHAIN`, the
+   * default), or with `refundType: "INTENTS"` the business's NEAR account, whose NEAR Intents balance takes it back.
+   */
   refundTo: string;
+  refundType?: "ORIGIN_CHAIN" | "INTENTS";
   slippageBps: number;
   /** When refunds begin if the swap is not done: an ISO time, a Date or unix milliseconds. */
   deadline: string | Date | number;
@@ -95,12 +106,28 @@ const asOrigin = (o: CheckoutOrigin | string): CheckoutOrigin => {
   return found;
 };
 
-/** `EXACT_OUTPUT` of native USDC on NEAR to the merchant's account, deposited and refunded on the origin chain. */
+const asDestination = (d: PayoutDestination | string | undefined): PayoutDestination => {
+  const key = d === undefined ? "near" : typeof d === "string" ? d : d.assetId;
+  const found = payoutDestinationOf(key);
+  if (!found) throw new Error(`${key} is not a payout destination`);
+  return found;
+};
+
+/**
+ * `EXACT_OUTPUT` of USDC to the business's account on the destination chain (native USDC on NEAR by default), deposited
+ * and refunded on the origin chain.
+ */
 export function payInQuoteRequest(r: PayInRequest): QuoteRequest {
   const origin = asOrigin(r.origin);
+  const destination = asDestination(r.destination);
   if (r.amount <= 0n) throw new Error("amount must be positive");
-  if (!isAccountId(r.recipient)) throw new Error("recipient must be a NEAR account id");
-  if (!isOriginAddress(origin, r.refundTo)) throw new Error(`the refund address is not a valid ${origin.chainName} address`);
+  if (destination.blockchain === "near" ? !isAccountId(r.recipient) : !isEvmAddress(r.recipient)) {
+    throw new Error(destination.blockchain === "near" ? "recipient must be a NEAR account id" : `recipient must be a ${destination.chainName} address`);
+  }
+  const refundType = r.refundType ?? "ORIGIN_CHAIN";
+  if (refundType === "INTENTS" ? !isAccountId(r.refundTo) : !isOriginAddress(origin, r.refundTo)) {
+    throw new Error(refundType === "INTENTS" ? "the refund account must be a NEAR account id" : `the refund address is not a valid ${origin.chainName} address`);
+  }
   if (!Number.isInteger(r.slippageBps) || r.slippageBps < 0 || r.slippageBps > 10_000) throw new Error("slippage must be an integer from 0 to 10000 basis points");
   const ms = r.deadline instanceof Date ? r.deadline.getTime() : typeof r.deadline === "number" ? r.deadline : Date.parse(r.deadline);
   if (!Number.isFinite(ms)) throw new Error("deadline must be a time");
@@ -110,10 +137,10 @@ export function payInQuoteRequest(r: PayInRequest): QuoteRequest {
     slippageTolerance: r.slippageBps,
     originAsset: origin.assetId,
     depositType: "ORIGIN_CHAIN",
-    destinationAsset: NEAR_MAINNET_USDC_ASSET,
+    destinationAsset: destination.assetId,
     amount: r.amount.toString(),
     refundTo: r.refundTo,
-    refundType: "ORIGIN_CHAIN",
+    refundType,
     recipient: r.recipient,
     recipientType: "DESTINATION_CHAIN",
     deadline: new Date(ms).toISOString(),
@@ -122,7 +149,7 @@ export function payInQuoteRequest(r: PayInRequest): QuoteRequest {
 }
 
 export type PayInCheckOptions = {
-  /** The merchant's verified NEAR account: the only recipient a quote may name. */
+  /** The business's verified account on the destination chain: the only recipient a quote may name. */
   recipient: string;
   /** The 1Click manager key; only tests and the simulated mode pass another one. */
   managerPublicKey?: string;

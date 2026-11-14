@@ -25,7 +25,7 @@ import { UnsignedVoucherError, type VoucherInput } from "../vouchers.ts";
 import { body, cursorOf, limitOf, parse, rawBody, zAccount, zAmount, zPublicKey, zTxHash, zUint, zUrl } from "./http.ts";
 import type { Gateway } from "./index.ts";
 import { parsePaymentSignature, paymentFailure, paymentSuccess, sameRequirement, type ParsedPayment, type PaymentRequiredV2 } from "./x402-wire.ts";
-import { feePlanJson, merchantJson, methodJson, type MerchantRow } from "./merchants.ts";
+import { feePlanJson, merchantJson, type MerchantRow } from "./merchants.ts";
 import type { PaymentRow } from "./model.ts";
 import { auditActor, type Access, type Actor } from "../auth/actor.ts";
 import type { BusinessPermission } from "../auth/permissions.ts";
@@ -33,6 +33,7 @@ import type { AuthService } from "../auth/service.ts";
 import type { CustomerService } from "./customers.ts";
 import { mountReports } from "./reports.ts";
 import { mountIntents } from "./intents-routes.ts";
+import { feesByMonth, merchantBalance } from "./balance.ts";
 
 type AuthedActor = Exclude<Actor, { type: "anonymous" }>;
 
@@ -96,6 +97,11 @@ const createRefundSchema = z.object({
   note: z.string().max(1000).nullish(),
   /** Always ask an Admin to approve, even when the caller could issue it (the merchant MCP server sends true). */
   requestApproval: z.boolean().optional(),
+  /**
+   * A payment that came from another chain: the refund the business already sent from its own wallet on that chain
+   * (`chain` as the payment's origin, for example `base` or `sol`), recorded here. Needs refunds.issue.
+   */
+  manual: z.object({ chain: z.string().trim().min(1).max(20), tx_hash: z.string().trim().min(1).max(200) }).optional(),
 });
 
 /** The merchant's own refund transaction, sent from its payout account. */
@@ -231,6 +237,8 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     return c.json(platformJson());
   });
   app.get("/v1/platform/fees", (c) => (a.platform(c, "earnings.read"), c.json(g.merchants.earnings())));
+  // Platform earnings by the UTC month payments were paid in, per business (the dashboard's Earnings page and its CSV).
+  app.get("/v1/platform/fees/months", (c) => (a.platform(c, "earnings.read"), c.json(feesByMonth(g.db))));
 
   app.get("/v1/fee-plans", (c) => (a.platform(c, "pricing.read"), c.json({ items: g.merchants.feePlans().map((p) => g.merchants.planJson(p)) })));
   app.post("/v1/fee-plans", async (c) => {
@@ -308,7 +316,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   });
   app.get("/v1/merchants/:id/methods", (c) => {
     const { merchant } = a.business(c, "payments.read", c.req.param("id"));
-    return c.json({ items: g.merchants.methods(merchant.id).map(methodJson) });
+    return c.json({ items: g.merchants.methods(merchant.id).map((m) => g.merchants.methodJson(m)) });
   });
   // Platform roles set fees and limits; a business Admin or a merchant key may only enable or disable its own methods.
   app.put("/v1/merchants/:id/methods", async (c) => {
@@ -328,7 +336,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
       audit(actor, terms ? "pricing.changed" : "business.updated", { merchantId: merchant.id, target: merchant.id, meta: { what: "payment methods", methods: b.methods } });
       return items;
     });
-    return c.json({ items: items.map(methodJson) });
+    return c.json({ items: items.map((m) => g.merchants.methodJson(m)) });
   });
 
   // API keys: people only (not other keys), for the business named by Merchant-Id; create and revoke need a fresh password check.
@@ -377,6 +385,8 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   });
 
   app.get("/v1/gateway/overview", (c) => c.json(g.overview(caller(c, "payments.read").merchant.id)));
+  // The business's Balance page: hub credit waiting for payout, in flight, paid out, and any-chain deliveries. Read only.
+  app.get("/v1/merchant/balance", (c) => c.json(merchantBalance(g.db, g.ctx.network, caller(c, "payments.read").merchant)));
   // Reconciliation report (section 16).
   mountReports(app, g, { access: a, publicUrl: d.publicUrl ?? "" });
   // The any-chain checkout (NEAR Intents): public checkout, merchant and platform routes.
@@ -486,6 +496,21 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
     const who = ownerOf(c, "refunds.request", typeof paymentId === "string" ? g.payments.row(paymentId)?.merchant_id : undefined);
     return idempotent(c, who, async () => {
       const b = await body(c, createRefundSchema);
+      if (b.manual) {
+        // Recording money already sent is issuing a refund: Staff cannot, and there is nothing left to approve.
+        if (!a.canBusiness(who.actor, "refunds.issue", who.merchant.id)) throw new ApiError(403, "FORBIDDEN", "your role cannot do this", { permission: "refunds.issue" });
+        if (b.to !== undefined || b.requestApproval === true) {
+          throw new ApiError(400, "VALIDATION_ERROR", "a manual refund records money already sent to the buyer's refund address: leave out `to` and `requestApproval`");
+        }
+        const manual = b.manual;
+        const by = auditActor(who.actor);
+        const r = g.db.tx(() => {
+          const r = g.refunds.recordManual(who.merchant.id, { paymentId: b.paymentId, amount: b.amount, reason: b.reason, note: b.note, chain: manual.chain, txHash: manual.tx_hash }, by.id ?? by.type);
+          audit(who.actor, "refund.issued", { merchantId: who.merchant.id, target: r.id, meta: { payment_id: r.payment_id, amount: r.amount, manual: true, chain: r.manual_chain, tx_hash: r.manual_tx_hash } });
+          return r;
+        });
+        return { status: 201, body: { ...g.refunds.json(r), transfer: null } };
+      }
       // Staff request; an Admin approves before the payout wallet's signature can be submitted.
       const needsApproval = b.requestApproval === true || !a.canBusiness(who.actor, "refunds.issue", who.merchant.id);
       const r = g.db.tx(() => {
@@ -649,6 +674,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   app.post("/v1/checkout/:id/method", async (c) => {
     const p = publicPayment(c);
     const { method } = await body(c, z.object({ method: z.enum(["wallet"]) }));
+    g.assertWalletUsable(p);
     return c.json(g.checkoutView(g.payments.requote(p, method)));
   });
 
@@ -656,6 +682,7 @@ export function mountGateway(app: Hono<any>, g: Gateway, d: GatewayRouteDeps): v
   app.post("/v1/checkout/:id/wallet", async (c) => {
     const p = publicPayment(c);
     const b = await body(c, walletSentSchema);
+    g.assertWalletUsable(p);
     const row = await g.walletSent(p, b.tx_hash ?? null);
     return c.json({ status: row.status, recorded: g.payments.credits(row.id).some((x) => x.method === "wallet"), payment: g.checkoutView(row) });
   });

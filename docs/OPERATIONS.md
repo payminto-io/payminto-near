@@ -462,3 +462,46 @@ The payee check is on by default (`PAYEE_CHECK=on`), and the startup log says `p
 - Set `GAS_LEDGER_PATH` to keep the daily gas count across restarts, and run one instance per relayer account.
 - For the dashboard's "Revoke without gas", build the dashboard with `NEXT_PUBLIC_RELAYER_URL` and list the dashboard's origin in the relayer's `CORS_ORIGINS`.
 - `apps/relayer/README.md` has every variable, every error code and the security model.
+
+## 15. Any-chain checkout (NEAR Intents)
+
+With `INTENTS_CHECKOUT=live` a buyer pays from another chain through the 1Click API and the business receives USDC in its own NEAR mainnet account.
+That is real money on NEAR mainnet and on the buyer's chain, while the hub stays on a test network, so the node offers only the any-chain method in live mode: the NEAR wallet and voucher methods are locked for every business.
+[SELF_HOST.md](SELF_HOST.md), "Any-chain checkout (NEAR Intents) in production", has the settings.
+
+### What the node checks at boot
+
+Live mode applies the same configuration checks as a public network: an `ADMIN_TOKEN` of at least 32 characters that is not the dev token, a `NODE_SIGNING_SEED` that is not the dev seed, `PASSWORD_HASH_COST` of at least 17, an https `PUBLIC_CHECKOUT_URL` and `PUBLIC_DASHBOARD_URL`, and webhooks that cannot reach private networks (`WEBHOOK_ALLOW_PRIVATE` is refused).
+The one exception is a checkout and dashboard on this machine only (`http://localhost`), which is what `pnpm local --intents live` serves.
+The node also warns at boot, without refusing, in two cases:
+
+| Warning | Why it matters | What to do |
+|---|---|---|
+| `INTENTS_CHECKOUT=live without ONECLICK_API_KEY` | 1Click adds 0.25% (25 bps) to every buyer's price for keyless use | Set `ONECLICK_API_KEY` to your 1Click partner key |
+| `NEAR_MAINNET_RPC_URL is the public default` | The public RPC is rate limited; a delivery the node cannot read for 10 minutes is confirmed on 1Click's word only | Set `NEAR_MAINNET_RPC_URL` to an RPC provider you trust |
+
+### Alerts
+
+Each alert is an error log line `any-chain operator alert (<kind>)`, an increase of `payminto_intents_alerts_total{kind}`, and a platform `intents.alert` event, once per quote and kind.
+Alert on any increase of the metric, or add a platform webhook endpoint (`/v1/platform/webhooks`) with `*` to receive the events.
+
+| `kind` | Meaning | What to do |
+|---|---|---|
+| `provider_only` | 1Click reported the USDC delivered, and the node could not read the delivery transaction on NEAR mainnet for 10 minutes, so it confirmed the payment on 1Click's word alone | Open the payment's proof page or the delivery transaction on NearBlocks and check that the business's account received the invoice amount of USDC. If the RPC is the cause, set `NEAR_MAINNET_RPC_URL` (or `INTENTS_DELIVERY_SENDERS` for an RPC that tracks only some shards) |
+| `stuck` | A quote saw a deposit and is still not final 6 hours after its deadline | Look the deposit address up with 1Click (the quote's `correlation_id` is on the payment's NEAR Intents card). Tell the business: the buyer's money is with 1Click, and it ends as a delivery or a return to the buyer's refund address |
+| `contradicted` | 1Click reported a delivery, but the transaction read on NEAR pays someone else or less than the invoice | The payment is not counted. Do not mark it paid by hand: compare the quote's `recipient` with the business's NEAR account and the transaction on NearBlocks, and contact 1Click with the correlation id |
+| `auth` | 1Click answered 401 or 403: the API key is revoked or wrong | Fix `ONECLICK_API_KEY` and restart. Until then the node reads each quote again every 15 minutes instead of backing off, and new deposit addresses fail |
+
+A deposit that 1Click returned or that failed is not an alert: the business gets `payment.deposit_returned` or `payment.deposit_failed`, and the reconciliation report lists it on its own line with the refund fee 1Click kept.
+
+### Refunds
+
+A payment from another chain cannot be refunded on NEAR.
+The business sends the refund from its own wallet on the buyer's chain, to the buyer's refund address the dashboard shows, then records it with the chain and the transaction hash; the node marks it succeeded without reading that chain.
+
+### Backups
+
+The any-chain state is in the same SQLite database as everything else: `intents_quotes` holds every quote with the whole signed 1Click answer, the buyer's refund address and the deposit address, and `payment_credits` holds the payments they made.
+Back the database up as in section 4, at least daily, and keep the copies off the host: losing it loses the record of which deposit address belongs to which payment, and the signed quotes a dispute needs.
+A restore from an old backup misses quotes created after it; the money is not lost (the USDC was delivered to the business's own account, or returned to the buyer), but the payments must be matched by hand from 1Click's status of each deposit address.
+`pnpm local --intents live` keeps its database in `apps/local/data`, and the next `pnpm local` refuses to delete it while a live quote is not final.

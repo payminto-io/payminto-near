@@ -1,5 +1,6 @@
 "use client";
 
+import { RequirePermission } from "@/components/app/states";
 import { useState } from "react";
 import Link from "next/link";
 import { Undo2 } from "lucide-react";
@@ -17,7 +18,7 @@ import { CountTabs, ListHead } from "@/components/gateway/kit";
 const COLS = "md:grid-cols-[8rem_6.5rem_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_6.5rem]";
 const COLS_BUSINESS = "md:grid-cols-[8rem_6.5rem_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_6.5rem]";
 
-export default function RefundsPage() {
+function RefundsPagePage() {
   const refunds = useRefunds();
   const [filter, setFilter] = useState<"all" | RefundStatus | "requested">("all");
   const [business, setBusiness] = useState<string | null>(null);
@@ -100,5 +101,13 @@ export default function RefundsPage() {
         )}
       </Panel>
     </>
+  );
+}
+
+export default function RefundsPage() {
+  return (
+    <RequirePermission permission={"payments.read"}>
+      <RefundsPagePage />
+    </RequirePermission>
   );
 }

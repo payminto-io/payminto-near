@@ -2,7 +2,7 @@
 
 import { CircleAlert, CircleCheck, Clock3 } from "lucide-react";
 import type { IntentsQuote, PaymentIntents } from "@/lib/schemas";
-import { amountText, QUOTE_STATUS, refundReasonText, verificationText } from "@/lib/intents";
+import { amountText, destinationText, isNearDestination, QUOTE_STATUS, refundReasonText, returnedLabel, verificationText } from "@/lib/intents";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Field, Fields, Panel } from "@/components/app/primitives";
@@ -40,6 +40,8 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
   const reason = refundReasonText(q.refund_reason);
   const checked = q.verification === "rpc_checked";
   const ended = ["refunded", "failed", "expired"].includes(q.status);
+  // USDC on NEAR by default; a business that receives on an EVM chain sees that chain and its address.
+  const elsewhere = q.destination && !isNearDestination(q.destination) ? q.destination : null;
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -54,9 +56,9 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
           <span className="block text-xs text-muted-foreground">Asked for {amountText(q.send_exactly)}, at least {amountText(q.min_amount_in)}</span>
         </Field>
         <Field label={ended ? "Invoice amount" : "You receive"}>
-          <span className="num font-medium">{q.delivered ? amountText(q.delivered) : amountText(q.amount_out)}</span>
+          <span className="num font-medium">{destinationText(q.delivered ?? q.amount_out, q.destination)}</span>
           <span className="block text-xs text-muted-foreground">
-            {q.delivered ? "Delivered to" : ended ? "Nothing reached" : "To"} <span className="hash">{q.recipient}</span>
+            {q.delivered ? "Delivered to" : ended ? "Nothing reached" : "To"} <span className="hash [overflow-wrap:anywhere]">{elsewhere ? elsewhere.address : q.recipient}</span>
           </span>
         </Field>
         <Field label="Deposit address">
@@ -65,7 +67,7 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
             <CopyIcon value={q.deposit_address} label="deposit address" />
           </span>
         </Field>
-        <Field label="Refund address">
+        <Field label={q.refund_type === "INTENTS" ? "Returned deposits go to" : "Refund address"}>
           <span className="inline-flex max-w-full items-start gap-0.5">
             <span className="hash text-[0.8125rem] [overflow-wrap:anywhere]">{q.refund_to}</span>
             <CopyIcon value={q.refund_to} label="refund address" />
@@ -85,7 +87,7 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
             <span className="text-muted-foreground">-</span>
           )}
         </Field>
-        <Field label="NEAR delivery">{q.delivery_tx ? <TxValue tx={q.delivery_tx} /> : <span className="text-muted-foreground">-</span>}</Field>
+        <Field label={elsewhere ? `${elsewhere.chain_name} delivery` : "NEAR delivery"}>{q.delivery_tx ? <TxValue tx={q.delivery_tx} /> : <span className="text-muted-foreground">-</span>}</Field>
         <Field label="Delivery check">
           {ended ? (
             <span className="text-muted-foreground">Nothing was delivered</span>
@@ -96,10 +98,15 @@ function QuoteBlock({ q }: { q: IntentsQuote }) {
           </span>
           )}
         </Field>
+        {/* A returned deposit, or on a paid quote the excess or unused price buffer 1Click sent back: never a refund. */}
         {(q.refunded || q.status === "refunded") && (
-          <Field label="Returned to buyer">
+          <Field label={returnedLabel(q)}>
             {q.refunded ? <span className="num font-medium">{amountText(q.refunded)}</span> : "Yes"}
-            {reason && <span className="block text-xs text-muted-foreground">Reason: {reason}</span>}
+            {q.status === "refunded" ? (
+              reason && <span className="block text-xs text-muted-foreground">Reason: {reason}</span>
+            ) : (
+              <span className="block text-xs text-muted-foreground">The payment is paid. 1Click sent this back to the refund address above.</span>
+            )}
           </Field>
         )}
         <Field label="Quote signature">

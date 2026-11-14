@@ -46,6 +46,13 @@ export type IntentsOrigin = {
   chain_name: string;
   symbol: string;
   decimals: number;
+  /**
+   * The token on its own chain: the ERC-20 contract or SPL mint, null for the chain's native coin. With `chain_id` it
+   * makes the deposit screen's payment URI (`depositPaymentUri`). Absent from nodes older than the field.
+   */
+  contract_address?: string | null;
+  /** The EIP-155 chain id on an EVM chain, null elsewhere. Absent from nodes older than the field. */
+  chain_id?: number | null;
 };
 
 /** The deposit screen's fee lines, all read from the signed quote. */
@@ -119,9 +126,14 @@ export type IntentsQuote = {
   fees: IntentsFeeLines;
   slippage_bps: number;
   time_estimate_sec: number;
+  /** The buyer's address on the origin chain (`ORIGIN_CHAIN`), or the business's NEAR account (`INTENTS`). */
   refund_to: string;
+  /** `INTENTS`: no buyer address was given, so a failed or short deposit goes back to the business's NEAR Intents balance. */
+  refund_type: "ORIGIN_CHAIN" | "INTENTS";
   recipient: AccountId;
   settlement_network: string;
+  /** Tell the buyer to send by this time: the earlier of the payment's expiry and the quote's lifetime. */
+  send_by: string;
   /** The deposit address goes inactive at this time: show it, not the payment's expiry. */
   deadline: string;
   /**

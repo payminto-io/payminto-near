@@ -180,6 +180,9 @@ Refunds are non-custodial.
 `refunds.submit(id, { txHash })` reports that transaction, and the node checks its sender, token, recipient and amount on chain before the refund succeeds.
 
 `checkout.retrieve(paymentId)` and `checkout.proof(paymentId)` read the public side of a payment: what the hosted checkout shows, and the chain evidence once it is paid.
+Paying from another chain (NEAR Intents) is public too: `checkout.anyChainOptions(paymentId)`, `checkout.createAnyChainQuote(paymentId, { originAsset, refundTo, idempotencyKey? })` and `checkout.anyChainQuote(paymentId, quoteId)`.
+These calls need no key and never send one, so a buyer builds the client with `new GatewayClient({ nodeUrl })`; a call that needs a key then throws before sending anything.
+`docs/DEVELOPERS.md` ("Any-chain checkout") has the example, and `depositPaymentUri` from `@payminto/protocol` turns a quote into the QR code's payment URI.
 Agents pay a link at the node's `/v1/pay/l/<slug>` on the x402 v2 wire with `AgentClient`; a link with a platform fee is one requirement with two splits, paid with two vouchers at once.
 
 ## Tests

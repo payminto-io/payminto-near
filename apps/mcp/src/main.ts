@@ -11,6 +11,7 @@ import { rpcChainReader } from "./chain.ts";
 import { loadMcpConfig, McpConfigError } from "./config.ts";
 import { startMcpHttp } from "./http.ts";
 import { HttpTokenError, resolveHttpToken } from "./http-token.ts";
+import { InvoicePayer } from "./invoice.ts";
 import { liveMarket } from "./market.ts";
 import { runMerchantMcp } from "./merchant-server.ts";
 import { rpcPayeeCheck } from "./payee-guard.ts";
@@ -55,6 +56,8 @@ try {
     ...(config.market
       ? { market: liveMarket({ ...(config.market.rpcUrl ? { rpcUrl: config.market.rpcUrl } : {}), payeeCheck: config.market.payeeCheck ? { indexer: config.market.payeeCheck.indexer, ...(config.market.payeeCheck.indexerKey ? { indexerKey: config.market.payeeCheck.indexerKey } : {}) } : null }) }
       : {}),
+    // Paying this server's invoices from another chain: public checkout routes only, the agent's own wallet sends.
+    ...(config.anyChainInvoices ? { invoices: new InvoicePayer({ nodeUrl: config.nodeUrl }) } : {}),
     // Read-only as well: the wallet looks at a payee before it signs, and never signs for one the check blocks.
     // PAYEE_CHECK=off (or CHAIN_READER=off) is the operator's explicit opt-out; the library checks payees otherwise.
     ...(config.payeeCheck
@@ -69,6 +72,7 @@ wallet.agent.on("error", (e) => log(`agent: ${e.message}`));
 log(`agent key from ${config.agentKeySource.kind === "file" ? config.agentKeySource.path : "AGENT_KEY (environment override)"}; chain reader ${config.rpcUrl ?? "off"}`);
 log(config.payeeCheck ? `payee check on: reads ${config.rpcUrl}, account ages from ${config.payeeCheck.indexer === "nearblocks" ? "NearBlocks" : "nowhere (no indexer)"}` : "payee check off: this wallet signs for any payee the Budget allows (set CHAIN_READER=rpc and PAYEE_CHECK=on to turn it on)");
 log(config.market ? `Agent Market quotes on (quote_market_agent): quotes only, this wallet pays nothing to the market${config.market.payeeCheck ? "; the quoted payee is checked on NEAR mainnet" : ""}` : "Agent Market quotes off (AGENT_MARKET=off)");
+log(config.anyChainInvoices ? "any-chain invoices on (invoice_pay_options, invoice_deposit, invoice_status): deposits are sent by the agent's own wallet, never by this server" : "any-chain invoices off (ANY_CHAIN_INVOICES=off)");
 log(`pays services the node lists${config.payableHosts.length ? ` and hosts ${config.payableHosts.join(", ")}` : " only (PAYABLE_HOSTS is empty)"}${config.allowAnyPayee ? "; ALLOW_ANY_PAYEE is on" : ""}`);
 
 let stopHttp: (() => Promise<void>) | null = null;

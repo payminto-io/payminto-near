@@ -7,15 +7,19 @@
 import { CHECKOUT_ORIGINS, NEAR_MAINNET_USDC_ASSET, formatUnits, type CheckoutOrigin } from "@payminto/near-addons/intents";
 import { INTENTS_LABELS, sha256Text } from "@payminto/protocol";
 import { ApiError } from "../http";
+import { EVM_CHAIN_IDS } from "../intents";
+import type { IntentsPayoutBody } from "../gateway-api";
 import type {
   Credit,
   IntentsCheckout,
+  IntentsDestinationOption,
   IntentsFeeLines,
   IntentsOption,
   IntentsOptions,
   IntentsPayout,
   IntentsProof,
   IntentsQuote,
+  IntentsQuoteDestination,
   IntentsQuoteStatus,
   IntentsStep,
   IntentsSummary,
@@ -30,7 +34,7 @@ const SOLVER = "solver.near";
 /** Ten minutes or more must be left on a payment to pay it from another chain, as on the node. */
 const MIN_WINDOW_MS = 600_000;
 const QUOTE_TTL_MS = 1_800_000;
-const MAX_ACTIVE = 5;
+const MAX_ACTIVE = 8;
 
 /** What the mock gateway lends this module: its payments, the method switch, and its state step and live stream. */
 export type IntentsHost = {
@@ -51,8 +55,9 @@ const TIME_SEC: Record<string, number> = { base: 35, eth: 45, arb: 30, sol: 20, 
 const MIN_OUT: Record<string, bigint> = { "nep141:eth.omft.near": 30_000_000n };
 
 type Row = {
-  q: Omit<IntentsQuote, "refund_to" | "steps" | "deadline_passed" | "label" | "mode" | "object">;
+  q: Omit<IntentsQuote, "refund_to" | "refund_type" | "steps" | "deadline_passed" | "label" | "mode" | "object">;
   refundTo: string;
+  refundType: "ORIGIN_CHAIN" | "INTENTS";
   credit: Credit | null;
   timers: ReturnType<typeof setTimeout>[];
 };
@@ -134,11 +139,40 @@ function noFee(p: PaymentDetail) {
   Object.assign(p, { method: "oneclick", surcharge: "0", amount_due: p.amount, platform_fee: "0", method_fee: "0", fee_total: "0", net_amount: p.amount });
 }
 
-const originJson = (o: CheckoutOrigin) => ({ asset: o.assetId, chain: o.blockchain, chain_name: o.chainName, symbol: o.symbol, decimals: o.decimals });
+/** USDC's mint on Solana: the 1Click asset id of a Solana token names a hash, not the mint. */
+const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+/** The token on its own chain, as the node reports it: the ERC-20 contract or SPL mint, null for a native coin. */
+function contractOf(o: CheckoutOrigin): string | null {
+  if (o.blockchain === "sol") return o.symbol === "USDC" ? SOLANA_USDC_MINT : null;
+  return /-(0x[0-9a-f]{40})\./.exec(o.assetId)?.[1] ?? null;
+}
+
+const originJson = (o: CheckoutOrigin) => ({
+  asset: o.assetId,
+  chain: o.blockchain,
+  chain_name: o.chainName,
+  symbol: o.symbol,
+  decimals: o.decimals,
+  contract_address: contractOf(o),
+  chain_id: EVM_CHAIN_IDS[o.blockchain] ?? null,
+});
+
+/**
+ * Where the demo delivers: USDC on NEAR first, then USDC on the EVM chains. The demo cannot read those chains, so their
+ * deliveries are confirmed by NEAR Intents' report, as on a node without an RPC for them.
+ */
+const DESTINATIONS: IntentsDestinationOption[] = [
+  { chain: "near", chain_name: "NEAR", symbol: "USDC", asset: NEAR_MAINNET_USDC_ASSET, decimals: 6, verify: "rpc" },
+  ...CHECKOUT_ORIGINS.filter((o) => o.symbol === "USDC" && o.blockchain in EVM_CHAIN_IDS).map((o): IntentsDestinationOption => ({ chain: o.blockchain, chain_name: o.chainName, symbol: "USDC", asset: o.assetId, decimals: 6, verify: "provider_only" })),
+];
 
 export class MockIntents {
   readonly #rows = new Map<string, Row[]>();
   #payout: { account: string | null; exists: boolean | null; registered: boolean | null; provenAt: string | null };
+  /** An EVM destination, when the business receives there instead of USDC on NEAR. */
+  #evm: { chain: string; address: string; provenAt: string } | null = null;
+  #defaultOrigin: string | null = null;
 
   readonly #mode: "simulated" | "live";
   readonly #label: string;
@@ -161,8 +195,18 @@ export class MockIntents {
 
   /** All three checks passed: the method can be on. */
   verified(): boolean {
+    if (this.#evm) return true;
     const p = this.#payout;
     return p.account !== null && p.exists === true && p.registered === true && p.provenAt !== null;
+  }
+
+  /** Where this business receives now, as a quote names it. */
+  #destination(): IntentsQuoteDestination {
+    if (this.#evm) {
+      const d = DESTINATIONS.find((x) => x.chain === this.#evm!.chain)!;
+      return { chain: d.chain, chain_name: d.chain_name, symbol: d.symbol, address: this.#evm.address };
+    }
+    return { chain: "near", chain_name: "NEAR", symbol: "USDC", address: this.#payout.account ?? "" };
   }
 
   // ------------------------------------------------------------------ the hosted checkout
@@ -180,7 +224,7 @@ export class MockIntents {
     const reason = this.#unavailable(p);
     const rows = (this.#rows.get(p.id) ?? []).filter((r) => r.q.status !== "expired");
     const newest = rows.at(-1);
-    return { mode: this.#mode, label: this.#label, available: reason === null, reason, settlement_network: this.#settlement, active_quote: newest ? this.#json(newest) : null };
+    return { mode: this.#mode, label: this.#label, available: reason === null, reason, settlement_network: this.#settlement, active_quote: newest ? this.#json(newest) : null, default_origin: this.#defaultOrigin };
   }
 
   /** `methods` gains `oneclick` while the payment can be paid from another chain. */
@@ -216,24 +260,29 @@ export class MockIntents {
     };
   }
 
-  createQuote(paymentId: string, body: { origin_asset: string; refund_to: string }): { quote: IntentsQuote; reused: boolean } {
+  createQuote(paymentId: string, body: { origin_asset: string; refund_to?: string }): { quote: IntentsQuote; reused: boolean } {
     const p = this.host.find(paymentId);
     const o = CHECKOUT_ORIGINS.find((x) => x.assetId === body.origin_asset);
     if (!o) throw new ApiError(400, "ORIGIN_NOT_OFFERED", "This token is not offered for this payment.");
-    const refund = body.refund_to.trim();
-    const okAddress = o.addressFormat === "evm" ? /^0x[0-9a-fA-F]{40}$/.test(refund) && !/^0x0{40}$/.test(refund) : /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(refund);
-    if (!okAddress) throw new ApiError(400, "INVALID_REFUND_ADDRESS", `The refund address is not an address on ${o.chainName}.`);
+    const given = body.refund_to?.trim();
+    if (given !== undefined) {
+      const okAddress = o.addressFormat === "evm" ? /^0x[0-9a-fA-F]{40}$/.test(given) && !/^0x0{40}$/.test(given) : /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(given);
+      if (!okAddress) throw new ApiError(400, "INVALID_REFUND_ADDRESS", `The refund address is not an address on ${o.chainName}.`);
+    }
+    // Like the node: no buyer address, so a failed deposit goes back to the business's NEAR Intents balance.
+    const refundType = given === undefined ? "INTENTS" : "ORIGIN_CHAIN";
+    const refund = given ?? this.#payout.account ?? "";
     const reason = this.#unavailable(p);
     if (reason) throw new ApiError(409, "INTENTS_UNAVAILABLE", reason);
     const rows = this.#rows.get(p.id) ?? [];
-    const reuse = rows.find((r) => r.q.origin.asset === o.assetId && r.refundTo === refund && r.q.status === "awaiting_deposit" && new Date(r.q.deadline).getTime() - Date.now() >= MIN_WINDOW_MS);
+    const reuse = rows.find((r) => r.q.origin.asset === o.assetId && r.refundTo === refund && r.refundType === refundType && r.q.status === "awaiting_deposit" && new Date(r.q.deadline).getTime() - Date.now() >= MIN_WINDOW_MS);
     if (reuse) return { quote: this.#json(reuse), reused: true };
     if (rows.filter((r) => r.q.status === "awaiting_deposit" && new Date(r.q.deadline).getTime() > Date.now()).length >= MAX_ACTIVE) {
-      throw new ApiError(409, "INTENTS_QUOTE_LIMIT", "Five deposit addresses of this payment are waiting already. Use one of them, or wait for them to expire.");
+      throw new ApiError(409, "INTENTS_QUOTE_LIMIT", "Eight deposit addresses of this payment are waiting already. Use one of them, or wait for them to expire.");
     }
     const out = BigInt(p.amount_due);
     if (MIN_OUT[o.assetId] && out < MIN_OUT[o.assetId]!) throw new ApiError(502, "INTENTS_QUOTE_FAILED", `The bridge needs at least ${formatUnits(MIN_OUT[o.assetId]!, 6)} USDC for this route.`);
-    const row = this.#build(p, o, refund, Date.now());
+    const row = this.#build(p, o, refund, Date.now(), refundType);
     this.#rows.set(p.id, [...rows, row]);
     // The node re-quotes an untouched payment for the method in use; the fee is zero on this rail.
     if (p.status === "open" && p.credits.length === 0) noFee(p);
@@ -267,7 +316,7 @@ export class MockIntents {
     this.#rows.set(p.id, [...(this.#rows.get(p.id) ?? []), row]);
   }
 
-  #build(p: PaymentDetail, o: CheckoutOrigin, refund: string, now: number): Row {
+  #build(p: PaymentDetail, o: CheckoutOrigin, refund: string, now: number, refundType: "ORIGIN_CHAIN" | "INTENTS" = "ORIGIN_CHAIN"): Row {
     const out = BigInt(p.amount_due);
     const f = fees(o, out);
     const { amountIn, minIn, usd } = price(o, out);
@@ -276,6 +325,7 @@ export class MockIntents {
     const addr = o.addressFormat === "evm" ? evmAddress(id) : base58Of(sha256Text(`mock-intents-sol:${id}`));
     const row: Row = {
       refundTo: refund,
+      refundType,
       credit: null,
       timers: [],
       q: {
@@ -294,8 +344,10 @@ export class MockIntents {
         slippage_bps: o.stable ? 10 : 100,
         time_estimate_sec: f.time_estimate_sec,
         recipient: this.#payout.account ?? "",
+        destination: this.#destination(),
         settlement_network: this.#settlement,
         deadline: new Date(deadline).toISOString(),
+        send_by: new Date(deadline).toISOString(),
         inactive_at: new Date(deadline).toISOString(),
         deposited: null,
         delivered: null,
@@ -339,7 +391,7 @@ export class MockIntents {
     const o = r.q.origin;
     r.q.deposited = amount(total, o.decimals, o.symbol);
     r.q.origin_txs = [...r.q.origin_txs, { hash: o.chain === "sol" ? nearTx(r.q.id) : evmTx(r.q.id), explorer_url: null }];
-    const payer = `${o.chain}:${r.refundTo}`;
+    const payer = r.refundType === "INTENTS" ? `${o.chain}:unknown` : `${o.chain}:${r.refundTo}`;
     if (!r.credit) {
       r.credit = { payment_id: p.id, method: "oneclick", payer, amount: r.q.amount_out.amount, tx_hash: null, batch_id: null, call_id: null, recorded_at_ms: null, status: "pending", late: false, created_at: new Date().toISOString(), confirmed_at: null };
       p.credits.push(r.credit);
@@ -402,7 +454,7 @@ export class MockIntents {
     return {
       method: "oneclick",
       amount: r.q.amount_out.amount,
-      payer: `${r.q.origin.chain}:${mask(r.refundTo)}`,
+      payer: r.refundType === "INTENTS" ? `${r.q.origin.chain}:unknown` : `${r.q.origin.chain}:${mask(r.refundTo)}`,
       quote_id: r.q.id,
       mode: this.#mode,
       label: this.#label,
@@ -464,17 +516,43 @@ export class MockIntents {
       enabled: this.host.enabled(this.host.merchant.id),
       proof_scope: { settlement_network: this.#settlement, hub: this.host.merchant.hub },
       checked_at: new Date().toISOString(),
+      default_origin: this.#defaultOrigin,
+      destination: this.#evm
+        ? { ...this.#destination(), asset: DESTINATIONS.find((x) => x.chain === this.#evm!.chain)!.asset, proven: true, verify: "provider_only" }
+        : p.account
+          ? { chain: "near", chain_name: "NEAR", symbol: "USDC", asset: NEAR_MAINNET_USDC_ASSET, address: p.account, proven: p.provenAt !== null, verify: "rpc" }
+          : null,
+      destinations: DESTINATIONS,
     };
+  }
+
+  /** `PATCH /v1/merchant/intents-payout`: the origin the checkout pre-selects, or none. */
+  setDefaultOrigin(value: string | null): IntentsPayout {
+    if (value !== null && !CHECKOUT_ORIGINS.some((o) => o.assetId === value)) throw new ApiError(400, "ORIGIN_NOT_OFFERED", "default_origin: not one of the offered origins");
+    this.#defaultOrigin = value;
+    return this.payout();
   }
 
   /**
    * Sets the account. The demo checks only the shape of the proof (a real signature is checked by the node); an account
    * whose name starts with "new" plays one that is not registered with USDC yet, so the storage step can be seen.
    */
-  setPayout(body: { account: string; proof: { timestamp: number; public_key: string; signature: string } }): IntentsPayout {
+  setPayout(body: IntentsPayoutBody): IntentsPayout {
+    if ("destination_chain" in body) {
+      // An EVM address with its EIP-191 proof: the demo checks the shape; a node recovers the signer.
+      const d = DESTINATIONS.find((x) => x.chain === body.destination_chain && x.chain !== "near");
+      if (!d) throw new ApiError(400, "VALIDATION_ERROR", "destination_chain: not one of the destinations");
+      if (!/^0x[0-9a-f]{40}$/.test(body.address)) throw new ApiError(400, "VALIDATION_ERROR", "address: must be a lowercase EVM address");
+      if (body.proof.type !== "eip191" || !/^0x[0-9a-fA-F]{130}$/.test(body.proof.signature)) {
+        throw new ApiError(400, "INVALID_PROOF", "The signature does not match the message.");
+      }
+      this.#evm = { chain: d.chain, address: body.address, provenAt: new Date().toISOString() };
+      return this.payout();
+    }
     if (!/^[a-z0-9._-]{2,64}$/.test(body.account)) throw new ApiError(400, "VALIDATION_ERROR", "account: must be a NEAR account id");
     if (!body.proof.signature || !body.proof.public_key.startsWith("ed25519:")) throw new ApiError(400, "INVALID_PROOF", "The signature does not match the message.");
     this.#payout = { account: body.account, exists: true, registered: !body.account.startsWith("new"), provenAt: new Date().toISOString() };
+    this.#evm = null;
     return this.payout();
   }
 
@@ -485,6 +563,7 @@ export class MockIntents {
 
   /** `PUT /v1/merchants/{id}/methods` turning `oneclick` on, refused like the node until the account is verified. */
   assertCanEnable(): void {
+    if (this.#evm) return;
     const p = this.#payout;
     if (!p.account || !p.provenAt) throw new ApiError(409, "INTENTS_PAYOUT_REQUIRED", "set a NEAR account for any-chain payments first (PUT /v1/merchant/intents-payout)");
     if (!p.registered) throw new ApiError(409, "INTENTS_PAYOUT_NOT_REGISTERED", `${p.account} is not registered with USDC yet; send the storage_deposit shown by GET /v1/merchant/intents-payout`);
@@ -515,7 +594,7 @@ export class MockIntents {
 
   #json(r: Row, merchant = false): IntentsQuote {
     const deadlinePassed = Date.now() >= new Date(r.q.deadline).getTime();
-    const out: IntentsQuote = { ...r.q, object: "intents_quote", mode: this.#mode, label: this.#label, refund_to: merchant ? r.refundTo : mask(r.refundTo), steps: steps(r.q.status), deadline_passed: deadlinePassed };
+    const out: IntentsQuote = { ...r.q, object: "intents_quote", mode: this.#mode, label: this.#label, refund_to: merchant || r.refundType === "INTENTS" ? r.refundTo : mask(r.refundTo), refund_type: r.refundType, steps: steps(r.q.status), deadline_passed: deadlinePassed };
     if (merchant) out.quote_response = { correlationId: r.q.correlation_id, simulated: true, note: "The in-browser demo's quote; no 1Click server answered it." };
     return out;
   }

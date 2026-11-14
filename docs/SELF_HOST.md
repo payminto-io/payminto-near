@@ -312,16 +312,17 @@ An owner approves or denies a payee with warnings on the Budget's page in the da
 | `GATEWAY_ENABLED` | on when a payout account is set | `true` turns the gateway on without a seeded business |
 | `PLATFORM_NAME` | `Payminto` | Shown in the dashboard and emails |
 | `PLATFORM_FEE_ACCOUNT` | unset | The account that would receive fees; needed before any fee is non-zero. The default plan charges 0% |
-| `PUBLIC_CHECKOUT_URL` | `http://localhost:3000` | The dashboard origin that serves the checkout; a public https origin on testnet |
+| `PUBLIC_CHECKOUT_URL` | `http://localhost:3000` | The dashboard origin that serves the checkout; a public https origin on testnet, and https (or this machine's own `http://localhost`) with `INTENTS_CHECKOUT=live` |
 | `CHECKOUT_TTL_SECONDS` | `1800` | Lifetime of a new payment, from 300 to 604800 |
-| `WEBHOOK_ALLOW_PRIVATE` | `true` on sandbox | Lets webhook URLs reach private addresses; refused on testnet |
+| `WEBHOOK_ALLOW_PRIVATE` | `true` on sandbox | Lets webhook URLs reach private addresses; refused on testnet and with `INTENTS_CHECKOUT=live` |
 | `GATEWAY_WATCH_INTERVAL_MS` | `2000` | How often open wallet payments are looked up on the hub |
 
 On testnet, `GATEWAY_PAYOUT_ACCOUNT` and `PLATFORM_FEE_ACCOUNT` must not be the operator account.
 
 ### Email
 
-Without SMTP, every account email is kept in the node's outbox, logged, and shown to the platform owner in the dashboard.
+Without SMTP, every account email and every buyer's receipt is kept in the node's outbox, logged, and shown to the platform owner in the dashboard.
+A buyer who leaves an email at checkout gets one receipt when the payment is paid.
 
 | Variable | Meaning |
 |---|---|
@@ -360,6 +361,25 @@ Without SMTP, every account email is kept in the node's outbox, logged, and show
 | `NEXT_PUBLIC_LOCAL_SIGNER_URL`, `NEXT_PUBLIC_LOCAL_SIGNER_TOKEN` | unset | Set by `pnpm local` only; used only when the network is `sandbox` and the URL is loopback http |
 | `NEXT_PUBLIC_MOCK` | unset | `1` serves fixtures from an in-browser mock node; `empty` serves a fresh one |
 | `NEXT_PUBLIC_DOCS_URL` | unset | The docs link shown in the dashboard's help sheet |
+
+### Any-chain checkout (NEAR Intents) in production
+
+The any-chain checkout lets a buyer pay from another chain (USDC on Base, Ethereum, Arbitrum, Solana or Polygon, USDT or ETH) through NEAR Intents' 1Click API, and the business receives USDC in its own NEAR mainnet account.
+It is off by default; `apps/node/.env.example` lists every `INTENTS_*` variable.
+
+| Variable | Live value | Meaning |
+|---|---|---|
+| `INTENTS_CHECKOUT` | `live` | `off`, `simulated` (a fake 1Click server, no real money) or `live` (real money on NEAR mainnet) |
+| `ONECLICK_API_KEY` | your 1Click partner key | Optional; without it 1Click adds 0.25% to every buyer's price, and the node warns at boot |
+| `NEAR_MAINNET_RPC_URL` | an https RPC you trust | Where deliveries and the business's account are read; the public default is rate limited, and the node warns at boot |
+| `INTENTS_DELIVERY_SENDERS` | unset, or 1Click's signer accounts | Needed only with an RPC that tracks some shards |
+| `INTENTS_ORIGINS` | unset | The 1Click asset ids buyers may pay with; unset offers every supported origin |
+
+Live mode is real money, so the node applies the production checks of a public network to it, whatever `NETWORK` is: a strong `ADMIN_TOKEN`, no dev `NODE_SIGNING_SEED`, `PASSWORD_HASH_COST` of at least 17, an https `PUBLIC_CHECKOUT_URL`, and no private webhooks.
+The hub stays on testnet or a local chain, so in live mode checkout offers only "Any chain": the NEAR wallet and voucher methods are off for every business, and every Paid invoice is real money.
+Each business proves its own NEAR mainnet account in the dashboard (Settings, Payment methods) and registers it with USDC before it can turn the method on; the node never holds the USDC.
+A payment from another chain is refunded by the business from its own wallet on the buyer's chain, then recorded in the dashboard.
+[OPERATIONS.md](OPERATIONS.md), section 15, has the alerts, what to do about each, and backups; [LIVE_RUN.md](LIVE_RUN.md) walks one real payment end to end.
 
 ## 6. Deploy and lock a hub on testnet (human step)
 

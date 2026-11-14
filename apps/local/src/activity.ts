@@ -24,8 +24,12 @@ export type ActivityResult = {
   refused: Refused[];
   batch: BatchInfo;
   payout: { seq: number; txHash: string; items: Array<{ account: AccountId; paid: string }> };
-  paidCheckout: CheckoutPayment;
-  unpaidCheckout: CheckoutPayment;
+  /**
+   * The NEAR wallet checkout payments. Null with `--intents live`: live mode takes only real money from other chains,
+   * so the wallet method is off and the business pays its own live link (docs/LIVE_RUN.md).
+   */
+  paidCheckout: CheckoutPayment | null;
+  unpaidCheckout: CheckoutPayment | null;
   /** Calls accepted after the batch, waiting for the person's own "settle now". */
   pending: number;
   /** A call that waits for the owner: the payee the check warned about, and the Budget that would pay it. */
@@ -112,6 +116,8 @@ export async function runActivity(o: {
   services: RegisteredService[];
   signer: SignerClient;
   say: (line: string) => void;
+  /** `--intents live`: no NEAR wallet checkout payments (the node refuses the wallet method in live mode). */
+  liveIntents?: boolean;
 }): Promise<ActivityResult> {
   const { say, setup, desk } = o;
   const svc = Object.fromEntries(o.services.map((s) => [s.key, s])) as Record<ServiceKey, RegisteredService>;
@@ -159,15 +165,22 @@ export async function runActivity(o: {
   const payout = { seq: run1.seq, txHash: run1.txHash, items: run1.items.map((i) => ({ account: i.account, paid: i.paid ?? "0" })) };
   say(`   Payout ${payout.seq}: ${payout.items.map((i) => `${usdc(i.paid)} to ${i.account}`).join(", ")}, tx ${payout.txHash}.`);
 
-  // Checkout: the shopper pays one payment from the link; a second one is left open.
-  const first = await paymentFromLink(o.urls.node, o.urls.dashboard, setup.link.slug);
-  const paidCheckout = await payCheckout({ nodeUrl: o.urls.node, origin: o.urls.dashboard, signer: o.signer, payer: o.accounts.by.shopper.accountId, paymentId: first.id });
-  if (paidCheckout.status !== "paid") throw new Error(`the checkout payment ${first.id} is ${paidCheckout.status}, not paid`);
-  say(`   Checkout payment ${paidCheckout.id} paid by ${o.accounts.by.shopper.accountId}: ${usdc(paidCheckout.amount)}, tx ${paidCheckout.txHash}.`);
-  // The second payment is created the way a business's own server creates one: the SDK's GatewayClient with its API key.
-  const second = await setup.gateway.payments.create({ amount: (12n * 1_000_000n).toString(), method: "wallet", description: "Espresso subscription, 1 month", reference: "order-1002", expires_in: 86_400 });
-  const unpaidCheckout: CheckoutPayment = { id: second.id, status: second.status, amount: second.amount_due, checkoutUrl: second.checkout_url, txHash: null };
-  say(`   Checkout payment ${unpaidCheckout.id} created with the business API key and left unpaid (${unpaidCheckout.status}): ${unpaidCheckout.checkoutUrl}`);
+  // Checkout: the shopper pays one payment from the link; a second one is left open. Not in live any-chain mode, where
+  // the node offers only payments from other chains and a wallet payment is refused (METHOD_NOT_OFFERED).
+  let paidCheckout: CheckoutPayment | null = null;
+  let unpaidCheckout: CheckoutPayment | null = null;
+  if (o.liveIntents) {
+    say("   No NEAR wallet checkout payments: live any-chain mode takes only real money from other chains, so the wallet method is off.");
+  } else {
+    const first = await paymentFromLink(o.urls.node, o.urls.dashboard, setup.link.slug);
+    paidCheckout = await payCheckout({ nodeUrl: o.urls.node, origin: o.urls.dashboard, signer: o.signer, payer: o.accounts.by.shopper.accountId, paymentId: first.id });
+    if (paidCheckout.status !== "paid") throw new Error(`the checkout payment ${first.id} is ${paidCheckout.status}, not paid`);
+    say(`   Checkout payment ${paidCheckout.id} paid by ${o.accounts.by.shopper.accountId}: ${usdc(paidCheckout.amount)}, tx ${paidCheckout.txHash}.`);
+    // The second payment is created the way a business's own server creates one: the SDK's GatewayClient with its API key.
+    const second = await setup.gateway.payments.create({ amount: (12n * 1_000_000n).toString(), method: "wallet", description: "Espresso subscription, 1 month", reference: "order-1002", expires_in: 86_400 });
+    unpaidCheckout = { id: second.id, status: second.status, amount: second.amount_due, checkoutUrl: second.checkout_url, txHash: null };
+    say(`   Checkout payment ${unpaidCheckout.id} created with the business API key and left unpaid (${unpaidCheckout.status}): ${unpaidCheckout.checkoutUrl}`);
+  }
 
   // A few calls left unsettled, so "Next settlement" has something to settle.
   await Promise.all([run(alice, "quotes", 2), run(bob, "briefs", 1)]);

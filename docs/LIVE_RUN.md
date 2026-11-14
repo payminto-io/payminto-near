@@ -6,7 +6,9 @@ You do every signing and every transfer yourself, in your own wallets.
 Nobody on the team signed a mainnet transaction or asked 1Click for a real deposit address while building this; the screens below were tested with a fake wallet and the simulated 1Click server.
 
 Only the any-chain rail is live.
-The hub, the Budgets, the local accounts and the "NEAR wallet" tab stay on the local chain of `pnpm local`.
+The hub, the Budgets and the local accounts stay on the local chain of `pnpm local`.
+In live mode checkout offers only "Any chain": the "NEAR wallet" tab and agent vouchers would pay with local test money, so they are off for every business, and every Paid invoice is real money.
+In Settings, Payment methods, the NEAR wallet and voucher methods show "Off in live mode: the hub runs on a test network, and this server takes only real money from other chains." and cannot be turned on.
 
 ## What you need
 
@@ -38,10 +40,22 @@ The hub, the Budgets, the local accounts and the "NEAR wallet" tab stay on the l
 - The deposit address and the price come from 1Click, a third party.
   The node checks 1Click's signature and every field of the quote before it shows the address, which proves where the quote came from, not that the price is fair.
 - The refund address you type is where any returned money goes: use your own Base address and read it twice.
-- Stopping `pnpm local` deletes the local chain and its database, including the payment's record; capture the result first (step 11).
+- Stopping `pnpm local` stops the local chain, and the next start deletes its database, including the payment's record; capture the result first (step 11).
   The USDC itself is in your NEAR mainnet account and stays there.
+  While the database still holds a live quote that is not final (a deposit address waiting, or a payment on its way), the next `pnpm local` refuses to start and names the quotes; `pnpm local --reset` deletes them anyway.
 
 ## Steps
+
+0. Check that NEAR Intents is quoting today - see eight signed quotes, each with "1Click signature: valid; checks: passed".
+   This is free and needs no wallet: it asks the live 1Click API for dry quotes, which create no deposit address, so nothing can be sent.
+
+   ```sh
+   pnpm --filter @payminto/near-addons intents quote-in --from all --usdc 1.5 --merchant <your account>
+   ```
+
+   Each quote prints what the buyer sends, what the business receives, the swap and delivery cost, the price buffer and the refund fee, read from the quote 1Click signed.
+   On 2026-11-12 all eight origins (USDC on Base, Ethereum, Arbitrum, Solana and Polygon, USDT on Ethereum, ETH on Base and Ethereum) answered in about 6 seconds and passed every check the node runs before it shows a deposit address.
+   If a line says the signature is not valid or a check failed, stop here: the node would refuse that quote too, and the live run would show no deposit address.
 
 1. Create and fund the dev mainnet account in your own wallet - see it on NearBlocks.
    Create a new named account in your wallet, for example `yourname-payminto-demo.near`, separate from any account you use for anything else.
@@ -122,28 +136,32 @@ The hub, the Budgets, the local accounts and the "NEAR wallet" tab stay on the l
    Open Payment links, "New link", give it a title such as "Live demo", a fixed amount of 1.50 USDC, and save.
    See the link's page with its address, `http://localhost:3210/l/<slug>`.
 
-8. Open the link as the buyer - see "Pay from NEAR or any chain".
+8. Open the link as the buyer - the checkout opens at once, on one screen.
    Open the link in a new tab.
-   See the price, and under it "Next you pay from your NEAR wallet, or from another chain with USDC, USDT or ETH through NEAR Intents."
-   Press "Continue to pay".
+   A fixed-amount link that asks for nothing goes straight to its checkout: there is no "Continue to pay" step.
+   See "Live - NEAR mainnet" and "Pay with": USDC, USDT or ETH, and the chains for each (Base, Ethereum, Arbitrum, Solana, Polygon); there is no "NEAR wallet" tab in live mode.
    Do steps 9 and 10 within 20 minutes: a deposit address needs at least 10 minutes left on the payment, and if the page says it expires too soon, open the link again for a new payment.
 
-9. Get a deposit address on Base - see the exact amount, the address and the countdown.
-   Choose the "Any chain" tab and see "Live - NEAR mainnet" on it.
-   Pick "USDC on Base"; see the price from a free dry quote, about 1.5017 USDC for 1.50 USDC.
-   Paste your own Base address as the refund address and read it twice.
-   Press "Get deposit address": this asks 1Click for a real deposit address, which costs nothing until you send money to it.
-   See "Send exactly `<amount>` USDC on Base", the address with a copy button and a QR code, the countdown to the deadline, the fee lines from the signed quote, and the warning about other tokens, networks and late deposits.
+9. Pick "USDC" and "Base" - the payment address is already there.
+   The page asks 1Click for a real deposit address as soon as a chain is picked (free until money is sent to it); picking another chain gets that chain's own address, and picking Base again shows the same one.
+   No refund address is asked for: if a deposit cannot complete (too little, or too late), NEAR Intents returns it to your NEAR account (`--intents-payout`), and you send it back to the buyer.
+   See "Send exactly `<amount>` USDC on Base", about 1.5018 USDC for 1.50 USDC, and one block with the QR code, the amount, "USDC on Base" and the address, each with a copy button.
+   See one status line, "Waiting for your payment. Send before `<time>` UTC", and the warning about other tokens, networks and late deposits; the fee lines and the progress steps are under "Details".
 
-10. Pay from Base in your own wallet - see the steps move to "Payment complete".
-    In your Base wallet, send exactly the amount shown, of USDC, on the Base network, to the address shown.
-    Optionally paste your Base transaction hash under "I've sent it"; it only speeds up detection.
-    See "Deposit received" within about a minute of Base confirming, then "Converting to USDC", then "Delivered to merchant"; 1Click estimated 35 seconds for this route.
+10. Pay from Base in your own wallet - see the status line move, then "Payment complete".
+    The easiest way is "Pay `<amount>` USDC with your wallet", shown when this browser has an Ethereum wallet (an extension such as MetaMask or Rabby, or a wallet app's own browser on a phone).
+    It switches the wallet to Base and asks it to send the exact USDC transfer to the deposit address; check the token, network, amount and address in the wallet before you approve.
+    Otherwise, in your Base wallet, send exactly the amount shown, of USDC, on the Base network, to the address shown.
+    For USDC the QR code holds the deposit address only, never an EIP-681 request: that request names the USDC contract first, and a wallet that reads only that address would send the money to the contract, where it is lost.
+    So after scanning, type the exact amount yourself, and check all four against the screen before you approve.
+    Optionally paste your Base transaction hash under "Details", "I've sent it"; it only speeds up detection.
+    See "Payment received. Converting it for `<business>`" within about a minute of Base confirming (the steps under "Details" show "Deposit received", "Converting to USDC", "Delivered to merchant"); 1Click estimated 35 seconds for this route.
     See "Payment complete" with "Paid from Base through NEAR Intents", the Base deposit transaction and the NEAR delivery transaction.
     In all, 1 to 5 minutes from sending.
     In the dashboard, Payments lists the payment as Paid with "Any chain - USDC on Base"; its page has a "NEAR Intents" card with "Delivery checked on NEAR" (or "Reported by 1Click only", see step 4).
     Open the payment proof from the success screen (`http://localhost:3210/receipt/<payment id>`): see "Verified on NEAR mainnet", the delivery read in your browser from NEAR mainnet, and 1Click's status beside it as the server last read it.
     Your wallet shows 1.50 USDC more on your NEAR mainnet account.
+    If you left an email on the checkout ("Email me a receipt"), the receipt is in the dashboard's Platform, Email outbox (sign in as the platform owner), and in `apps/local/data/logs/node.log` as `[email] to=... kind=receipt`: `pnpm local` sends no real email.
 
 11. Capture the result for the README - see a dated JSON file and the list of accounts in it.
     With `pnpm local` still running, in a second terminal:
@@ -160,9 +178,15 @@ The hub, the Budgets, the local accounts and the "NEAR wallet" tab stay on the l
 
 12. Stop - see every part stop.
     Press Ctrl-C in the `pnpm local` terminal and see "Stopping".
-    That deletes the local chain and its database; the USDC stays in your NEAR mainnet account, and the dashboard's mainnet wallet connection is forgotten with the next "Disconnect" or when you clear the site's data.
+    That stops the local chain, and the next start deletes its database; the USDC stays in your NEAR mainnet account, and the dashboard's mainnet wallet connection is forgotten with the next "Disconnect" or when you clear the site's data.
 
 ## If it does not go as planned
+
+- You need to refund the buyer: open the payment in the dashboard and press Refund.
+  A payment from another chain cannot be refunded on NEAR, so the dashboard shows the chain, the buyer's full refund address on it and the deposit transaction.
+  Send the refund from your own wallet on that chain (USDC on Base here), then record it with the chain and your transaction hash; the node marks the refund succeeded and moves nothing itself.
+- The next `pnpm local` says "Not starting: the previous run took real money through the any-chain checkout": a live quote of the last run is not final yet.
+  Capture what you need, look each deposit address up with 1Click, or run `pnpm local --reset` to delete the database anyway.
 
 - "Your deposit was returned": 1Click sent the deposit back to your refund address on Base, less its refund fee, usually because less than the exact amount arrived.
   The screen says how much and why, the payment is open again, and "Try again" gets a new address.

@@ -34,7 +34,7 @@ The buyer's steps:
 1. Pick a token and chain from one list: USDC on Base, Ethereum, Arbitrum, Solana or Polygon, USDT on Ethereum, ETH on Base or Ethereum.
    Each row shows the indicative amount and time from the node's signed dry quote; a route 1Click refuses is greyed with the reason.
 2. Enter a refund address on that chain; it is checked for the chain's format before the button enables.
-3. Press "Get deposit address" (`POST .../intents/quotes` with an `Idempotency-Key`, so a retry gets the same address).
+3. Press "Show payment address" (`POST .../intents/quotes` with an `Idempotency-Key`, so a retry gets the same address).
 4. Send exactly the amount shown to the address or its QR code before the deadline; the fee lines and the warning come from the signed quote.
    "I've sent it" takes the transaction hash, which only speeds up detection.
 5. Watch the steps (waiting, received, converting, delivered) live on the checkout's event stream, with polling when the stream is down.

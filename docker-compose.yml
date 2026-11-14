@@ -13,6 +13,8 @@ services:
       dockerfile: apps/node/Dockerfile
     image: payminto/node:local
     restart: unless-stopped
+    # Every variable in .env reaches the node, including the optional GATEWAY_*, PUBLIC_CHECKOUT_URL and INTENTS_*
+    # lines of .env.docker.example (INTENTS_CHECKOUT=live is real money: docs/SELF_HOST.md, docs/OPERATIONS.md 15).
     env_file:
       - path: .env
         required: false

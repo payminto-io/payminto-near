@@ -23,6 +23,7 @@ import { BlockSkeleton, ErrorState } from "@/components/app/states";
 import { FeePreview } from "@/components/operator/fee-preview";
 import { MethodsEditor, type MethodRow } from "@/components/operator/methods-editor";
 import { ChangePayout } from "@/components/operator/change-payout";
+import { BusinessSetupPanel, RecentBusinessPayments } from "@/components/operator/business-setup";
 
 function MerchantDetailPagePage() {
   const { id } = useParams<{ id: string }>();
@@ -112,6 +113,10 @@ function MerchantDetailPagePage() {
           { label: "Pricing plan", value: plan?.name ?? "-", note: plan ? describeFeePlan(plan, t) : undefined },
         ]}
       />
+      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+        <RecentBusinessPayments merchantId={m.id} />
+        <BusinessSetupPanel merchant={m} />
+      </div>
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <Panel
           title="Payment methods"

@@ -24,6 +24,7 @@ import type { GatewayConfig } from "../config.ts";
 import type { Database } from "../db/database.ts";
 import { ApiError } from "../errors.ts";
 import type { Logger } from "../logger.ts";
+import type { Email } from "../auth/mailer.ts";
 import type { AccessKeyReader, TxReader } from "../near-rpc.ts";
 import type { PayoutService } from "../payouts.ts";
 import { receiptVerifiedOnchain } from "../proofs.ts";
@@ -36,6 +37,7 @@ import { LinkService } from "./links.ts";
 import { MerchantService, type MerchantRow, type PayoutProofRecord } from "./merchants.ts";
 import { isoOf, refusalJson, type CreditRow, type LinkRow, type ModelContext, type PaymentRow } from "./model.ts";
 import { PaymentService } from "./payments.ts";
+import { ReceiptService } from "./receipts.ts";
 import { RefundService } from "./refunds.ts";
 import { Screening } from "./screening.ts";
 import { PaymentWatcher } from "./watcher.ts";
@@ -47,6 +49,15 @@ import type { FetchLike as OneClickFetch } from "@payminto/near-addons/intents";
 import type { PaymentRequiredV2, VoucherRequirement } from "./x402-wire.ts";
 
 const MAX_X402_TIMEOUT_SEC = 300;
+
+/**
+ * Live any-chain mode (INTENTS_CHECKOUT=live): the hub still runs on a test network, so the NEAR wallet and voucher
+ * methods would let test money pay an invoice next to real money. They are locked for every business, and every Paid
+ * invoice is real money that came from another chain.
+ */
+export const LIVE_MODE_LOCKED_REASON = "Off in live mode: the hub runs on a test network, and this server takes only real money from other chains.";
+
+export const INTENTS_IN_FLIGHT_MESSAGE = "A payment from another chain is already on its way for this checkout. Wait for it to finish before paying with a NEAR wallet.";
 
 export type GatewayDeps = {
   config: GatewayConfig;
@@ -68,6 +79,8 @@ export type GatewayDeps = {
    * dynamic import, and the NEAR reader of the chain the USDC lands on.
    */
   intents?: { kit: IntentsKit; reader: IntentsChainReader; fetch?: OneClickFetch } | null;
+  /** The node's mailer, for receipt emails; without one no receipt is sent (unit tests that build a gateway alone). */
+  mailer?: { queue(e: Email): number } | null;
   /** Test seams. */
   clock?: () => number;
   webhookSender?: WebhookSender;
@@ -91,6 +104,8 @@ export class Gateway {
   readonly payments: PaymentService;
   readonly links: LinkService;
   readonly refunds: RefundService;
+  /** Receipt emails of paid payments; null without a mailer. */
+  readonly receipts: ReceiptService | null;
   readonly screening: Screening;
   readonly keys: ApiKeyService;
   readonly idempotency: Idempotency;
@@ -123,7 +138,9 @@ export class Gateway {
     this.#clock = d.clock ?? (() => Math.floor(Date.now() / 1000));
     this.ctx = {
       network: d.network,
-      livemode: isLivemode(d.network),
+      // One mode per server: live when the hub is on mainnet, or when the any-chain checkout takes real money
+      // (INTENTS_CHECKOUT=live, which also turns off the test-money methods); test everywhere else.
+      livemode: isLivemode(d.network) || (d.intents != null && d.config.intents?.mode === "live"),
       hub: d.chain.hub,
       token: d.token.address,
       checkoutBaseUrl: d.config.checkoutBaseUrl,
@@ -159,10 +176,28 @@ export class Gateway {
       const intents = this.intents;
       this.payments.intentsOf = (id) => intents.paymentIntents(id);
       this.payments.intentsSummaries = (ids) => intents.summaries(ids);
+      if (intents.mode === "live") this.merchants.lockMethods(["wallet", "voucher"], LIVE_MODE_LOCKED_REASON);
     } else {
       this.intents = null;
       this.intentsWatcher = null;
     }
+    const intentsSvc = this.intents;
+    this.receipts = d.mailer
+      ? new ReceiptService({
+          db: d.db,
+          mailer: d.mailer,
+          merchants: this.merchants,
+          token: d.token,
+          checkoutBaseUrl: d.config.checkoutBaseUrl,
+          originOf: (id) => {
+            const s = intentsSvc?.summaries([id]).get(id);
+            return s ? { symbol: s.origin.symbol, chain_name: s.origin.chain_name } : null;
+          },
+          log: d.log.child({ component: "receipts" }),
+        })
+      : null;
+    const receipts = this.receipts;
+    if (receipts) this.payments.receipts = (p) => void receipts.send(p);
     this.watcher = new PaymentWatcher({
       db: d.db,
       chain: d.chain,
@@ -257,7 +292,8 @@ export class Gateway {
     if (BigInt(p.amount_due) - BigInt(p.amount_paid) <= 0n) return [];
     const methods: PaymentMethod[] = [];
     const quoted = p.quote_method === "wallet" || (p.quote_method === null && this.#quotes(m, BigInt(p.amount), "wallet")) || (p.status === "open" && p.amount_paid === "0" && this.#quotes(m, BigInt(p.amount), "wallet"));
-    if (quoted && this.payments.credits(p.id).length === 0) methods.push("wallet");
+    // Never in live any-chain mode, and never while a deposit from another chain is on its way (it would pay twice).
+    if (quoted && !this.merchants.lockedReason("wallet") && this.payments.credits(p.id).length === 0 && !this.inFlight(p.id)) methods.push("wallet");
     // The any-chain rail is an add-on, so `oneclick` is not a core PaymentMethod; the wire carries it all the same.
     if (this.intents?.availability(p, m).available) methods.push("oneclick" as PaymentMethod);
     return methods;
@@ -356,7 +392,7 @@ export class Gateway {
   #publicMethods(m: MerchantRow, l: LinkRow) {
     return this.merchants
       .methods(m.id)
-      .filter((r) => r.enabled === 1 && (r.method === "wallet" || r.method === "voucher" || (r.method === "oneclick" && !!this.intents?.verified(m))))
+      .filter((r) => r.enabled === 1 && !this.merchants.lockedReason(r.method) && (r.method === "wallet" || r.method === "voucher" || (r.method === "oneclick" && !!this.intents?.verified(m))))
       .map((r) => {
         const customer = r.bearer === "customer";
         let quote: { amount: string; surcharge: string; amount_due: string } | null = null;
@@ -377,6 +413,21 @@ export class Gateway {
     if (m.status !== "active") throw new ApiError(403, "MERCHANT_SUSPENDED", "this merchant is suspended");
     if (isTerminalPaymentStatus(p.status) || this.#clock() >= p.expires_unix) throw new ApiError(409, "PAYMENT_NOT_PAYABLE", `payment is ${p.status === "open" ? "expired" : p.status}`);
     if (p.status === "processing") throw new ApiError(409, "PAYMENT_PROCESSING", "a payment for this checkout is already being confirmed");
+  }
+
+  /** True while a deposit from another chain is on its way for this payment (detected, short, or converting). */
+  inFlight(paymentId: string): boolean {
+    return this.intents?.inFlight(paymentId) ?? false;
+  }
+
+  /**
+   * Choosing or paying with the NEAR wallet on a checkout: 409 METHOD_NOT_OFFERED in live any-chain mode, and 409
+   * INTENTS_IN_FLIGHT while a deposit from another chain is on its way for the same payment.
+   */
+  assertWalletUsable(p: PaymentRow): void {
+    const locked = this.merchants.lockedReason("wallet");
+    if (locked) throw new ApiError(409, "METHOD_NOT_OFFERED", locked, { method: "wallet" });
+    if (this.inFlight(p.id)) throw new ApiError(409, "INTENTS_IN_FLIGHT", INTENTS_IN_FLIGHT_MESSAGE);
   }
 
   /**
@@ -416,6 +467,8 @@ export class Gateway {
     // Before anything is checked or recorded for the payer (screening decisions name the Budget owner): vouchers the
     // Budget's agent key did not sign are nobody's payment, and get the plain error.
     for (const v of vouchers) this.#vouchers.signedBudget(v);
+    const locked = this.merchants.lockedReason("voucher");
+    if (locked) throw new ApiError(409, "METHOD_NOT_OFFERED", locked, { method: "voucher" });
     this.#assertPayable(p);
     if (p.quote_method !== "voucher") {
       if (p.status === "open" && p.amount_paid === "0" && this.payments.credits(p.id).length === 0) p = this.payments.requote(p, "voucher");

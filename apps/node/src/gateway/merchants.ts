@@ -61,6 +61,13 @@ export type MerchantRow = {
   intents_payout_proven_at?: string | null;
   intents_payout_registered?: number;
   intents_payout_proof?: string | null;
+  /** Migration 009: the token the checkout pre-selects, and where the USDC lands (`near`, or an EVM chain and address). */
+  intents_default_origin?: string | null;
+  intents_destination_chain?: string;
+  intents_destination_asset?: string | null;
+  intents_destination_address?: string | null;
+  intents_destination_proof?: string | null;
+  intents_destination_proven_at?: string | null;
 };
 
 export type MethodRow = {
@@ -89,12 +96,19 @@ export function feePlanJson(r: FeePlanRow): FeePlan {
   };
 }
 
-export function methodJson(r: MethodRow): MerchantMethod {
+/**
+ * A method of a business. `locked_reason` says why the node does not offer a method at all right now (live any-chain
+ * mode locks the wallet and voucher methods); a locked method is shown off and cannot be turned on.
+ */
+export type MerchantMethodJson = MerchantMethod & { locked_reason: string | null };
+
+export function methodJson(r: MethodRow, lockedReason: string | null = null): MerchantMethodJson {
   return {
     merchant_id: r.merchant_id,
     // `oneclick` only on a node with the any-chain checkout on (CHECKOUT_METHODS).
     method: r.method as PaymentMethod,
-    enabled: r.enabled === 1,
+    enabled: lockedReason === null && r.enabled === 1,
+    locked_reason: lockedReason,
     fee_bps: r.fee_bps,
     fee_fixed: r.fee_fixed,
     bearer: r.bearer,
@@ -148,6 +162,8 @@ export class MerchantService {
   readonly #checkoutKey: PublicKey;
   /** Methods listed in method lists: the core two, plus `oneclick` when the any-chain checkout is on. */
   #listed: readonly CheckoutMethod[] = PAYMENT_METHODS;
+  /** Methods this node does not offer at all right now, with the reason a person reads. */
+  readonly #locked = new Map<CheckoutMethod, string>();
 
   constructor(o: { db: Database; ctx: ModelContext; checkoutKey: PublicKey }) {
     this.#db = o.db;
@@ -158,6 +174,28 @@ export class MerchantService {
   /** Called by the gateway when INTENTS_CHECKOUT is on: method lists then show the `oneclick` row too. */
   listIntentsMethod(): void {
     this.#listed = [...PAYMENT_METHODS, "oneclick"];
+  }
+
+  /** The methods method lists show: the core two, plus `oneclick` when the any-chain checkout is on. */
+  listed(): readonly CheckoutMethod[] {
+    return this.#listed;
+  }
+
+  /**
+   * Called by the gateway in live any-chain mode: these methods are off for every business, whatever their stored
+   * setting, and cannot be turned on. The stored setting is kept for when the node runs another mode again.
+   */
+  lockMethods(methods: readonly CheckoutMethod[], reason: string): void {
+    for (const m of methods) this.#locked.set(m, reason);
+  }
+
+  /** Why the node does not offer `method` at all right now, or null. */
+  lockedReason(method: CheckoutMethod): string | null {
+    return this.#locked.get(method) ?? null;
+  }
+
+  methodJson(r: MethodRow): MerchantMethodJson {
+    return methodJson(r, this.lockedReason(r.method));
   }
 
   /**
@@ -441,8 +479,12 @@ export class MerchantService {
   ): MethodRow[] {
     this.merchant(merchantId);
     return this.#db.tx(() => {
-      for (const it of items) {
-        const cur = this.method(merchantId, it.method);
+      for (const item of items) {
+        const cur = this.method(merchantId, item.method);
+        // A locked method cannot be turned on; sending it back off (as the list shows it) keeps the stored setting.
+        const locked = this.lockedReason(item.method);
+        if (locked && item.enabled === true) throw new ApiError(409, "METHOD_NOT_OFFERED", locked, { method: item.method });
+        const it = locked ? { ...item, enabled: undefined } : item;
         const next = enabledOnly ? { ...cur, enabled: it.enabled === undefined ? cur.enabled : it.enabled ? 1 : 0 } : {
           ...cur,
           enabled: it.enabled === undefined ? cur.enabled : it.enabled ? 1 : 0,
@@ -483,7 +525,7 @@ export class MerchantService {
       checkout_key: this.#checkoutKey,
       checkout_base_url: this.#ctx.checkoutBaseUrl,
       fee_plan: feePlanJson(this.feePlan(r.fee_plan_id)),
-      methods: this.methods(r.id).map(methodJson),
+      methods: this.methods(r.id).map((m) => this.methodJson(m)),
       ...this.stats30d(r.id),
       payout_history: this.payoutHistory(r.id),
     };

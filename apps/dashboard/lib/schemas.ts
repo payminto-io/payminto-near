@@ -58,6 +58,8 @@ export const infoSchema = z.object({
   publicUrl: z.string().nullable().optional(),
   settlement: z.object({ intervalSec: z.number().optional() }).passthrough().optional(),
   gateway: z.object({ enabled: z.boolean().optional(), checkoutBaseUrl: z.string().optional() }).passthrough().optional(),
+  /** One mode per server (lib/server-mode.ts); absent on an older server. */
+  mode: z.object({ livemode: z.boolean(), any_chain: z.enum(["off", "simulated", "live"]) }).nullable().optional(),
 });
 export type Info = z.infer<typeof infoSchema>;
 
@@ -714,7 +716,17 @@ export type IntentsLiveMode = z.infer<typeof intentsModeSchema>;
 export const intentsAmountSchema = z.object({ amount: atomicSchema, formatted: z.string(), symbol: z.string() });
 export type IntentsAmount = z.infer<typeof intentsAmountSchema>;
 
-export const intentsOriginSchema = z.object({ asset: z.string(), chain: z.string(), chain_name: z.string(), symbol: z.string(), decimals: z.number().int() });
+export const intentsOriginSchema = z.object({
+  asset: z.string(),
+  chain: z.string(),
+  chain_name: z.string(),
+  symbol: z.string(),
+  decimals: z.number().int(),
+  /** The token contract on the origin chain (an EVM address, a Solana mint), null for a native coin; absent on an older server. */
+  contract_address: z.string().nullable().optional(),
+  /** The EIP-155 chain id of an EVM origin, null elsewhere; absent on an older server. */
+  chain_id: z.number().int().nullable().optional(),
+});
 export type IntentsOrigin = z.infer<typeof intentsOriginSchema>;
 
 /** The deposit screen's fee lines, all from the signed quote; never a constant. */
@@ -770,6 +782,22 @@ export const intentsStepSchema = z.object({
 });
 export type IntentsStep = z.infer<typeof intentsStepSchema>;
 
+/** Where the business receives: USDC on NEAR (the default), or a token on an EVM chain at the business's address. */
+export const intentsQuoteDestinationSchema = z.object({ chain: z.string(), chain_name: z.string(), symbol: z.string(), address: z.string() });
+export type IntentsQuoteDestination = z.infer<typeof intentsQuoteDestinationSchema>;
+
+/** How the server confirms a delivery there: it reads the chain itself (`rpc`), or takes NEAR Intents' report (`provider_only`). */
+export const intentsVerifySchema = z.enum(["rpc", "provider_only"]);
+
+/** One choice of "Receive as" in `GET /v1/merchant/intents-payout`. */
+export const intentsDestinationOptionSchema = z.object({ chain: z.string(), chain_name: z.string(), symbol: z.string(), asset: z.string(), decimals: z.number().int(), verify: intentsVerifySchema });
+export type IntentsDestinationOption = z.infer<typeof intentsDestinationOptionSchema>;
+
+/** The business's current destination in `GET /v1/merchant/intents-payout`. */
+/** `address` is null until the business saves an account (a new business, or live mode right after a restart). */
+export const intentsPayoutDestinationSchema = z.object({ chain: z.string(), chain_name: z.string(), symbol: z.string(), asset: z.string(), address: z.string().nullable(), proven: z.boolean(), verify: intentsVerifySchema });
+export type IntentsPayoutDestination = z.infer<typeof intentsPayoutDestinationSchema>;
+
 /** One deposit address of a payment and its state: the deposit screen, `intents.active_quote` and each of `intents.quotes`. */
 export const intentsQuoteSchema = z.object({
   id: z.string(),
@@ -789,11 +817,15 @@ export const intentsQuoteSchema = z.object({
   fees: intentsFeeLinesSchema,
   slippage_bps: z.number(),
   time_estimate_sec: z.number(),
-  /** Masked on the public routes, in full for the merchant. */
+  /** Masked on the public routes, in full for the merchant; with `INTENTS` it is the business's own NEAR account. */
   refund_to: z.string(),
+  /** `INTENTS`: the buyer gave no address, so a returned deposit goes to the business's NEAR Intents balance. */
+  refund_type: z.enum(["ORIGIN_CHAIN", "INTENTS"]).default("ORIGIN_CHAIN"),
   recipient: addressSchema,
   settlement_network: z.string(),
   deadline: z.string(),
+  /** When the buyer must send by (an older server omits it: then `deadline`). */
+  send_by: z.string().nullable().optional(),
   deadline_passed: z.boolean(),
   inactive_at: z.string().nullable(),
   deposited: intentsAmountSchema.nullable(),
@@ -812,6 +844,8 @@ export const intentsQuoteSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   quote_response: z.unknown().optional(),
+  /** Where the business receives this quote's money; absent on an older server, which always delivers USDC on NEAR. */
+  destination: intentsQuoteDestinationSchema.nullable().optional(),
 });
 export type IntentsQuote = z.infer<typeof intentsQuoteSchema>;
 
@@ -823,6 +857,8 @@ export const intentsCheckoutSchema = z.object({
   reason: z.string().nullable(),
   settlement_network: z.string(),
   active_quote: intentsQuoteSchema.nullable(),
+  /** The origin asset the business wants pre-selected; absent on an older server. */
+  default_origin: z.string().nullable().optional(),
 });
 export type IntentsCheckout = z.infer<typeof intentsCheckoutSchema>;
 
@@ -885,6 +921,12 @@ export const intentsPayoutSchema = z.object({
   enabled: z.boolean(),
   proof_scope: z.object({ settlement_network: z.string(), hub: addressSchema }),
   checked_at: z.string(),
+  /** The origin asset the checkout pre-selects (`PATCH` sets it); absent on an older server. */
+  default_origin: z.string().nullable().optional(),
+  /** Where the money goes now; absent on an older server, which always delivers USDC on NEAR to `account`. */
+  destination: intentsPayoutDestinationSchema.nullable().optional(),
+  /** The "Receive as" choices; absent on an older server (USDC on NEAR only). */
+  destinations: z.array(intentsDestinationOptionSchema).optional(),
 });
 export type IntentsPayout = z.infer<typeof intentsPayoutSchema>;
 
@@ -963,9 +1005,13 @@ export const refundSchema = z.object({
   reason: nullableString,
   to: addressSchema,
   status: refundStatusSchema,
-  method: z.enum(["transfer"]).nullable().optional(),
-  /** How the node checked the refund transaction: the whole transfer, or only success at final finality. */
-  verification: z.enum(["transfer_checked", "finality_only"]).nullable().optional(),
+  /** `transfer` once the merchant submitted its NEAR refund; anything else a newer server sends is kept as is. */
+  method: z.string().nullable().optional(),
+  /**
+   * How the node checked the refund transaction: the whole transfer, only success at final finality, or `manual` for an
+   * any-chain refund the business sent on another chain and recorded by hand (the node cannot read that chain).
+   */
+  verification: z.enum(["transfer_checked", "finality_only", "manual"]).nullable().optional(),
   tx_hash: txHash.nullable(),
   failure_reason: nullableString,
   /** Internal note, never shown to the customer (PRODUCT.md section 10.12). */
@@ -974,10 +1020,40 @@ export const refundSchema = z.object({
   approval: z.enum(["not_required", "requested", "approved"]).optional(),
   requested_by: nullableString,
   approved_by: nullableString,
+  /**
+   * A refund of an any-chain payment, sent by the business from its own wallet on the buyer's chain and recorded by
+   * hand: the chain and that chain's transaction. Null or absent for a NEAR refund.
+   */
+  manual: z
+    .object({
+      chain: z.string(),
+      chain_name: z.string(),
+      tx_hash: z.string(),
+      explorer_url: z.string().nullable().default(null),
+      /** Who recorded it: a user id, an API key id or `recovery_key`. */
+      recorded_by: z.string().nullable().default(null),
+    })
+    .nullable()
+    .optional(),
   created_at: timeSchema,
   updated_at: timeSchema.optional(),
 });
 export type Refund = z.infer<typeof refundSchema>;
+
+/**
+ * `details` of 409 REFUND_MANUAL_REQUIRED: a payment that came from another chain cannot be refunded on NEAR, so the
+ * business sends it from its own wallet to the buyer's refund address and records it with `manual`.
+ */
+export const manualRefundDetailsSchema = z.object({
+  chain: z.string(),
+  chain_name: z.string(),
+  symbol: z.string().nullable().default(null),
+  /** Null when the buyer gave no address at checkout: the business asks the buyer for one. */
+  refund_to: z.string().nullable(),
+  deposit_tx: intentsTxSchema.nullable().default(null),
+  refundable: atomicSchema,
+});
+export type ManualRefundDetails = z.infer<typeof manualRefundDetailsSchema>;
 
 export const timelineEventSchema = z.object({
   id: z.string(),
@@ -1201,6 +1277,11 @@ export const merchantMethodSchema = z.object({
   bearer: feeBearerSchema,
   min_amount: atomicSchema.nullable(),
   max_amount: atomicSchema.nullable(),
+  /**
+   * Why the business cannot switch this method on or off right now (in live mode the NEAR wallet and voucher methods
+   * are locked, so every paid invoice is real money); null or absent when it can.
+   */
+  locked_reason: nullableString,
 });
 export type MerchantMethod = z.infer<typeof merchantMethodSchema>;
 

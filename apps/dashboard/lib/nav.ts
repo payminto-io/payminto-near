@@ -13,9 +13,12 @@ import {
   Inbox,
   KeyRound,
   HandCoins,
+  Landmark,
   Layers,
   LifeBuoy,
   Link2,
+  Percent,
+  PiggyBank,
   ScrollText,
   Settings,
   ShieldBan,
@@ -73,6 +76,7 @@ export const HELP_URL = "#help";
 export const PAGES = {
   home: { href: "/", label: "Home", icon: House, shortcut: "H", hint: "Today at a glance." },
   payments: { href: "/payments", label: "Payments", icon: CreditCard, shortcut: "P", hint: "Money a customer or agent sent you for one order." },
+  balance: { href: "/balance", label: "Balance", icon: Landmark, hint: "Money waiting on the hub for your payout account, and what has been paid out." },
   links: { href: "/links", label: "Payment links", short: "Links", icon: Link2, shortcut: "L", hint: "A link you share; anyone who opens it can pay you." },
   refunds: { href: "/refunds", label: "Refunds", icon: Undo2, shortcut: "R", hint: "Send money back to the customer from your wallet." },
   customers: { href: "/customers", label: "Customers", icon: Users, shortcut: "C", hint: "People and agents who paid you, by email and wallet." },
@@ -85,6 +89,8 @@ export const PAGES = {
   payouts: { href: "/payouts", label: "Payouts", icon: HandCoins, hint: "Hub credit sent to each creditor's own account, and the settlement export." },
   refusalAlerts: { href: "/platform/webhooks", label: "Refusal alerts", icon: BellRing, hint: "Webhooks that tell your on-call tools about every refused agent payment." },
   businesses: { href: "/platform/businesses", label: "Businesses", icon: Building2, hint: "Shops and companies that get paid through this server." },
+  pricing: { href: "/platform/pricing", label: "Pricing plans", short: "Pricing", icon: Percent, hint: "What the platform charges a business per payment." },
+  earnings: { href: "/platform/earnings", label: "Earnings", icon: PiggyBank, hint: "Fees this platform earned, by business and by month." },
   platformTeam: { href: "/platform/team", label: "Platform team", icon: UserCog, hint: "People who help run this server." },
   requests: { href: "/platform/requests", label: "Sign-up requests", icon: UserPlus, badge: "requests", hint: "New businesses waiting for approval." },
   outbox: { href: "/platform/outbox", label: "Email outbox", icon: Inbox, hint: "Emails this server would have sent; no email server is set up." },
@@ -117,7 +123,8 @@ export function buildNav(ctx: NavContext): NavModel {
   const sections: (NavSection | null)[] = [];
   const read = has("payments.read");
 
-  sections.push(section("payments", "Payments", true, [read && P.payments, read && P.links, read && P.refunds, read && P.customers]));
+  // Balance is one business's money, so it shows only once a business is open.
+  sections.push(section("payments", "Payments", true, [read && P.payments, read && !platformView && P.balance, read && P.links, read && P.refunds, read && P.customers]));
 
   if (platformView) {
     const agents = has("agents.read");
@@ -125,6 +132,8 @@ export function buildNav(ctx: NavContext): NavModel {
     sections.push(
       section("platform", "Platform", true, [
         has("businesses.read") && P.businesses,
+        has("pricing.manage") && P.pricing,
+        has("earnings.read") && P.earnings,
         has("team.read") && P.platformTeam,
         has("signups.review") && P.requests,
         has("outbox.read") && !ctx.smtpConfigured && P.outbox,

@@ -23,6 +23,7 @@ import { TimeAgo } from "@/components/app/time-ago";
 import { LineItems, OrderHash } from "@/components/checkout/parts";
 import { RefundDialog, refundable } from "@/components/gateway/refund-dialog";
 import { IntentsCard } from "@/components/gateway/intents-card";
+import { TxValue } from "@/components/checkout/intents";
 import { anyChainMethodLabel, originPayer } from "@/lib/intents";
 
 const METHOD_LABEL: Record<string, string> = { wallet: "Pay with a NEAR wallet", voucher: "AI agent with budget", oneclick: "Any chain (NEAR Intents)" };
@@ -199,9 +200,12 @@ export default function PaymentDetailPage() {
                         <Money atomic={r.amount} className="font-medium" /> <RefundStatusChip status={r.status} />
                         {r.approval === "requested" && r.status === "pending" && <Chip tone="warning">Waiting for approval</Chip>}
                         {r.approval === "approved" && r.status === "pending" && <Chip tone="info">Approved</Chip>}
+                        {r.manual && <Chip tone="neutral">Recorded by hand</Chip>}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        To <span className="hash">{shortAddress(r.to)}</span> - {r.reason ?? "No reason"} - <TimeAgo iso={r.created_at} />
+                        {/* A manual refund's `to` is `<chain>:<address>`; the chain is named in words right after. */}
+                        To <span className="hash">{shortAddress(r.manual && r.to.startsWith(`${r.manual.chain}:`) ? r.to.slice(r.manual.chain.length + 1) : r.to)}</span>
+                        {r.manual && <> on {r.manual.chain_name}</>} - {r.reason ?? "No reason"} - <TimeAgo iso={r.created_at} />
                       </span>
                       {r.note && (
                         <span className="mt-1 text-xs text-muted-foreground">
@@ -210,7 +214,10 @@ export default function PaymentDetailPage() {
                       )}
                       {r.failure_reason && <span className="mt-1 text-xs text-negative">{r.failure_reason}</span>}
                     </span>
-                    {r.tx_hash ? (
+                    {/* A refund sent by hand from the business's wallet links to its own chain's explorer, not NEAR's. */}
+                    {r.manual ? (
+                      <TxValue tx={{ hash: r.manual.tx_hash, explorer_url: r.manual.explorer_url }} className="min-h-11 md:min-h-0" />
+                    ) : r.tx_hash ? (
                       <Hash value={r.tx_hash} kind="tx" />
                     ) : r.approval === "requested" && r.status === "pending" ? (
                       can("refunds.approve") ? (

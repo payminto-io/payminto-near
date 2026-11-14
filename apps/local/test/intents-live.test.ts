@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs, UsageError } from "../src/config.ts";
 import { guide } from "../src/guide.ts";
+import { loadConfig } from "@payminto/node";
 import { intentsNodeEnv, isMainnetAccount, liveBanner, readMainnetPayout } from "../src/intents-live.ts";
-import type { Stack } from "../src/stack.ts";
+import { localNodeEnv, type Stack } from "../src/stack.ts";
 
 const usage = (argv: string[]) => {
   try {
@@ -145,6 +146,13 @@ describe("the printed guide in live mode", () => {
     expect(text).toMatch(/10 minutes/);
   });
 
+  it("offers no NEAR wallet checkout step: live mode takes only real money from other chains", () => {
+    expect(text).not.toContain("Pay 4.50 USDC");
+    expect(text).not.toContain("(the checkout payment)");
+    expect(text).toContain('the page offers only "Any chain" (the NEAR wallet and vouchers are off in live mode)');
+    expect(liveBanner("northwind-usdc.near").join("\n")).toContain("the NEAR wallet and vouchers (local test money) are off");
+  });
+
   it("says what the payout account needs, read from NEAR mainnet", () => {
     expect(text).toContain("northwind-usdc.near exists on NEAR mainnet and is not registered with USDC yet");
   });
@@ -157,5 +165,33 @@ describe("the printed guide in live mode", () => {
     expect(text).not.toContain("SECRET-");
     expect(text).not.toContain("TOKEN-1");
     expect(text).not.toContain(String.fromCharCode(0x2014));
+  });
+});
+
+describe("the node's environment of a local run", () => {
+  const base = {
+    ports: { node: 4210 },
+    urls: { node: "http://127.0.0.1:4210", dashboard: "http://localhost:3210" },
+    dashboardOrigins: ["http://localhost:3210", "http://127.0.0.1:3210"],
+    hub: { names: { hub: "hub.test.near", token: "usdc.test.near", operator: "node.test.near" }, nodeEnv: { RPC_URL: "http://127.0.0.1:52000", OPERATOR_KEY: `ed25519:${"1".repeat(88)}` } },
+    nodeSigningSeed: "33".repeat(32),
+    // Never opened: loadConfig only reads the environment.
+    dbPath: "/tmp/payminto-local-env-test/clearing.demo.db",
+    platformAccount: "platform.test.near",
+  };
+
+  it("passes the production checks the node applies in live any-chain mode, with the production password cost", () => {
+    const env = localNodeEnv({ ...base, opts: { intents: { mode: "live", payout: "northwind-usdc.near", senders: [], rpcUrl: null } }, simulated: null });
+    const c = loadConfig(env);
+    expect(c.gateway?.intents?.mode).toBe("live");
+    expect(c.auth?.scryptLogN).toBe(17);
+    expect(c.gateway?.webhookAllowPrivate).toBe(false);
+    expect(c.gateway?.checkoutBaseUrl).toBe("http://localhost:3210");
+  });
+
+  it("keeps the fast local password cost in simulated mode", () => {
+    const env = localNodeEnv({ ...base, opts: { intents: { mode: "simulated" } }, simulated: { baseUrl: "http://127.0.0.1:9", managerPublicKey: `ed25519:${"2".repeat(44)}`, rpcUrl: "http://127.0.0.1:52000", token: "usdc.test.near", solver: "solver.test.near" } });
+    expect(env.PASSWORD_HASH_COST).toBe("14");
+    expect(env.INTENTS_CHECKOUT).toBe("simulated");
   });
 });

@@ -26,7 +26,9 @@ export type EmailKind =
   | "signup_approved"
   | "signup_declined"
   | "account_exists"
-  | "test";
+  | "test"
+  /** A buyer's receipt for a paid payment (gateway/receipts.ts). */
+  | "receipt";
 
 export type Email = { to: string; subject: string; text: string; link?: string | null; kind: EmailKind };
 
@@ -54,7 +56,7 @@ export function smtpConfigFromEnv(env: Record<string, string | undefined>): Smtp
 }
 
 /**
- * Sends account emails (PRODUCT.md 4.9). With SMTP configured it sends through it; either way every email is kept in
+ * Sends account emails (PRODUCT.md 4.9) and buyers' payment receipts. With SMTP configured it sends through it; either way every email is kept in
  * `outbox_emails`. Without SMTP the email is also logged (`[email] to=... link=...`) and shown to the platform owner in
  * Platform > Email outbox, which is the same trust model as the owner reading the database, made visible.
  */

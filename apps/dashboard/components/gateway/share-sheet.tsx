@@ -1,18 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
-import { Download, ExternalLink } from "lucide-react";
+import { useState } from "react";
+import { ExternalLink } from "lucide-react";
 import type { PaymentLink } from "@/lib/schemas";
 import { embedButtonHtml } from "@/lib/gateway";
 import { useMerchant } from "@/lib/gateway-queries";
 import { useInfo } from "@/lib/queries";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { CopyAction } from "@/components/checkout/parts";
 import { CodeBlock, Segmented } from "./kit";
 import { EmbedSnippet } from "./embed-snippet";
+import { LinkQr } from "./link-qr";
 
 /** What the samples name: the server the agent trusts and the hub it clears on, from `/v1/info`, and the link's price. */
 export type AgentSnippetContext = { network?: string | null; hub?: string | null; nodeUrl?: string | null; amount?: string | null };
@@ -70,20 +69,11 @@ export function agentSnippets(url: string, openAmount: boolean, ctx: AgentSnippe
 export function ShareSheet({ link, open, onOpenChange }: { link: PaymentLink; open: boolean; onOpenChange: (o: boolean) => void }) {
   const url = link.url;
   const [tab, setTab] = useState<"link" | "agents" | "embed">("link");
-  const svgRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
   const info = useInfo();
   const snippets = agentSnippets(url, link.amount === null, { network: info.data?.network.id, hub: info.data?.hub, nodeUrl: info.data?.publicUrl, amount: link.amount });
   const file = `payminto-${link.slug}`;
   const merchant = useMerchant(link.merchant_id);
   const button = embedButtonHtml(url, merchant.data?.brand_color);
-
-  const download = (href: string, name: string) => {
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = name;
-    a.click();
-  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -118,40 +108,7 @@ export function ShareSheet({ link, open, onOpenChange }: { link: PaymentLink; op
                   Open the checkout page <ExternalLink className="size-3" aria-hidden />
                 </a>
               </div>
-              <div className="flex flex-col items-center gap-3 rounded-xl border p-5">
-                <div ref={svgRef} className="rounded-lg bg-white p-3">
-                  <QRCodeSVG value={url} size={176} level="M" marginSize={0} title={`QR code for ${url}`} />
-                </div>
-                <div ref={canvasRef} className="hidden" aria-hidden>
-                  <QRCodeCanvas value={url} size={1024} level="M" marginSize={4} />
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const c = canvasRef.current?.querySelector("canvas");
-                      if (c) download(c.toDataURL("image/png"), `${file}.png`);
-                    }}
-                  >
-                    <Download /> Download PNG
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const svg = svgRef.current?.querySelector("svg");
-                      if (!svg) return;
-                      const blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml" });
-                      const href = URL.createObjectURL(blob);
-                      download(href, `${file}.svg`);
-                      setTimeout(() => URL.revokeObjectURL(href), 1000);
-                    }}
-                  >
-                    <Download /> Download SVG
-                  </Button>
-                </div>
-              </div>
+              <LinkQr url={url} file={file} className="rounded-xl border p-5" />
             </>
           )}
           {tab === "agents" && (

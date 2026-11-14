@@ -83,7 +83,7 @@ export type Quote = {
 export type QuoteResponse = {
   correlationId: string;
   timestamp: string;
-  /** `ed25519:<base58>` from the 1Click manager key. */
+  /** `ed25519:<base58>`, or bare base58 (the official SDK accepts both), from the 1Click manager key. */
   signature: string;
   quoteRequest: QuoteRequest;
   quote: Quote;
@@ -124,7 +124,8 @@ export type SwapDetails = {
 /** `GetExecutionStatusResponse`, and also `SubmitDepositTxResponse`, which has the same shape. */
 export type StatusResponse = {
   correlationId: string;
-  quoteResponse: QuoteResponse;
+  /** The quote this deposit address was issued with. The live API embeds it without its `correlationId`. */
+  quoteResponse: Omit<QuoteResponse, "correlationId"> & { correlationId?: string };
   status: ExecutionStatus;
   updatedAt: string;
   swapDetails: SwapDetails;

@@ -182,6 +182,13 @@ const envSchema = z.object({
   INTENTS_DELIVERY_SENDERS: z.string().optional(),
   // 1Click asset ids buyers may pay with, comma separated; default every offered origin.
   INTENTS_ORIGINS: z.string().optional(),
+  // Live mode only: JSON-RPC of each EVM chain a business can receive USDC on, where the node reads the delivery's
+  // ERC-20 Transfer. Default the chain's public RPC; `off` confirms deliveries there on 1Click's word (provider_only).
+  INTENTS_RPC_BASE: z.string().optional(),
+  INTENTS_RPC_ARB: z.string().optional(),
+  INTENTS_RPC_ETH: z.string().optional(),
+  INTENTS_RPC_POL: z.string().optional(),
+  INTENTS_RPC_OP: z.string().optional(),
   INTENTS_SLIPPAGE_STABLE_BPS: intFromEnv(10).refine((n) => n <= 10_000, "must be <= 10000"),
   INTENTS_SLIPPAGE_VOLATILE_BPS: intFromEnv(100).refine((n) => n <= 10_000, "must be <= 10000"),
   INTENTS_REFERRAL: z
@@ -194,6 +201,17 @@ const envSchema = z.object({
 /** The published 1Click base URL. Live mode uses it unless ONECLICK_ALLOW_CUSTOM_URL=true. */
 export const ONECLICK_LIVE_URL = "https://1click.chaindefuser.com";
 export const NEAR_MAINNET_RPC = "https://rpc.mainnet.near.org";
+
+/** The EVM chains a business can receive USDC on, by their 1Click chain code. */
+export type IntentsEvmChain = "base" | "arb" | "eth" | "pol" | "op";
+/** Each chain's public JSON-RPC: what live mode reads a delivery on unless INTENTS_RPC_<CHAIN> says otherwise. */
+export const INTENTS_EVM_RPC_DEFAULTS: Record<IntentsEvmChain, string> = {
+  base: "https://mainnet.base.org",
+  arb: "https://arb1.arbitrum.io/rpc",
+  eth: "https://ethereum-rpc.publicnode.com",
+  pol: "https://polygon-bor-rpc.publicnode.com",
+  op: "https://mainnet.optimism.io",
+};
 
 export type Config = {
   port: number;
@@ -346,6 +364,11 @@ export type IntentsConfig = {
   origins: string[] | null;
   slippage: { stable: number; volatile: number };
   referral: string | null;
+  /**
+   * Live: the JSON-RPC each EVM destination's deliveries are read on (INTENTS_RPC_<CHAIN>, default the public one; null:
+   * not read, confirmed on 1Click's word). Absent when simulated: the node reads the fake server's simulated chains.
+   */
+  evmRpcUrls?: Record<IntentsEvmChain, string | null>;
 };
 
 export type RateLimitConfig = {
@@ -376,15 +399,18 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const net = networks[e.NETWORK]!;
   const problems: string[] = [];
 
-  // Public networks: refuse the public dev defaults outright instead of trusting the operator to notice.
+  // Public networks: refuse the public dev defaults outright instead of trusting the operator to notice. Live any-chain
+  // mode takes real money, so it gets the same checks wherever the hub runs (see productionChecks).
   const live = LIVE_NETWORKS.includes(e.NETWORK);
-  if (live) {
-    if (e.NODE_SIGNING_SEED === DEV_NODE_SEED) problems.push(`NODE_SIGNING_SEED: is the public dev seed; refusing to use it on ${e.NETWORK}`);
-    if (e.PASSWORD_HASH_COST < 17) problems.push(`PASSWORD_HASH_COST: must be at least 17 on ${e.NETWORK}`);
-    if (e.PUBLIC_DASHBOARD_URL && !e.PUBLIC_DASHBOARD_URL.startsWith("https:")) problems.push(`PUBLIC_DASHBOARD_URL: must be https on ${e.NETWORK}`);
-    if (e.ADMIN_TOKEN === DEV_ADMIN_TOKEN) problems.push(`ADMIN_TOKEN: is the public dev token; refusing to use it on ${e.NETWORK}`);
+  const strict = productionChecks(e);
+  if (strict) {
+    const where = strict.where;
+    if (e.NODE_SIGNING_SEED === DEV_NODE_SEED) problems.push(`NODE_SIGNING_SEED: is the public dev seed; refusing to use it ${where}`);
+    if (e.PASSWORD_HASH_COST < 17) problems.push(`PASSWORD_HASH_COST: must be at least 17 ${where}`);
+    if (e.PUBLIC_DASHBOARD_URL && !httpsOrLoopback(e.PUBLIC_DASHBOARD_URL, strict.loopbackOk)) problems.push(`PUBLIC_DASHBOARD_URL: must be https ${where}`);
+    if (e.ADMIN_TOKEN === DEV_ADMIN_TOKEN) problems.push(`ADMIN_TOKEN: is the public dev token; refusing to use it ${where}`);
     else if (e.ADMIN_TOKEN.length < LIVE_ADMIN_TOKEN_MIN_LENGTH) {
-      problems.push(`ADMIN_TOKEN: must be at least ${LIVE_ADMIN_TOKEN_MIN_LENGTH} characters on ${e.NETWORK} (try: openssl rand -hex 32)`);
+      problems.push(`ADMIN_TOKEN: must be at least ${LIVE_ADMIN_TOKEN_MIN_LENGTH} characters ${where} (try: openssl rand -hex 32)`);
     }
   }
   const gateway = gatewayConfig(e, live, problems);
@@ -450,6 +476,39 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   };
 }
 
+/**
+ * Whether the production checks apply, and how a problem names the reason: on a public network (NEAR testnet), and with
+ * INTENTS_CHECKOUT=live, which moves real money whatever network the hub is on. The one difference: live any-chain mode
+ * on a local chain accepts a loopback checkout and dashboard origin (`pnpm local --intents live`, a page only this
+ * machine can open), while a public network needs a public https origin. Null: a local chain, nothing live.
+ */
+function productionChecks(e: z.infer<typeof envSchema>): { where: string; loopbackOk: boolean } | null {
+  if (LIVE_NETWORKS.includes(e.NETWORK)) return { where: `on ${e.NETWORK}`, loopbackOk: false };
+  if (e.INTENTS_CHECKOUT === "live") return { where: "with INTENTS_CHECKOUT=live (real money)", loopbackOk: true };
+  return null;
+}
+
+/** An https URL, or with `loopbackOk` a URL on this machine only (http://localhost, 127.0.0.1, [::1]). */
+function httpsOrLoopback(u: string, loopbackOk: boolean): boolean {
+  return u.startsWith("https:") || (loopbackOk && isLocalOrigin(u) && new URL(u).hostname !== "0.0.0.0");
+}
+
+/**
+ * What the operator should know at boot about live any-chain mode, as log lines: without ONECLICK_API_KEY every buyer
+ * pays 1Click's 0.25% fee for keyless use, and the public NEAR mainnet RPC is rate limited, so a delivery the node
+ * cannot read is confirmed on 1Click's word only (provider_only).
+ */
+export function intentsBootWarnings(c: Pick<Config, "gateway">): string[] {
+  const i = c.gateway?.intents;
+  if (i?.mode !== "live") return [];
+  const out: string[] = [];
+  if (!i.apiKey) out.push("INTENTS_CHECKOUT=live without ONECLICK_API_KEY: 1Click adds 0.25% (25 bps) to every buyer's price for keyless use. Set ONECLICK_API_KEY to your 1Click partner key.");
+  if (i.nearRpcUrl.replace(/\/+$/, "") === NEAR_MAINNET_RPC) {
+    out.push(`NEAR_MAINNET_RPC_URL is the public default (${NEAR_MAINNET_RPC}), which is rate limited: a delivery the node cannot read is confirmed on 1Click's word only (provider_only) after 10 minutes. Set NEAR_MAINNET_RPC_URL to an RPC provider you trust.`);
+  }
+  return out;
+}
+
 /** The dashboard origin the account system uses (see AuthConfig.dashboardUrl). */
 export function dashboardUrlOf(c: Config): string {
   const explicit = c.auth?.dashboardUrl ?? c.gateway?.checkoutBaseUrl ?? c.corsOrigins.find((o) => o !== "*") ?? "http://localhost:3000";
@@ -471,11 +530,14 @@ function gatewayConfig(e: z.infer<typeof envSchema>, live: boolean, problems: st
     if (a && live && a === e.OPERATOR_ACCOUNT) problems.push(`${name}: must not be the operator account on ${e.NETWORK} (the node must never hold merchant or platform funds)`);
   }
   if (e.CHECKOUT_TTL_SECONDS > MAX_EXPIRES_IN_SECONDS) problems.push(`CHECKOUT_TTL_SECONDS: must be <= ${MAX_EXPIRES_IN_SECONDS}`);
-  const allowPrivate = e.WEBHOOK_ALLOW_PRIVATE === undefined ? !live : e.WEBHOOK_ALLOW_PRIVATE === "true";
-  if (live) {
-    if (allowPrivate) problems.push(`WEBHOOK_ALLOW_PRIVATE: refusing true on ${e.NETWORK} (webhooks could reach private networks)`);
-    const checkout = new URL(e.PUBLIC_CHECKOUT_URL);
-    if (checkout.protocol !== "https:" || isLocalOrigin(e.PUBLIC_CHECKOUT_URL)) problems.push(`PUBLIC_CHECKOUT_URL: must be a public https origin on ${e.NETWORK}`);
+  const strict = productionChecks(e);
+  const allowPrivate = e.WEBHOOK_ALLOW_PRIVATE === undefined ? !strict : e.WEBHOOK_ALLOW_PRIVATE === "true";
+  if (strict) {
+    if (allowPrivate) problems.push(`WEBHOOK_ALLOW_PRIVATE: refusing true ${strict.where} (webhooks could reach private networks)`);
+    const checkoutOk = strict.loopbackOk ? httpsOrLoopback(e.PUBLIC_CHECKOUT_URL, true) : e.PUBLIC_CHECKOUT_URL.startsWith("https:") && !isLocalOrigin(e.PUBLIC_CHECKOUT_URL);
+    if (!checkoutOk) {
+      problems.push(`PUBLIC_CHECKOUT_URL: must be ${strict.loopbackOk ? "an https origin (or this machine's own http://localhost)" : "a public https origin"} ${strict.where}`);
+    }
   }
   const intents = intentsConfig(e, problems);
   if (problems.length > n) return undefined;
@@ -504,6 +566,13 @@ function intentsConfig(e: z.infer<typeof envSchema>, problems: string[]): Intent
     ["INTENTS_USDC_CONTRACT", e.INTENTS_USDC_CONTRACT],
   ];
   if (mode === "off") return undefined;
+  const evmRpc: Array<[IntentsEvmChain, string, string | undefined]> = [
+    ["base", "INTENTS_RPC_BASE", e.INTENTS_RPC_BASE],
+    ["arb", "INTENTS_RPC_ARB", e.INTENTS_RPC_ARB],
+    ["eth", "INTENTS_RPC_ETH", e.INTENTS_RPC_ETH],
+    ["pol", "INTENTS_RPC_POL", e.INTENTS_RPC_POL],
+    ["op", "INTENTS_RPC_OP", e.INTENTS_RPC_OP],
+  ];
   const list = (v: string | undefined) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   const senders = list(e.INTENTS_DELIVERY_SENDERS);
   for (const s of senders) if (!isAccountId(s)) problems.push("INTENTS_DELIVERY_SENDERS: every entry must be a NEAR account id");
@@ -517,6 +586,13 @@ function intentsConfig(e: z.infer<typeof envSchema>, problems: string[]): Intent
     else if (base.replace(/\/+$/, "") !== ONECLICK_LIVE_URL && e.ONECLICK_ALLOW_CUSTOM_URL !== "true") problems.push(`ONECLICK_BASE_URL: live mode uses ${ONECLICK_LIVE_URL}; set ONECLICK_ALLOW_CUSTOM_URL=true to use another`);
     const rpc = e.NEAR_MAINNET_RPC_URL ?? NEAR_MAINNET_RPC;
     if (!rpc.startsWith("https:")) problems.push("NEAR_MAINNET_RPC_URL: must be https in live mode");
+    const evmRpcUrls = {} as Record<IntentsEvmChain, string | null>;
+    for (const [chain, name, v] of evmRpc) {
+      const url = v?.trim() || INTENTS_EVM_RPC_DEFAULTS[chain];
+      if (url === "off") evmRpcUrls[chain] = null;
+      else if (!/^https:\/\/[^\s]+$/.test(url) || !URL.canParse(url)) problems.push(`${name}: must be https in live mode (or off)`);
+      else evmRpcUrls[chain] = url;
+    }
     return {
       mode,
       baseUrl: base.replace(/\/+$/, ""),
@@ -528,8 +604,10 @@ function intentsConfig(e: z.infer<typeof envSchema>, problems: string[]): Intent
       origins: origins.length ? origins : null,
       slippage: { stable: e.INTENTS_SLIPPAGE_STABLE_BPS, volatile: e.INTENTS_SLIPPAGE_VOLATILE_BPS },
       referral: e.INTENTS_REFERRAL || null,
+      evmRpcUrls,
     };
   }
+  for (const [, name, v] of evmRpc) if (v !== undefined) problems.push(`${name}: only for INTENTS_CHECKOUT=live; simulated mode reads the fake 1Click server's simulated chains`);
   // Simulated: everything points at the fake server and the local chain, named explicitly.
   if (!e.ONECLICK_BASE_URL) problems.push("ONECLICK_BASE_URL: required with INTENTS_CHECKOUT=simulated (the fake 1Click server)");
   else if (e.ONECLICK_BASE_URL.replace(/\/+$/, "") === ONECLICK_LIVE_URL) problems.push("ONECLICK_BASE_URL: simulated mode never talks to the live 1Click API; point it at the fake server");
@@ -644,6 +722,9 @@ export function redactedConfig(c: Config) {
                 managerKey: c.gateway.intents.managerPublicKey ? "test" : "1click",
                 nearRpcUrl: redactUrl(c.gateway.intents.nearRpcUrl),
                 usdcContract: c.gateway.intents.usdcContract,
+                evmRpcUrls: c.gateway.intents.evmRpcUrls
+                  ? Object.fromEntries(Object.entries(c.gateway.intents.evmRpcUrls).map(([k, v]) => [k, v === null ? "off" : redactUrl(v)]))
+                  : "simulated",
               }
             : { mode: "off" },
         }

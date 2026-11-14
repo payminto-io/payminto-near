@@ -1,0 +1,205 @@
+{
+  "note": "A real payment of the Payminto one-screen any-chain checkout: 0.000827646439564105 ETH sent on Base from MetaMask, converted by NEAR Intents (1Click) and delivered as USDC to the business account sagajet.near on NEAR mainnet. Saved by hand on 2026-11-14 because this run of the node rejected the live status (its embedded quote has no correlationId); fixed in apps/node/src/gateway/intents.ts with a test.",
+  "captured_at": "2026-11-14T18:16:21.993Z",
+  "payment": {
+    "id": "pay_c3mbsm5wqidnreodtmgbhskm",
+    "status_seen_by_node": "open",
+    "amount": "1500000"
+  },
+  "quote": {
+    "id": "iq_f4ubvwrswj5tvsa44i4zndko",
+    "mode": "live",
+    "origin": {
+      "asset": "nep141:base.omft.near",
+      "chain": "base",
+      "chain_name": "Base",
+      "symbol": "ETH",
+      "decimals": 18,
+      "contract_address": null,
+      "chain_id": 8453
+    },
+    "deposit_address": "0x1356EFf6EaE073B9f204c12ABA9Efbd0e2cD4b66",
+    "send_exactly": {
+      "amount": "827646439564105",
+      "formatted": "0.000827646439564105",
+      "symbol": "ETH"
+    },
+    "amount_out": {
+      "amount": "1500000",
+      "formatted": "1.500000",
+      "symbol": "USDC"
+    },
+    "recipient": "sagajet.near",
+    "refund_type": "INTENTS",
+    "refund_to": "sagajet.near",
+    "send_by": "2026-11-14T18:32:52.000Z",
+    "deadline": "2026-11-17T18:32:52.000Z"
+  },
+  "signed_quote": {
+    "quote": {
+      "amountIn": "827646439564105",
+      "amountInFormatted": "0.000827646439564105",
+      "amountInUsd": "1.522083184680",
+      "minAmountIn": "819369975168463",
+      "amountOut": "1500000",
+      "amountOutFormatted": "1.5",
+      "amountOutUsd": "1.499518500000",
+      "minAmountOut": "1500000",
+      "timeEstimate": 37,
+      "refundFee": "0",
+      "withdrawFee": "0",
+      "deadline": "2026-11-17T18:32:52.000Z",
+      "timeWhenInactive": "2026-11-17T18:32:52.000Z",
+      "depositAddress": "0x1356EFf6EaE073B9f204c12ABA9Efbd0e2cD4b66"
+    },
+    "quoteRequest": {
+      "dry": false,
+      "depositMode": "SIMPLE",
+      "swapType": "EXACT_OUTPUT",
+      "slippageTolerance": 100,
+      "originAsset": "nep141:base.omft.near",
+      "depositType": "ORIGIN_CHAIN",
+      "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+      "amount": "1500000",
+      "refundTo": "sagajet.near",
+      "refundType": "INTENTS",
+      "recipient": "sagajet.near",
+      "recipientType": "DESTINATION_CHAIN",
+      "deadline": "2026-11-14T18:32:52.000Z",
+      "confidentiality": "public",
+      "referral": "payminto",
+      "quoteWaitingTimeMs": 0,
+      "insured": false,
+      "appFees": [
+        {
+          "recipient": "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+          "fee": 20,
+          "limitOrderId": null
+        }
+      ]
+    },
+    "signature": "ed25519:39gRR8Vy8gJEu8J3CjVjVHCFc8E7d88jrgkftTyE9ysXSfxB9Yr23tdVzfvZNvfJXz5fqKTi91bECuPP6RFvjbPZ",
+    "timestamp": "2026-11-14T18:07:28.170Z",
+    "correlationId": "aa074981-31cf-4dfe-9070-6e5471e6cdd7"
+  },
+  "oneclick_status": {
+    "status": "SUCCESS",
+    "updatedAt": "2026-11-14T18:09:30.000Z",
+    "correlationId": "250a8a16-c92b-4ddb-9067-8899e8ebaf65",
+    "swapDetails": {
+      "depositedAmount": "827646439564105",
+      "depositedAmountUsd": "1.521131391275",
+      "depositedAmountFormatted": "0.000827646439564105",
+      "intentHashes": [
+        "21DwY1qSJjmNtEMdb3H3fABpFrWXZuUTRUuedocZGoLL",
+        "7jjGZkhSVdazRjv5vLA3tU2hhuVN7TXFUXDKJZaqa3Rq",
+        "4784i6aCS2HBXvvSURUPFndShHJhRDc3b7aQ4F9jAphu"
+      ],
+      "nearTxHashes": [
+        "XPFSzdU8pUi5gCfmGwA8j62DgyBQRa5anyZwA8B7SNi",
+        "4KiRNgUd1rin11QozJmtd4tfxNZXhL9skgCPLTrjUJ3x",
+        "GxE5Ttg59cKVKt8tm8KcDkwvtC5GnyA8Ce1dtCyh5pG8",
+        "sB497zCcyhVaDib3zbQCLzcntu3Ssrr2f14VEwAg2mf",
+        "JAS4zKFqtVTyaqv1taKcKrSryo4XrnCKf7j7noNToANw"
+      ],
+      "amountIn": "818896148788909",
+      "amountInFormatted": "0.000818896148788909",
+      "amountInUsd": "1.505049231859",
+      "amountOut": "1500000",
+      "amountOutFormatted": "1.5",
+      "amountOutUsd": "1.499461500000",
+      "slippage": -6,
+      "refundedAmount": "8750290775196",
+      "refundedAmountFormatted": "0.000008750290775196",
+      "refundedAmountUsd": "0.016082159416",
+      "refundReason": null,
+      "refundFee": "0",
+      "withdrawFee": "0",
+      "originChainTxHashes": [
+        {
+          "hash": "0x9409688dc65fa8bec187ac5ec65dbcb12f8d7bd9201510982f4fd892d2521ad6",
+          "explorerUrl": ""
+        }
+      ],
+      "destinationChainTxHashes": [
+        {
+          "hash": "sB497zCcyhVaDib3zbQCLzcntu3Ssrr2f14VEwAg2mf",
+          "explorerUrl": ""
+        },
+        {
+          "hash": "JAS4zKFqtVTyaqv1taKcKrSryo4XrnCKf7j7noNToANw",
+          "explorerUrl": ""
+        }
+      ]
+    },
+    "quoteResponse": {
+      "timestamp": "2026-11-14T18:07:28.170Z",
+      "signature": "ed25519:39gRR8Vy8gJEu8J3CjVjVHCFc8E7d88jrgkftTyE9ysXSfxB9Yr23tdVzfvZNvfJXz5fqKTi91bECuPP6RFvjbPZ",
+      "quoteRequest": {
+        "dry": false,
+        "swapType": "EXACT_OUTPUT",
+        "depositMode": "SIMPLE",
+        "slippageTolerance": 100,
+        "originAsset": "nep141:base.omft.near",
+        "depositType": "ORIGIN_CHAIN",
+        "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+        "amount": "1500000",
+        "refundTo": "sagajet.near",
+        "refundType": "INTENTS",
+        "recipient": "sagajet.near",
+        "recipientType": "DESTINATION_CHAIN",
+        "deadline": "2026-11-14T18:32:52.000Z",
+        "appFees": [
+          {
+            "limitOrderId": null,
+            "recipient": "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+            "fee": 20
+          }
+        ],
+        "virtualChainRecipient": null,
+        "virtualChainRefundRecipient": null,
+        "referral": "payminto",
+        "confidentiality": "public"
+      },
+      "quote": {
+        "amountIn": "827646439564105",
+        "amountInFormatted": "0.000827646439564105",
+        "amountInUsd": "1.522083184680",
+        "minAmountIn": "819369975168463",
+        "amountOut": "1500000",
+        "amountOutFormatted": "1.5",
+        "amountOutUsd": "1.499518500000",
+        "minAmountOut": "1500000",
+        "timeWhenInactive": "2026-11-17T18:32:52.000Z",
+        "depositAddress": "0x1356EFf6EaE073B9f204c12ABA9Efbd0e2cD4b66",
+        "deadline": "2026-11-17T18:32:52.000Z",
+        "timeEstimate": 37,
+        "refundFee": "0",
+        "withdrawFee": "0"
+      }
+    }
+  },
+  "base_deposit_receipt": {
+    "transactionHash": "0x9409688dc65fa8bec187ac5ec65dbcb12f8d7bd9201510982f4fd892d2521ad6",
+    "status": "0x1",
+    "blockNumber": "0x36c9167",
+    "from": "0x1a1a5d27eb4a3cd789f7fb1aaac7d6ab0d400a36",
+    "to": "0x1356eff6eae073b9f204c12aba9efbd0e2cd4b66"
+  },
+  "near_deliveries": [
+    {
+      "hash": "sB497zCcyhVaDib3zbQCLzcntu3Ssrr2f14VEwAg2mf",
+      "status": "FINAL",
+      "signer": "intents.near",
+      "receiver": "intents.near",
+      "error": null
+    },
+    {
+      "hash": "JAS4zKFqtVTyaqv1taKcKrSryo4XrnCKf7j7noNToANw",
+      "status": "FINAL",
+      "signer": "intents.near",
+      "receiver": "intents.near",
+      "error": null
+    }
+  ]
+}

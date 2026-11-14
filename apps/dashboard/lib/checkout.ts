@@ -215,6 +215,15 @@ export function rememberedReceiptEmail(paymentId: string): string | null {
   }
 }
 
+/** The line under the checkout's receipt email: the server emails the receipt when the payment is paid. */
+export function receiptEmailText(state: "saved" | "on-file", email: string, paid: boolean): string {
+  if (state === "saved") return paid ? `We will email a receipt to ${email}.` : `We will email a receipt to ${email} once the payment is complete.`;
+  return paid ? "A receipt email is already on file for this payment." : "A receipt email is already on file. It is sent once the payment is complete.";
+}
+
+/** The hint under the link page's email field. */
+export const linkEmailHint = (merchant: string): string => `For your receipt, sent once you have paid. ${merchant} sees it.`;
+
 // ---------------------------------------------------------------------------
 // Methods and the amount due for each
 // ---------------------------------------------------------------------------

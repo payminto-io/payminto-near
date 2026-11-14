@@ -1,5 +1,7 @@
+import { setEvmProvider } from "../evm-wallet";
 import { RelayerClient, setRelayer } from "../relayer";
 import { setMainnetWalletDriver, setWalletDriver } from "../wallet";
+import { demoEvmProvider } from "./evm-wallet";
 import { applyMockCheckoutTx } from "./gateway";
 import { DEMO_RELAYER_URL, mockRelayerFetch } from "./relayer";
 import { applyMockDaoTx, applyMockWalletTx, demoKeys, demoSource, mockRelayerDeps } from "./server";
@@ -19,6 +21,8 @@ export function installMockWallet(): void {
   // the USDC storage deposit, which the demo applies like any other transaction.
   setMainnetWalletDriver(new MockWalletDriver([applyMockCheckoutTx]));
   setRelayer(new RelayerClient(DEMO_RELAYER_URL, { demo: true, fetch: mockRelayerFetch(mockRelayerDeps) }));
+  // "Receive as" on an EVM chain proves an address with a browser wallet; without one, the demo lends its own.
+  if (!(window as unknown as { ethereum?: unknown }).ethereum) setEvmProvider(demoEvmProvider());
 }
 
 /** The demo wallet, so a demo-only control can switch which account it acts as. Null outside mock mode. */

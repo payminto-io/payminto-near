@@ -85,7 +85,11 @@ export type CreateLinkBody = {
 export type UpdateLinkBody = Partial<Pick<PaymentLink, "title" | "description" | "active" | "success_url" | "max_payments" | "listed">> & { expires_at?: string | null };
 
 /** Request bodies follow GATEWAY.md section 6 literally (camelCase), unlike the snake_case response objects. */
-export type CreateRefundBody = { paymentId: string; amount: string; reason?: string; to?: Address; note?: string };
+/**
+ * `manual`: a refund of an any-chain payment the business already sent from its own wallet on the buyer's chain; the
+ * node records it as succeeded with that chain's transaction hash. Without it the node prepares a NEAR transfer.
+ */
+export type CreateRefundBody = { paymentId: string; amount: string; reason?: string; to?: Address; note?: string; manual?: { chain: string; tx_hash: string } };
 /** The merchant's own NEAR refund transaction (an ft_transfer from the payout account), which the node verifies. */
 export type SubmitRefundBody = { txHash: string };
 
@@ -137,10 +141,15 @@ export interface GatewayApi {
   intentsPayout(): Promise<IntentsPayout>;
   /** Sets and proves that account (`PUT /v1/merchant/intents-payout`); the server asks for a fresh password check. */
   setIntentsPayout(body: IntentsPayoutBody): Promise<IntentsPayout>;
+  /** The origin the checkout pre-selects, or null for none (`PATCH /v1/merchant/intents-payout`). */
+  setIntentsDefaultOrigin(defaultOrigin: string | null): Promise<IntentsPayout>;
 }
 
-/** The account and its NEP-413 answer to `intentsPayoutProofRequest`. */
-export type IntentsPayoutBody = { account: string; proof: { timestamp: number; public_key: string; signature: string } };
+/** USDC on NEAR: the account and its NEP-413 answer to `intentsPayoutProofRequest`. */
+export type IntentsNearPayoutBody = { account: string; proof: { timestamp: number; public_key: string; signature: string } };
+/** An EVM chain: the address and its EIP-191 `personal_sign` of `evmPayoutMessage`. */
+export type IntentsEvmPayoutBody = { destination_chain: string; address: string; proof: { type: "eip191"; timestamp: number; signature: string } };
+export type IntentsPayoutBody = IntentsNearPayoutBody | IntentsEvmPayoutBody;
 
 export type CheckoutUpdate = { view: CheckoutView } | { live: boolean };
 
@@ -186,7 +195,7 @@ export interface CheckoutApi {
   /** The origins a buyer can pay from, each with an indicative price from a signed dry quote, or greyed with a reason. */
   intentsOptions(id: string): Promise<IntentsOptions>;
   /** A deposit address for one origin (`POST .../intents/quotes`); the same key makes a retry safe. */
-  createIntentsQuote(id: string, body: { origin_asset: string; refund_to: string }, idempotencyKey: string): Promise<IntentsQuote>;
+  createIntentsQuote(id: string, body: { origin_asset: string; refund_to?: string }, idempotencyKey: string): Promise<IntentsQuote>;
   intentsQuote(id: string, quoteId: string): Promise<IntentsQuote>;
   /** "I've sent it": the buyer's transaction on the origin chain, which only speeds up detection. */
   submitIntentsDeposit(id: string, quoteId: string, txHash: string): Promise<IntentsQuote>;
@@ -362,6 +371,9 @@ export class HttpGatewayApi implements GatewayApi {
   setIntentsPayout(body: IntentsPayoutBody) {
     return this.req("/v1/merchant/intents-payout", intentsPayoutSchema, { method: "PUT", body: JSON.stringify(body) });
   }
+  setIntentsDefaultOrigin(defaultOrigin: string | null) {
+    return this.req("/v1/merchant/intents-payout", intentsPayoutSchema, { method: "PATCH", body: JSON.stringify({ default_origin: defaultOrigin }) });
+  }
 }
 
 export class HttpCheckoutApi implements CheckoutApi {
@@ -423,7 +435,7 @@ export class HttpCheckoutApi implements CheckoutApi {
   intentsOptions(id: string) {
     return requestJson(this.nodeUrl, this.intents(id, "/options"), intentsOptionsSchema);
   }
-  createIntentsQuote(id: string, body: { origin_asset: string; refund_to: string }, idempotencyKey: string) {
+  createIntentsQuote(id: string, body: { origin_asset: string; refund_to?: string }, idempotencyKey: string) {
     return requestJson(this.nodeUrl, this.intents(id, "/quotes"), intentsQuoteSchema, { method: "POST", body: JSON.stringify(body), idempotencyKey });
   }
   intentsQuote(id: string, quoteId: string) {

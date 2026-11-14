@@ -2,7 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { base58 } from "@scure/base";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/intents/cli.ts";
-import { OneClickClient, OneClickError, pollStatus } from "../src/intents/client.ts";
+import { ONECLICK_TIMEOUT_MS, OneClickClient, OneClickError, OneClickTimeoutError, pollStatus, type FetchLike } from "../src/intents/client.ts";
 import { exitPlan, exitQuoteRequest, nearCliCommands } from "../src/intents/plan.ts";
 import { ONECLICK_MANAGER_PUBLIC_KEY, quoteSigningMessage, stableStringify, verifyQuoteSignature } from "../src/intents/signature.ts";
 import { NEAR_MAINNET_USDC, type QuoteResponse, type StatusResponse } from "../src/intents/types.ts";
@@ -80,6 +80,15 @@ describe("quote signature (1Click manager key)", () => {
     expect(verifyQuoteSignature(r)).toBe(true);
   });
 
+  it("accepts a signature with or without the ed25519: prefix, as the official SDK does", async () => {
+    const bare = { ...structuredClone(dryLive.body), signature: dryLive.body.signature.replace(/^ed25519:/, "") };
+    expect(bare.signature.startsWith("ed25519:")).toBe(false);
+    expect(verifyQuoteSignature(bare)).toBe(true);
+    const { fetch } = fakeFetch([{ method: "POST", url: `${API}/v0/quote`, status: 201, body: bare }]);
+    const res = await new OneClickClient({ fetch }).quote(askedFromLive());
+    expect(verifyQuoteSignature(res)).toBe(true);
+  });
+
   it("never throws on garbage", () => {
     expect(verifyQuoteSignature({ ...dryLive.body, signature: "ed25519:0OIl" })).toBe(false);
     expect(verifyQuoteSignature(dryLive.body, "ed25519:")).toBe(false);
@@ -133,6 +142,25 @@ describe("OneClickClient against recorded responses", () => {
     const r = await pollStatus(c, DEPOSIT, { sleep: async () => {}, onUpdate: (s) => seen.push(s.status) });
     expect(r.final).toBe(true);
     expect(seen).toEqual(["PENDING_DEPOSIT", "KNOWN_DEPOSIT_TX", "PROCESSING", "SUCCESS"]);
+  });
+
+  it("gives up on a request that does not answer within its timeout (15 s by default), and passes an abort signal", async () => {
+    expect(ONECLICK_TIMEOUT_MS).toBe(15_000);
+    const signals: Array<AbortSignal | undefined> = [];
+    const hung: FetchLike = (_url, init) => {
+      signals.push(init?.signal);
+      return new Promise(() => {});
+    };
+    const started = Date.now();
+    const err = await new OneClickClient({ fetch: hung, timeoutMs: 30 }).status(DEPOSIT).catch((e: unknown) => e);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(err).toBeInstanceOf(OneClickTimeoutError);
+    expect(err).not.toBeInstanceOf(OneClickError);
+    expect((err as Error).message).toMatch(/did not answer within 30 ms/);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    // A body that never finishes is a timeout too.
+    const slowBody: FetchLike = async () => ({ status: 200, text: () => new Promise<string>(() => {}) });
+    await expect(new OneClickClient({ fetch: slowBody, timeoutMs: 30 }).tokens()).rejects.toBeInstanceOf(OneClickTimeoutError);
   });
 
   it("stops at the timeout without a terminal status", async () => {

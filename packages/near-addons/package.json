@@ -22,13 +22,13 @@
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@payminto/chain": "workspace:*",
-    "@scure/base": "2.4.0"
+    "@scure/base": "2.4.0",
+    "viem": "2.57.10"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "near-kit": "0.20.2",
     "typescript": "^7.0.2",
-    "viem": "2.57.10",
     "vitest": "^5.0.5"
   }
 }

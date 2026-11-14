@@ -15,6 +15,7 @@ import type { CreateMerchantBody, FeePlanBody, MerchantPatch as OperatorMerchant
 import type { MockTxOutcome } from "./server";
 import { plainAmount } from "../gateway";
 import { MockIntents } from "./intents";
+import { depositOnItsWay, manualRefundOf, originTxProblem } from "../intents";
 import { demo } from "./scenario";
 import type {
   CreateLinkBody,
@@ -176,6 +177,9 @@ const merchants: Merchant[] = [
 const INTENTS_SETUP = demo("intents-setup");
 /** `?demo=intents-live`: the any-chain checkout as on a server that runs it live, not set up yet, for its NEAR mainnet screens. */
 const INTENTS_LIVE = demo("intents-live");
+/** Like the node in live mode: the NEAR wallet and vouchers pay test money, so only Any chain is offered. */
+const LIVE_LOCKED_REASON = "Off in live mode: this method pays test money, so checkout offers only Any chain.";
+const lockedReason = (method: PaymentMethod): string | null => (INTENTS_LIVE && method !== "oneclick" ? LIVE_LOCKED_REASON : null);
 
 const methodRows: MerchantMethod[] = merchants.flatMap((m) => [
   { merchant_id: m.id, method: "wallet" as const, enabled: true, fee_bps: 0, fee_fixed: "0", bearer: "merchant" as const, min_amount: null, max_amount: null },
@@ -832,8 +836,8 @@ function viewOf(p: MockPayment): CheckoutView {
     token: TOKEN_META,
     hub: HUB,
     method: p.method,
-    methods: payable ? ["wallet", ...(intents.offered(p) ? (["oneclick"] as const) : [])] : [],
-    wallet: payable && p.method === "wallet" && rest > 0n ? walletOf(p, rest) : null,
+    methods: payable ? [...(INTENTS_LIVE ? [] : (["wallet"] as const)), ...(intents.offered(p) ? (["oneclick"] as const) : [])] : [],
+    wallet: payable && !INTENTS_LIVE && p.method === "wallet" && rest > 0n ? walletOf(p, rest) : null,
     success_url: p.success_url,
     tx_hash: (pending ?? lastConfirmed)?.tx_hash ?? null,
     order_hash: p.order_hash,
@@ -1036,6 +1040,41 @@ export class MockGatewayApi implements GatewayApi {
     const pending = p.refunds.filter((r) => r.status === "pending" || r.status === "succeeded").reduce((a, r) => a + BigInt(r.amount), 0n);
     const available = BigInt(p.amount_paid) - pending;
     if (BigInt(body.amount) > available) throw new ApiError(422, "REFUND_TOO_LARGE", `At most ${plainAmount(available)} USDC can be refunded.`);
+    // Like the node: a payment from another chain is refunded by hand from the business's own wallet, then recorded.
+    const manual = manualRefundOf({ method: p.method, payer: p.payer, intents: intents.paymentIntents(p.id) }, available);
+    if (manual && !body.manual) throw new ApiError(409, "REFUND_MANUAL_REQUIRED", `This payment came from ${manual.chain_name}. Send the refund from your own wallet to ${manual.refund_to ?? "the buyer's address (ask them for it)"}, then record it.`, manual);
+    if (manual && body.manual) {
+      const problem = originTxProblem(manual.chain, manual.chain_name, body.manual.tx_hash);
+      if (problem) throw new ApiError(422, "INVALID_TX_HASH", problem);
+      const at = iso(Date.now());
+      const explorer = manual.chain === "sol" ? "https://solscan.io/tx/" : manual.chain === "base" ? "https://basescan.org/tx/" : null;
+      const r: Refund = {
+        id: randomId("re"),
+        livemode: false,
+        payment_id: p.id,
+        amount: body.amount,
+        // As the node records it: `<chain>:<address>`, method and verification `manual`, and who recorded it.
+        to: `${manual.chain}:${manual.refund_to ?? "unknown"}`,
+        reason: body.reason ?? null,
+        note: body.note ?? null,
+        approval: "not_required",
+        requested_by: readMockUser(),
+        approved_by: null,
+        status: "succeeded",
+        tx_hash: null,
+        failure_reason: null,
+        method: "manual",
+        verification: "manual",
+        manual: { chain: manual.chain, chain_name: manual.chain_name, tx_hash: body.manual.tx_hash.trim(), explorer_url: explorer ? `${explorer}${body.manual.tx_hash.trim()}` : null, recorded_by: readMockUser() },
+        created_at: at,
+        updated_at: at,
+      };
+      refunds.unshift(r);
+      p.refunds.push(r);
+      p.events.push(event("refund.succeeded", Date.now(), { refund_id: r.id, amount: r.amount, manual: true }));
+      recomputeRefunds(p);
+      return { ...r };
+    }
     const r: Refund = {
       id: randomId("re"),
       livemode: false,
@@ -1336,6 +1375,11 @@ export class MockGatewayApi implements GatewayApi {
     await delay(500);
     return intents.setPayout(body);
   }
+
+  async setIntentsDefaultOrigin(defaultOrigin: string | null): Promise<IntentsPayout> {
+    await delay();
+    return intents.setDefaultOrigin(defaultOrigin);
+  }
 }
 
 /** True when the operator switched to a merchant other than Acme Store, which has no gateway history in the mock. */
@@ -1458,7 +1502,7 @@ export class MockOperatorApi implements OperatorApi {
   }
   async methods(merchantId: string): Promise<MerchantMethod[]> {
     await delay();
-    return methodRows.filter((r) => r.merchant_id === merchantId).map((r) => ({ ...r }));
+    return methodRows.filter((r) => r.merchant_id === merchantId).map((r) => (lockedReason(r.method) ? { ...r, enabled: false, locked_reason: lockedReason(r.method) } : { ...r, locked_reason: null }));
   }
   async setMethods(merchantId: string, rows: Omit<MerchantMethod, "merchant_id">[]): Promise<MerchantMethod[]> {
     await delay(400);
@@ -1472,6 +1516,8 @@ export class MockOperatorApi implements OperatorApi {
   async setMethodsEnabled(merchantId: string, items: Pick<MerchantMethod, "method" | "enabled">[]): Promise<MerchantMethod[]> {
     await delay(400);
     if (merchantId === ACME_ID && items.some((r) => r.method === "oneclick" && r.enabled)) intents.assertCanEnable();
+    const locked = items.find((r) => r.enabled && lockedReason(r.method));
+    if (locked) throw new ApiError(409, "METHOD_LOCKED", lockedReason(locked.method)!);
     for (const r of items) {
       const row = methodRows.find((x) => x.merchant_id === merchantId && x.method === r.method);
       if (row) row.enabled = r.enabled;
@@ -1524,6 +1570,7 @@ export class MockCheckoutApi implements CheckoutApi {
   async chooseMethod(id: string, method: "wallet"): Promise<CheckoutView> {
     await delay(200);
     const p = find(id);
+    if (depositOnItsWay({ intents: intents.checkout(p) })) throw new ApiError(409, "INTENTS_IN_FLIGHT", "A payment from another chain is on its way. Wait for it to finish.");
     if (p.status === "open" && p.amount_paid === "0" && p.method !== method) {
       Object.assign(p, quote(BigInt(p.amount), method));
       p.method = method;
@@ -1634,7 +1681,7 @@ export class MockCheckoutApi implements CheckoutApi {
 
   /** Retries with the same key get the same quote, as the node's idempotency keys do. */
   readonly #byKey = new Map<string, IntentsQuote>();
-  async createIntentsQuote(id: string, body: { origin_asset: string; refund_to: string }, idempotencyKey: string): Promise<IntentsQuote> {
+  async createIntentsQuote(id: string, body: { origin_asset: string; refund_to?: string }, idempotencyKey: string): Promise<IntentsQuote> {
     await delay(900);
     const seen = this.#byKey.get(`${id} ${idempotencyKey}`);
     if (seen) return intents.quote(id, seen.id);

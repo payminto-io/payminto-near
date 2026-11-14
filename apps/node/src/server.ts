@@ -5,7 +5,7 @@ import { createApi, type NodeServices } from "./api.ts";
 import { keypairFromSeed, networkFor, type Chain } from "@payminto/protocol";
 import { NearRpcChain } from "@payminto/chain/node";
 import { ChainClient } from "./chain.ts";
-import { agentsConfigOf, dashboardUrlOf, DEFAULT_UNSIGNED_LIMIT, LIVE_NETWORKS, redactedConfig, type Config } from "./config.ts";
+import { agentsConfigOf, dashboardUrlOf, DEFAULT_UNSIGNED_LIMIT, intentsBootWarnings, LIVE_NETWORKS, redactedConfig, type Config } from "./config.ts";
 import { AgentsModule } from "./agents/index.ts";
 import type { ModelLayer } from "./agents/models.ts";
 import type { OpsToolFactory } from "./agents/ops-tools.ts";
@@ -157,6 +157,9 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
         }
       : null;
     if (intentsConfig) log[intentsConfig.mode === "live" ? "warn" : "info"](`any-chain checkout on: ${intentsConfig.mode === "live" ? "Live - NEAR mainnet (real money)" : "Simulated - no real money"}`, { baseUrl: intentsConfig.baseUrl });
+    for (const w of intentsBootWarnings(config)) log.warn(w);
+    // Account emails and buyers' receipts. Built before the gateway, which queues receipts in its own transactions.
+    const mailer = new Mailer({ db, log: log.child({ component: "email" }), smtp: config.auth?.smtp ?? null });
     // Payminto Gateway (docs/GATEWAY.md), on when the config has a gateway section.
     const gateway = config.gateway
       ? await Gateway.create({
@@ -173,13 +176,13 @@ export async function startNode(config: Config, opts: CreateNodeOptions = {}): P
           accessKeys: rpc,
           txs: rpc,
           intents,
+          mailer,
         })
       : null;
     // Decision 8: refusal webhooks go out through the gateway's outbox, in the transaction that records the refusal.
     if (gateway) vouchers.onDenial = (n) => gateway.refused(n);
     // Accounts (docs/PRODUCT.md sections 4 and 10).
     const audit = new AuditLog(db);
-    const mailer = new Mailer({ db, log: log.child({ component: "email" }), smtp: config.auth?.smtp ?? null });
     const auth = new AuthService({
       db,
       log: log.child({ component: "auth" }),

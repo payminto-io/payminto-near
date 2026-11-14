@@ -1,0 +1,209 @@
+{
+  "_meta": {
+    "source": "GET https://1click.chaindefuser.com/v0/tokens",
+    "recorded": "2026-11-13",
+    "live": true,
+    "note": "Trimmed to the checkout origins, the payout destinations and every other USDC entry, of 230; entries are verbatim."
+  },
+  "status": 200,
+  "body": [
+    {
+      "assetId": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+      "decimals": 6,
+      "blockchain": "near",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near",
+      "decimals": 6,
+      "blockchain": "eth",
+      "symbol": "USDT",
+      "price": 0.999127,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+      "coingeckoId": "tether"
+    },
+    {
+      "assetId": "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
+      "decimals": 6,
+      "blockchain": "eth",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:eth.omft.near",
+      "decimals": 18,
+      "blockchain": "eth",
+      "symbol": "ETH",
+      "price": 1964.62,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "coingeckoId": "ethereum"
+    },
+    {
+      "assetId": "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
+      "decimals": 6,
+      "blockchain": "arb",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:base.omft.near",
+      "decimals": 18,
+      "blockchain": "base",
+      "symbol": "ETH",
+      "price": 1964.62,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "coingeckoId": "ethereum"
+    },
+    {
+      "assetId": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+      "decimals": 6,
+      "blockchain": "base",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near",
+      "decimals": 6,
+      "blockchain": "sol",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near",
+      "decimals": 6,
+      "blockchain": "pol",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep245:v2_1.omni.hot.tg:10_A2ewyUyDp6qsue1jqZsGypkCxRJ",
+      "decimals": 6,
+      "blockchain": "op",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:gnosis-0x2a22f9c3b484c3629090feed35f17ff8f88f76f0.omft.near",
+      "decimals": 6,
+      "blockchain": "gnosis",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:bnb-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d.omdep.near",
+      "decimals": 18,
+      "blockchain": "bsc",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:aptos-34ee497f210c5a511e8d5b53bc56d75b63612bb5.omft.near",
+      "decimals": 6,
+      "blockchain": "aptos",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:avax-0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e.omdep.near",
+      "decimals": 6,
+      "blockchain": "avax",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep141:sui-c1b81ecaf27933252d31a963bc5e9458f13c18ce.omft.near",
+      "decimals": 6,
+      "blockchain": "sui",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu",
+      "decimals": 7,
+      "blockchain": "stellar",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep245:v2_1.omni.hot.tg:143_2dmLwYWkCQKyTjeUPAsGJuiVLbFx",
+      "decimals": 6,
+      "blockchain": "monad",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x754704bc059f8c67012fed69bc8a327a5aafb603",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "nep245:v2_1.omni.hot.tg:196_2dK9kLNR7Ekq7su8FxNGiUW3djTw",
+      "decimals": 6,
+      "blockchain": "xlayer",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x74b7f16337b8972027f6196a17a631ac6de26d22",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "1cs_v1:hypercore:hip1:0x6d1e7cde53ba9467b783cb7c530ce054",
+      "decimals": 8,
+      "blockchain": "hypercore",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0x6d1e7cde53ba9467b783cb7c530ce054",
+      "coingeckoId": "usd-coin"
+    },
+    {
+      "assetId": "1cs_v1:hypercore:erc20:0xb88339CB7199b77E23DB6E890353E22632Ba630f",
+      "decimals": 6,
+      "blockchain": "hypercore",
+      "symbol": "USDC",
+      "price": 0.999481,
+      "priceUpdatedAt": "2026-11-13T14:34:01.145Z",
+      "contractAddress": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
+      "coingeckoId": "usd-coin"
+    }
+  ]
+}

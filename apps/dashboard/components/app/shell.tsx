@@ -14,6 +14,7 @@ import { MOCK_MODE } from "@/lib/config";
 import { useAccess, useSession } from "@/lib/session";
 import { useLive } from "@/lib/live";
 import { useHealth, useInfo } from "@/lib/queries";
+import { environmentNotice } from "@/lib/server-mode";
 import { isActiveHref, sectionOf } from "@/lib/nav";
 import { isAuthPath, isAuthPathForSignedIn, loginHref, safeNext } from "@/lib/routes";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -83,20 +84,20 @@ function NetworkPill() {
   );
 }
 
-/** "Testnet: no real money" or "Demo data" under the header, so nobody mistakes test money for real money. */
+/** Test mode, Live mode or demo data under the header, so nobody takes test money for real money, or the reverse. */
 function EnvironmentStrip() {
   const info = useInfo();
-  if (MOCK_MODE) {
-    return (
-      <div role="note" className="border-b border-warning/20 bg-warning-soft px-4 py-1.5 text-center text-xs font-medium text-warning sm:px-6">
-        Demo data: this screen shows sample data and nothing touches a chain.
-      </div>
-    );
-  }
-  if (!info.data?.network.testnet) return null;
+  const notice = MOCK_MODE ? environmentNotice({ network: { id: "mock", testnet: true } }, { mock: true }) : info.data ? environmentNotice(info.data) : null;
+  if (!notice) return null;
   return (
-    <div role="note" className="border-b border-warning/20 bg-warning-soft px-4 py-1.5 text-center text-xs font-medium text-warning sm:px-6">
-      {info.data.network.id === "near:sandbox" ? "Local test network: no real money." : "Testnet: no real money."}
+    <div
+      role="note"
+      className={cn(
+        "border-b px-4 py-1.5 text-center text-xs font-medium sm:px-6",
+        notice.tone === "live" ? "border-negative/20 bg-negative-soft text-negative" : "border-warning/20 bg-warning-soft text-warning",
+      )}
+    >
+      {notice.text}
     </div>
   );
 }

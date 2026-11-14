@@ -39,19 +39,46 @@ export class Metrics {
   }
 }
 
-export type Gauge = { name: string; help: string; samples: Array<{ labels?: Labels; value: number | bigint }> };
+/** A metric read on scrape. `type` is gauge unless a service keeps a counter itself (see `addCollector`). */
+export type Gauge = { name: string; help: string; type?: "gauge" | "counter"; samples: Array<{ labels?: Labels; value: number | bigint }> };
 
 export function renderGauges(gauges: Gauge[]): string[] {
   const out: string[] = [];
   for (const g of gauges) {
     if (g.samples.length === 0) continue;
-    out.push(`# HELP ${g.name} ${g.help}`, `# TYPE ${g.name} gauge`);
+    out.push(`# HELP ${g.name} ${g.help}`, `# TYPE ${g.name} ${g.type ?? "gauge"}`);
     for (const s of g.samples) out.push(`${g.name}${labelText(s.labels ?? {})} ${s.value.toString()}`);
   }
   return out;
 }
 
-/** Ledger-level gauges straight from SQLite; cheap aggregate queries over indexed columns. */
+/**
+ * Metrics a service of one node renders on scrape, keyed by that node's database, so a service can publish its own
+ * metrics without the API layer knowing about it. `databaseGauges` renders them.
+ */
+const collectors = new WeakMap<Database, Array<() => Gauge[]>>();
+
+export function addCollector(db: Database, collect: () => Gauge[]): void {
+  const list = collectors.get(db) ?? [];
+  list.push(collect);
+  collectors.set(db, list);
+}
+
+/** What the any-chain checkout raises an operator alert for. */
+export const INTENTS_ALERT_KINDS = ["provider_only", "stuck", "contradicted", "auth"] as const;
+export type IntentsAlertKind = (typeof INTENTS_ALERT_KINDS)[number];
+
+/** `payminto_intents_alerts_total{kind}`: one per quote and kind, each also a platform `intents.alert` event. Alert on any increase. */
+export function intentsAlertsMetric(counts: Readonly<Record<IntentsAlertKind, number>>): Gauge {
+  return {
+    name: "payminto_intents_alerts_total",
+    help: "Any-chain checkout conditions only the operator can resolve, by kind (provider_only, stuck, contradicted, auth). Alert on any increase.",
+    type: "counter",
+    samples: INTENTS_ALERT_KINDS.map((kind) => ({ labels: { kind }, value: counts[kind] })),
+  };
+}
+
+/** Ledger-level gauges straight from SQLite; cheap aggregate queries over indexed columns, plus the collectors of this database. */
 export function databaseGauges(db: Database): Gauge[] {
   const byStatus = (table: "calls" | "batches") =>
     db.all<{ status: string; n: number }>(`SELECT status, COUNT(*) AS n FROM ${table} GROUP BY status`).map((r) => ({ labels: { status: r.status }, value: r.n }));
@@ -66,5 +93,6 @@ export function databaseGauges(db: Database): Gauge[] {
     { name: "payminto_denial_rows", help: "Rows in the denials table (bounded by DENIALS_MAX_ROWS).", samples: [{ value: denials.rows }] },
     { name: "payminto_event_rows", help: "Rows in the durable event log (bounded by EVENTS_MAX_ROWS).", samples: [{ value: events.n }] },
     { name: "payminto_db_size_bytes", help: "SQLite main database file size.", samples: [{ value: pages.page_count * pageSize.page_size }] },
+    ...(collectors.get(db) ?? []).flatMap((collect) => collect()),
   ];
 }

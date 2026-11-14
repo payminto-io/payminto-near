@@ -12,6 +12,8 @@ import {
   panelKind,
   quoteFor,
   redirectFraction,
+  linkEmailHint,
+  receiptEmailText,
   rememberQuote,
   walletStepCopy,
   walletStepIndex,
@@ -211,5 +213,19 @@ describe("amountPresets", () => {
   it("offers nothing when no round amount fits", () => {
     expect(amountPresets(1_100_000n, 1_200_000n)).toEqual([1_100_000n]);
     expect(amountPresets(null, 1n * U)).toEqual([]);
+  });
+});
+
+describe("the receipt email (Q3)", () => {
+  it("says the receipt goes out once the payment is complete while it is not paid yet", () => {
+    expect(receiptEmailText("saved", "ana@example.com", false)).toBe("We will email a receipt to ana@example.com once the payment is complete.");
+    expect(receiptEmailText("on-file", "", false)).toBe("A receipt email is already on file. It is sent once the payment is complete.");
+  });
+  it("says it plainly once paid", () => {
+    expect(receiptEmailText("saved", "ana@example.com", true)).toBe("We will email a receipt to ana@example.com.");
+    expect(receiptEmailText("on-file", "", true)).toBe("A receipt email is already on file for this payment.");
+  });
+  it("tells the link page's email field when the receipt is sent", () => {
+    expect(linkEmailHint("Northwind Coffee")).toBe("For your receipt, sent once you have paid. Northwind Coffee sees it.");
   });
 });

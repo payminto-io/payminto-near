@@ -22,6 +22,19 @@ export function escrowShort(networkId: string | null | undefined): string {
   return `Funds are escrowed in an unaudited contract on ${networkInWords(networkId)}`;
 }
 
+/**
+ * What a checkout says about where the money goes. A live any-chain server takes only payments from other chains, which
+ * NEAR Intents delivers straight to the business's own account on NEAR mainnet: no escrow and no local sandbox, whatever
+ * network the server's hub runs on. Every other server names its own network and the hub's escrow.
+ */
+export function checkoutWords(info: { network: { id: string; name: string }; mode?: { livemode: boolean; any_chain: string } | null } | null | undefined): {
+  networkName: string;
+  escrowShort: string;
+} {
+  if (info?.mode?.any_chain === "live") return { networkName: "NEAR mainnet", escrowShort: "Paid through NEAR Intents straight to the business's own account, never held by Payminto" };
+  return { networkName: info?.network.name ?? "NEAR", escrowShort: escrowShort(info?.network.id) };
+}
+
 export function escrowFull(networkId: string | null | undefined): string {
   const where =
     networkId === "near:sandbox"
@@ -33,11 +46,11 @@ export function escrowFull(networkId: string | null | undefined): string {
 }
 
 /**
- * The label on a test-money badge, or null for live money. A sandbox says so; testnet and anything not live read as
- * test money.
+ * The label on a test-money badge, or null for live money. A live payment never carries it, whatever chain the server
+ * runs its hub on (a live any-chain payment moves real money on NEAR mainnet). Off live mode a sandbox says so, and
+ * anything else reads as testnet.
  */
 export function testMoneyLabel(livemode: boolean, networkId: string | null | undefined): string | null {
-  if (livemode && networkId === "near:mainnet") return null;
-  if (networkId === "near:sandbox") return "Local sandbox";
-  return livemode ? null : "Testnet";
+  if (livemode) return null;
+  return networkId === "near:sandbox" ? "Local sandbox" : "Testnet";
 }

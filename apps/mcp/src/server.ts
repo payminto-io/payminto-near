@@ -4,6 +4,7 @@ import { z } from "zod";
 import { MarketError, describeQuoteResult, quoteAndCheck, quoteMarketAgentTool, retryText as marketRetryText, usdcPolicy } from "@payminto/agent-market";
 import { payeeCheckTool, payeeCheckToolResult } from "@payminto/payee-check";
 import { DENIAL_RULES, type RefusalWire } from "@payminto/protocol";
+import { INVOICE_INSTRUCTIONS, registerInvoiceTools } from "./invoice.ts";
 import type { AskPerson, PayeeStop } from "./payee-guard.ts";
 import type { AgentWallet, Denied, Failed, PaymentReport } from "./wallet.ts";
 
@@ -202,7 +203,8 @@ const maxAmountAtomic = z
 
 /** Builds an MCP server exposing the wallet's tools. One wallet can back many server instances (stateless HTTP). */
 export function createMcpServer(wallet: AgentWallet): McpServer {
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: INSTRUCTIONS });
+  const invoices = wallet.invoices;
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: invoices ? `${INSTRUCTIONS}\n${INVOICE_INSTRUCTIONS}` : INSTRUCTIONS });
 
   /**
    * Asks the person at the MCP client about a payee with warnings, through elicitation, when the client supports it.
@@ -423,6 +425,9 @@ export function createMcpServer(wallet: AgentWallet): McpServer {
         return ok(`Call ${p.callId} is in batch ${p.batchId}. Proven against the root on NEAR: ${verdict}.${why}`, p);
       }),
   );
+
+  // Paying an invoice from another chain: the agent's own wallet sends the deposit; these tools read and ask only.
+  if (invoices) registerInvoiceTools(server, invoices);
 
   return server;
 }

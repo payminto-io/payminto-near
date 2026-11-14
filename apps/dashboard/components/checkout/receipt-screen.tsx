@@ -11,8 +11,8 @@ import { ApiError } from "@/lib/http";
 import { expectedCheckIds, plainCheckTitle, proofVerdict, runProofChecks, settlementName, type ProofCheck } from "@/lib/payment-proof";
 import { useCheckoutApi } from "@/lib/use-checkout";
 import { deliveryReader, readErrorText, readerLabel } from "@/lib/near-reader";
-import { mainnetTxUrl, verificationText } from "@/lib/intents";
-import type { CheckoutView, IntentsProof, PaymentProof } from "@/lib/schemas";
+import { destinationText, isNearDestination, mainnetTxUrl, unitsOf, verificationText } from "@/lib/intents";
+import type { CheckoutView, IntentsProof, IntentsQuoteDestination, PaymentProof } from "@/lib/schemas";
 import { IntentsLabel } from "./intents";
 import { Button } from "@/components/ui/button";
 import { brandStyle, CheckoutFooter, LineItems, MerchantRow, Notice, OrderHash, Rows, TokenAmount } from "./parts";
@@ -194,7 +194,7 @@ function ProofBody({
           </Notice>
         )}
         {any ? (
-          <IntentsRows any={any} merchant={v.merchant.name} />
+          <IntentsRows any={any} merchant={v.merchant.name} destination={v.intents?.active_quote?.id === any.quote_id ? (v.intents.active_quote.destination ?? null) : null} />
         ) : (
           <Rows
             className="mt-5"
@@ -270,9 +270,10 @@ function deliveryHref(any: IntentsProof): string | null {
 }
 
 /** What a reader checks first for a payment paid from another chain: what was paid, from where, and where it landed. */
-function IntentsRows({ any, merchant }: { any: IntentsProof; merchant: string }) {
+function IntentsRows({ any, merchant, destination }: { any: IntentsProof; merchant: string; destination: IntentsQuoteDestination | null }) {
   const mainnet = any.settlement_network === "near:mainnet";
   const usdc = { address: any.token, symbol: "USDC", decimals: 6 };
+  const elsewhere = destination && !isNearDestination(destination) ? destination : null;
   return (
     <Rows
       className="mt-5"
@@ -282,7 +283,11 @@ function IntentsRows({ any, merchant }: { any: IntentsProof; merchant: string })
           "Paid to",
           <span key="o" className="flex min-w-0 flex-col items-end gap-0.5">
             <span>{merchant}</span>
-            <ChainLink text={any.recipient} title={any.recipient} href={mainnet ? `https://nearblocks.io/address/${any.recipient}` : null} />
+            {elsewhere ? (
+              <span className="text-xs text-muted-foreground">{destinationText({ formatted: unitsOf(BigInt(any.amount), 6), symbol: elsewhere.symbol }, elsewhere)}</span>
+            ) : (
+              <ChainLink text={any.recipient} title={any.recipient} href={mainnet ? `https://nearblocks.io/address/${any.recipient}` : null} />
+            )}
           </span>,
         ],
         [

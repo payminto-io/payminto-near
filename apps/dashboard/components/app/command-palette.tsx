@@ -169,6 +169,9 @@ function keywordsFor(href: string): string[] {
     "/blocked": ["denial", "screening", "deny list", "blocked wallets"],
     "/platform/businesses": ["merchant", "business"],
     "/activity": ["audit", "log", "history"],
+    "/balance": ["payout", "credit", "hub", "paid out", "any chain"],
+    "/platform/pricing": ["fee plans", "pricing", "fees", "default plan"],
+    "/platform/earnings": ["fees", "revenue", "income", "csv"],
   };
   return k[href] ?? [];
 }

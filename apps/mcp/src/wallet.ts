@@ -22,6 +22,7 @@ import {
   type RefusalWire,
 } from "@payminto/protocol";
 import { AgentClient, cleanText, NodeApiError, NodeHttp, PayFailed, verifyReceiptOnchain, type BeforeSignRefusal, type BeforeSignRequest, type PaymentOutcome, type ReceiptStore, type VerifiedPolicy } from "@payminto/sdk";
+import type { InvoicePayer } from "./invoice.ts";
 import type { WalletMarket } from "./market.ts";
 import { approvalAnswerSchema, approvalHint, rpcPayeeCheck, type ApprovalAnswer, type AskPerson, type GuardSignal, type PayeeCheckFactory, type PayeeStop, type WarnState } from "./payee-guard.ts";
 
@@ -302,6 +303,11 @@ export type WalletOptions = {
    * limits: a market hire is paid through the market, and nothing here pays it.
    */
   market?: WalletMarket;
+  /**
+   * Paying invoices of the same server from another chain (`invoice_pay_options`, `invoice_deposit`, `invoice_status`).
+   * The tools only read and ask its public checkout routes: the agent sends the deposit from its own wallet.
+   */
+  invoices?: InvoicePayer;
   /** Durable receipt store file (SQLite). Without it (and without `receipts`), receipts and signed positions are lost on restart. */
   receiptStorePath?: string;
   /** A store shared with another client of the same agent key (takes precedence over receiptStorePath). */
@@ -706,6 +712,11 @@ export class AgentWallet {
   /** The market wiring, or null when this wallet quotes nothing there. */
   get market(): WalletMarket | null {
     return this.#o.market ?? null;
+  }
+
+  /** The any-chain invoice tools' client, or null when they are off. */
+  get invoices(): InvoicePayer | null {
+    return this.#o.invoices ?? null;
   }
 
   /**

@@ -8,10 +8,15 @@
  * Data safety: the directory is fixed (apps/local/data, never a path from the environment), a symlink is refused, and
  * every database inside must pass the node's reset guard by name (`*.demo.db`) before anything is removed. One file
  * that does not pass stops the whole deletion.
+ *
+ * Real money: a run with `--intents live` keeps real buyers' any-chain quotes in its database (each quote row records
+ * its mode). A start refuses to delete a database that still holds a live quote that is not final (`startClean`), so
+ * nothing a buyer paid is forgotten unwatched; `pnpm local --reset` is the explicit way to delete it anyway.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isDisposableTarget } from "@payminto/node";
 import { DATA_DIR } from "./config.ts";
 
@@ -104,9 +109,76 @@ export function wipeData(dir: string = DATA_DIR): { removed: boolean; databases:
   return { removed: true, databases };
 }
 
+// ---- real money left behind by a live run ----
+
+/** Final states of an any-chain quote (TERMINAL_INTENTS_STATUSES): nothing more can happen to its money. */
+const FINAL_QUOTE_STATUSES = ["confirmed", "refunded", "failed", "expired"] as const;
+
+export type OpenLiveQuote = { id: string; payment_id: string; status: string; deposit_address: string };
+
+/**
+ * The quotes of live mode (real money) in a run's database that are not final: a buyer may have paid, or may still pay,
+ * into their deposit addresses. Opens the database read-only (falling back to a plain open only when a killed run
+ * left a write-ahead log that a read-only open cannot replay) and only ever reads.
+ */
+export function openLiveQuotes(dbPath: string): OpenLiveQuote[] {
+  if (!existsSync(dbPath)) return [];
+  assertLocalDatabase(dbPath);
+  const read = (db: DatabaseSync): OpenLiveQuote[] => {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'intents_quotes'").get()) return [];
+    return db
+      .prepare(`SELECT id, payment_id, status, deposit_address FROM intents_quotes WHERE mode = 'live' AND status NOT IN (${FINAL_QUOTE_STATUSES.map(() => "?").join(", ")}) ORDER BY created_at, rowid`)
+      .all(...FINAL_QUOTE_STATUSES) as OpenLiveQuote[];
+  };
+  const attempt = (readOnly: boolean): OpenLiveQuote[] => {
+    const db = new DatabaseSync(dbPath, { readOnly });
+    try {
+      return read(db);
+    } finally {
+      db.close();
+    }
+  };
+  try {
+    return attempt(true);
+  } catch {
+    try {
+      return attempt(false);
+    } catch (err) {
+      throw new DataError(
+        `Could not read ${dbPath} to check it for live any-chain payments (${err instanceof Error ? err.message : String(err)}). Nothing was deleted. If you are sure no real money is waiting in it, run pnpm local --reset.`,
+      );
+    }
+  }
+}
+
+/** Refuses, with a DataError naming every quote, when the database at `dbPath` holds a live quote that is not final. */
+export function assertNoOpenLiveQuotes(dbPath: string): void {
+  const open = openLiveQuotes(dbPath);
+  if (!open.length) return;
+  throw new DataError(
+    [
+      `Not starting: the previous run took real money through the any-chain checkout (--intents live), and its database still holds ${open.length} live quote${open.length === 1 ? "" : "s"} that ${open.length === 1 ? "is" : "are"} not final:`,
+      ...open.map((q) => `  - ${q.id} (payment ${q.payment_id}, ${q.status}, deposit address ${q.deposit_address})`),
+      "Starting would delete that database, and nothing would watch these payments any more.",
+      `Finish or capture them first: pnpm live:capture <payment id> (for example pnpm live:capture ${open[0]!.payment_id}), and look each deposit address up on 1Click's status.`,
+      `Or run pnpm local --reset to delete them anyway. Nothing was deleted.`,
+    ].join("\n"),
+  );
+}
+
+/**
+ * What every start does to the data directory: refuse while the previous run holds live quotes that are not final, and
+ * otherwise delete it (`wipeData`).
+ */
+export function startClean(paths: DataPaths): { removed: boolean; databases: string[] } {
+  assertNoOpenLiveQuotes(paths.db);
+  return wipeData(paths.dir);
+}
+
 // ---- one stack at a time ----
 
-export type Lock = { pid: number; startedAt: string; mode: string; dashboardPid?: number; dashboardUrl?: string };
+/** `intents` records the any-chain mode of the run; each quote row in its database also records its own mode. */
+export type Lock = { pid: number; startedAt: string; mode: string; intents?: "simulated" | "live"; dashboardPid?: number; dashboardUrl?: string };
 
 function alive(pid: number): boolean {
   try {

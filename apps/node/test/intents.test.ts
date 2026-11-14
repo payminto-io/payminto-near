@@ -211,7 +211,7 @@ describe("paying from another chain", () => {
     paymentId = await newPayment();
     const view = (await pub("GET", `/v1/checkout/${paymentId}`)).json;
     expect(view.methods).toEqual(["wallet", "oneclick"]);
-    expect(view.intents).toEqual({ mode: "simulated", label: "Simulated - no real money", available: true, reason: null, settlement_network: "near:mainnet (simulated)", active_quote: null });
+    expect(view.intents).toEqual({ mode: "simulated", label: "Simulated - no real money", available: true, reason: null, settlement_network: "near:mainnet (simulated)", active_quote: null, default_origin: null });
     const o = await pub("GET", `/v1/checkout/${paymentId}/intents/options`);
     expect(o.status, o.text).toBe(200);
     expect(o.json).toMatchObject({ object: "intents_options", payment_id: paymentId, amount_out: { amount: "5000000", formatted: "5.000000", symbol: "USDC" }, recipient: MAINNET });
@@ -242,6 +242,18 @@ describe("paying from another chain", () => {
     const view = (await pub("GET", `/v1/checkout/${paymentId}`)).json;
     expect(view.method).toBe("oneclick");
     expect(view.intents.active_quote.id).toBe(quote.id);
+  });
+
+  it("issues a deposit address with no refund address: 1Click returns a failed deposit to the business's NEAR Intents account", async () => {
+    const pid = await newPayment("3000000");
+    const r = await pub("POST", `/v1/checkout/${pid}/intents/quotes`, { origin_asset: BASE_USDC });
+    expect(r.status, r.text).toBe(201);
+    expect(r.json).toMatchObject({ refund_type: "INTENTS", refund_to: MAINNET, deposit_memo: null, signature_valid: true });
+    const again = await pub("POST", `/v1/checkout/${pid}/intents/quotes`, { origin_asset: BASE_USDC });
+    expect(again.status).toBe(200);
+    expect(again.json.id).toBe(r.json.id);
+    const detail = (await call("GET", `/v1/payments/${pid}`)).json;
+    expect(detail.intents.quotes[0]).toMatchObject({ refund_type: "INTENTS", refund_to: MAINNET, quote_response: { quoteRequest: { refundType: "INTENTS", refundTo: MAINNET } } });
   });
 
   it("a deposit is seen: a pending credit holds the payment in processing, and payment.processing goes out", async () => {
@@ -303,7 +315,7 @@ describe("paying from another chain", () => {
         settlement_network: "near:mainnet (simulated)",
         token: TOKEN,
         recipient: MAINNET,
-        origin: { asset: BASE_USDC, chain: "base", chain_name: "Base", symbol: "USDC", decimals: 6 },
+        origin: { asset: BASE_USDC, chain: "base", chain_name: "Base", symbol: "USDC", decimals: 6, contract_address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", chain_id: 8453 },
         deposited: q.deposited,
         origin_txs: q.origin_txs,
         delivery_tx: q.delivery_tx,
@@ -383,7 +395,8 @@ describe("deposits that do not complete", () => {
   });
 
   it("a failed swap sends payment.deposit_failed to the business and to platform alert endpoints", async () => {
-    const hook = await call("POST", "/v1/platform/webhooks", { url: "http://127.0.0.1:9/alerts", events: ["payment.deposit_failed"] });
+    // An operator can subscribe to the any-chain alerts (provider_only, stuck, contradicted, auth) as well.
+    const hook = await call("POST", "/v1/platform/webhooks", { url: "http://127.0.0.1:9/alerts", events: ["payment.deposit_failed", "intents.alert"] });
     expect(hook.status, hook.text).toBe(201);
     const paymentId = await newPayment();
     const q = await newQuote(paymentId);
@@ -392,7 +405,10 @@ describe("deposits that do not complete", () => {
     expect((await svc().checkNow(q.id)).status).toBe("failed");
     const failed = events(paymentId).filter((e) => e.type === "payment.deposit_failed");
     expect(failed.map((e) => e.merchant_id)).toEqual([shopId, null]);
-    expect((await call("GET", `/v1/payments/${paymentId}`)).json.status).toBe("open");
+    const payment = (await call("GET", `/v1/payments/${paymentId}`)).json;
+    expect(payment.status).toBe("open");
+    // The business's timeline shows the failure once; the platform's copy is not the business's event.
+    expect(payment.events.filter((e: { type: string }) => e.type === "payment.deposit_failed")).toHaveLength(1);
   });
 
   it("a deposit seen after the payment expired still pays it, marked late", async () => {
@@ -461,14 +477,15 @@ describe("the checks before a deposit address is shown", () => {
     expect(q).toMatchObject({ status: 502, json: { error: { code: "INTENTS_QUOTE_FAILED", message: "The minimum on this network is $100." } } });
   });
 
-  it("caps active quotes per payment and makes a retried POST with the same Idempotency-Key safe", async () => {
+  it("caps active quotes per payment at one per offered origin and makes a retried POST with the same Idempotency-Key safe", async () => {
     const paymentId = await newPayment();
     const first = await pub("POST", `/v1/checkout/${paymentId}/intents/quotes`, { origin_asset: BASE_USDC, refund_to: REFUND }, { "idempotency-key": "k-1" });
     const replay = await pub("POST", `/v1/checkout/${paymentId}/intents/quotes`, { origin_asset: BASE_USDC, refund_to: REFUND }, { "idempotency-key": "k-1" });
     expect(replay.json.id).toBe(first.json.id);
-    for (let i = 1; i < 5; i++) await newQuote(paymentId, BASE_USDC, `0x${String(i).repeat(40)}`);
-    const sixth = await pub("POST", `/v1/checkout/${paymentId}/intents/quotes`, { origin_asset: BASE_USDC, refund_to: `0x${"9".repeat(40)}` });
-    expect(sixth.json.error.code).toBe("INTENTS_QUOTE_LIMIT");
+    // One address per token and chain the checkout offers (8), so a buyer can switch between all of them.
+    for (let i = 1; i < 8; i++) await newQuote(paymentId, BASE_USDC, `0x${String(i).repeat(40)}`);
+    const ninth = await pub("POST", `/v1/checkout/${paymentId}/intents/quotes`, { origin_asset: BASE_USDC, refund_to: `0x${"9".repeat(40)}` });
+    expect(ninth.json.error.code).toBe("INTENTS_QUOTE_LIMIT");
   });
 
   it("limits deposit addresses to ten a minute from one client address", async () => {
@@ -494,6 +511,30 @@ describe("the watcher", () => {
     expect(row.next_poll_unix).toBeGreaterThan(Math.floor(Date.now() / 1000) + 20);
     row = await svc().checkNow(q.id);
     expect(row).toMatchObject({ status: "awaiting_deposit", provider_status: "PENDING_DEPOSIT", poll_errors: 0 });
+  });
+
+  it("takes the live API's status, whose embedded quote has no correlationId, by its signature and deposit address", async () => {
+    const paymentId = await newPayment();
+    const q = await newQuote(paymentId);
+    // As 1Click answered on 2026-11-14 for a real deposit: the embedded quoteResponse carries timestamp, signature,
+    // quoteRequest and quote, and no correlationId.
+    tamper = (path, body) => {
+      if (path !== "/v0/status" || !body.quoteResponse) return body;
+      const { correlationId: _drop, ...embedded } = body.quoteResponse;
+      return { ...body, quoteResponse: embedded };
+    };
+    const row = await svc().checkNow(q.id);
+    tamper = null;
+    expect(row).toMatchObject({ status: "awaiting_deposit", provider_status: "PENDING_DEPOSIT", poll_errors: 0 });
+    // A different signature is still another quote, with or without a correlationId.
+    tamper = (path, body) => {
+      if (path !== "/v0/status" || !body.quoteResponse) return body;
+      const { correlationId: _drop, ...embedded } = body.quoteResponse;
+      return { ...body, quoteResponse: { ...embedded, signature: `ed25519:${"1".repeat(64)}` }, status: "SUCCESS" };
+    };
+    const refused = await svc().checkNow(q.id);
+    tamper = null;
+    expect(refused).toMatchObject({ status: "awaiting_deposit", poll_errors: 1 });
   });
 
   it("marks an address that never saw a deposit expired a day after its deadline", async () => {

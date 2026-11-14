@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "motion/react";
-import { ArrowRight, Globe, LoaderCircle, Mail, ShieldCheck, Store, Wallet, XCircle } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { ArrowRight, ChevronDown, Globe, LoaderCircle, Mail, Store, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatToken } from "@/lib/format";
 import { gatewayNetwork, parseAmountInput, plainAmount } from "@/lib/gateway";
-import { amountPresets, rememberReceiptEmail } from "@/lib/checkout";
-import { linkPayCopy } from "@/lib/intents";
+import { checkoutWords } from "@/lib/disclosures";
+import { amountPresets, linkEmailHint, rememberReceiptEmail } from "@/lib/checkout";
+import { isLocalUrl, linkOpensCheckout, linkPayCopy } from "@/lib/intents";
 import { ApiError } from "@/lib/http";
 import { captureOpenerOrigin } from "@/lib/embed";
 import { useCheckoutApi } from "@/lib/use-checkout";
@@ -17,9 +19,12 @@ import type { PublicLink } from "@/lib/schemas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BigAmount, BrandButton, CheckoutLayout, MessageCard, NetworkChip, Notice, PaidDirectly, StateIcon, SummaryFrame } from "./parts";
+import { BigAmount, BrandButton, CheckoutLayout, CopyAction, MessageCard, NetworkChip, Notice, PaidDirectly, StateIcon, SummaryFrame } from "./parts";
 import { RollingText, Shimmer, Stagger, StaggerItem, Swap, T } from "./motion";
 import { NotFoundScreen, UnavailableScreen, useCheckoutTitle } from "./checkout";
+
+const noChange = () => () => undefined;
+const pageUrl = () => `${window.location.origin}${window.location.pathname}`;
 
 export function LinkScreen({ slug }: { slug: string }) {
   const api = useCheckoutApi();
@@ -34,17 +39,31 @@ export function LinkScreen({ slug }: { slug: string }) {
   });
   const info = useQuery({ queryKey: ["checkout-info"], queryFn: () => api!.info(), enabled: Boolean(api), staleTime: Infinity, retry: 1 });
   const [chosen, setChosen] = useState<bigint | null>(null);
+  // A link with a fixed amount that asks for nothing opens its checkout at once: one screen, the address ready to scan.
+  const started = useRef(false);
+  const [directError, setDirectError] = useState<string | null>(null);
+  const direct = q.data ? linkOpensCheckout(q.data) && directError === null : false;
+  useEffect(() => {
+    if (!direct || started.current || !api) return;
+    started.current = true;
+    api
+      .payFromLink(slug, {})
+      .then((created) => router.replace(`/pay/${created.id}`))
+      .catch((e: unknown) => setDirectError(e instanceof Error ? e.message : "The payment could not be started."));
+  }, [direct, api, slug, router]);
+  // The link's own address, without the query an embed adds, read in the browser so the server render stays the same.
+  const shareUrl = useSyncExternalStore(noChange, pageUrl, () => null);
   useCheckoutTitle(q.data ? `${q.data.title} - ${q.data.merchant.name}` : null);
 
   if (q.isError) {
     return q.error instanceof ApiError && q.error.status === 404 ? <NotFoundScreen what="link" /> : <UnavailableScreen error={q.error} onRetry={() => void q.refetch()} />;
   }
-  if (!q.data) {
+  if (!q.data || direct) {
     return (
       <CheckoutLayout
         merchant={null}
         summary={
-          <div aria-busy="true" aria-label="Loading payment link">
+          <div aria-busy="true" aria-label={direct ? "Opening the checkout" : "Loading payment link"}>
             <div className="flex items-center gap-3">
               <Shimmer className="size-9 rounded-lg" />
               <Shimmer className="h-4 w-32" />
@@ -65,7 +84,8 @@ export function LinkScreen({ slug }: { slug: string }) {
     );
   }
   const link = q.data;
-  const networkName = gatewayNetwork(info.data).name;
+  // A live any-chain server takes only real money delivered on NEAR mainnet, whatever network its hub runs on.
+  const networkName = info.data ? checkoutWords(info.data).networkName : gatewayNetwork(info.data).name;
   return (
     <CheckoutLayout
       merchant={link.merchant}
@@ -74,6 +94,8 @@ export function LinkScreen({ slug }: { slug: string }) {
         <LinkPanel
           link={link}
           networkName={networkName}
+          shareUrl={shareUrl}
+          startError={directError}
           onAmountChange={setChosen}
           onSubmit={async (body) => {
             const created = await api!.payFromLink(slug, body);
@@ -86,7 +108,7 @@ export function LinkScreen({ slug }: { slug: string }) {
   );
 }
 
-type SummaryLink = Pick<PublicLink, "merchant" | "livemode" | "title" | "description" | "amount" | "min_amount" | "max_amount" | "token"> & { chain_id?: number };
+type SummaryLink = Pick<PublicLink, "merchant" | "livemode" | "title" | "description" | "amount" | "min_amount" | "max_amount" | "token"> & { chain_id?: number; intents?: PublicLink["intents"] };
 
 function rangeText(link: Pick<PublicLink, "min_amount" | "max_amount" | "token">): string | null {
   const t = link.token;
@@ -118,14 +140,23 @@ export function LinkSummary({ link, networkName, chosen = null }: { link: Summar
           <BigAmount atomic={shown} token={t} />
           {range && <p className="mt-2 text-sm text-muted-foreground">{range}</p>}
         </StaggerItem>
-        <StaggerItem className="mt-6">
-          <NetworkChip name={networkName} symbol={t.symbol} />
-        </StaggerItem>
+        <StaggerItem className="mt-6">{payAnyChain(link.intents) ? <AnyChainChip /> : <NetworkChip name={networkName} symbol={t.symbol} />}</StaggerItem>
         <StaggerItem className="mt-7">
           <PaidDirectly merchant={link.merchant.name} />
         </StaggerItem>
       </Stagger>
     </SummaryFrame>
+  );
+}
+
+/** Whether the buyer pays from another chain only (live mode): the price's network is then not the network they pay on. */
+const payAnyChain = (intents: PublicLink["intents"] | null | undefined) => intents?.mode === "live" && intents.offered;
+
+function AnyChainChip() {
+  return (
+    <span className="inline-flex h-7 items-center gap-1.5 rounded-full border bg-card px-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground">
+      <Globe className="size-3.5 text-[var(--ink)]" aria-hidden /> Pay from Base, Ethereum, Solana and more
+    </span>
   );
 }
 
@@ -138,12 +169,18 @@ export function LinkPanel({
   onSubmit,
   preview = false,
   networkName,
+  shareUrl = null,
+  startError = null,
   onAmountChange,
 }: {
   link: PanelLink;
   onSubmit?: (b: LinkBody) => Promise<void>;
   preview?: boolean;
   networkName?: string;
+  /** The link page's own URL: shown as a QR to scan and pay on a phone. */
+  shareUrl?: string | null;
+  /** Why opening the checkout at once failed; the form then offers the button instead. */
+  startError?: string | null;
   /** The valid amount the payer has chosen so far (open-amount links), for the order column. */
   onAmountChange?: (atomic: bigint | null) => void;
 }) {
@@ -153,7 +190,7 @@ export function LinkPanel({
   const [name, setName] = useState("");
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(startError);
 
   if (!link.active) {
     return (
@@ -189,7 +226,8 @@ export function LinkPanel({
   const atomic = open ? (parsed?.ok ? parsed.atomic : null) : BigInt(link.amount!);
   const amountError = open && touched && parsed && !parsed.ok ? parsed.error : null;
   const fmt = (v: bigint) => formatToken(v, t.symbol, t.decimals);
-  // "Pay from your NEAR wallet" only when that is the one way: a link that offers Any chain says so.
+  // "Pay from your NEAR wallet" only when that is the one way: a link that offers Any chain says so, and in live mode
+  // Any chain is the one way.
   const copy = linkPayCopy(link.intents);
   const choose = (text: string) => {
     setAmount(text);
@@ -216,7 +254,7 @@ export function LinkPanel({
         }
       }}
     >
-      {networkName && (
+      {networkName && !payAnyChain(link.intents) && (
         <div className="flex min-h-8 items-center">
           <NetworkChip name={networkName} symbol={t.symbol} />
         </div>
@@ -284,7 +322,7 @@ export function LinkPanel({
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="link-email">Email</Label>
           <Input id="link-email" type="email" required autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className="h-11 rounded-xl" disabled={preview} />
-          <p className="text-xs text-muted-foreground">For your receipt. {link.merchant.name} sees it.</p>
+          <p className="text-xs text-muted-foreground">{linkEmailHint(link.merchant.name)}</p>
         </div>
       )}
       {link.collect_name && (
@@ -294,14 +332,6 @@ export function LinkPanel({
         </div>
       )}
 
-      <ul className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-        <li className="flex items-center gap-2 rounded-xl border px-3 py-2.5">
-          {link.intents?.offered ? <Globe className="size-4 shrink-0 text-[var(--ink)]" aria-hidden /> : <Wallet className="size-4 shrink-0 text-[var(--ink)]" aria-hidden />} {copy.chip}
-        </li>
-        <li className="flex items-center gap-2 rounded-xl border px-3 py-2.5">
-          <ShieldCheck className="size-4 shrink-0 text-[var(--ink)]" aria-hidden /> A proof you can check on chain
-        </li>
-      </ul>
 
       {error && (
         <Notice tone="negative" icon={<XCircle />}>
@@ -328,6 +358,44 @@ export function LinkPanel({
         </BrandButton>
         <p className="mt-2 text-center text-xs text-muted-foreground">Any payment method fee is shown as its own line before you pay.</p>
       </div>
+      {shareUrl && !isLocalUrl(shareUrl) && <OpenOnPhone url={shareUrl} />}
     </form>
+  );
+}
+
+/**
+ * "Open on another device": the link page's own address as a QR, for a buyer at a desk whose wallet is on a phone. It
+ * stays folded away and says what it is, so it is never taken for a payment address (the payment address comes after
+ * the buyer chooses what to pay with). Not offered for a local address a phone cannot open.
+ */
+function OpenOnPhone({ url }: { url: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex min-h-11 items-center gap-1.5 rounded text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 md:min-h-8"
+      >
+        Open on another device <ChevronDown className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")} aria-hidden />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={T.base} className="w-full overflow-hidden">
+            <div className="flex items-center gap-3.5 rounded-xl border border-dashed p-3">
+              {/* Two modules of quiet zone inside the white tile keep the code readable by phone cameras. */}
+              <div className="shrink-0 rounded-lg border bg-white p-1">
+                <QRCodeSVG value={url} size={96} level="M" marginSize={2} title={`QR code of ${url}`} className="block size-[5.5rem]" />
+              </div>
+              <div className="flex min-w-0 flex-col items-start gap-2">
+                <p className="text-xs text-pretty text-muted-foreground">This code opens this page on your phone. It is not a payment address: you get one after you choose what to pay with.</p>
+                <CopyAction value={url} label="Copy link" toast="Link copied" className="h-11 md:h-9" />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

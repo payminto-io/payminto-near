@@ -971,9 +971,10 @@ export type ReconciliationTransaction = {
   receipt_proof_url: string | null;
   /**
    * Any-chain payments only. `near_delivery`: the credit, the USDC delivered on NEAR (amounts in USDC).
+   * `destination_delivery`: the same for a business that receives USDC on another chain (Base, Arbitrum and the rest).
    * `origin_deposit`: the buyer's deposit on the origin chain (amounts in `origin_asset`'s own units), for the audit trail.
    */
-  leg?: "near_delivery" | "origin_deposit";
+  leg?: "near_delivery" | "destination_delivery" | "origin_deposit";
   origin_asset?: string;
 };
 

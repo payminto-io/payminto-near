@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { computeFees } from "@payminto/protocol";
-import { FileSignature, Globe, Wallet } from "lucide-react";
+import { FileSignature, Globe, Lock, Wallet } from "lucide-react";
 import { useToken } from "@/lib/queries";
 import { formatBps, parseAmountInput, parsePercentToBps, plainAmount } from "@/lib/gateway";
 import { formatToken } from "@/lib/format";
@@ -61,6 +61,8 @@ export function MethodsEditor({
       {rows.map((r, i) => {
         const info = METHOD_INFO[r.method];
         const Icon = info.icon;
+        // The node says why a method cannot change now (in live mode the wallet and voucher methods pay test money).
+        const locked = r.locked_reason ?? null;
         return (
           <li key={r.method} className="flex flex-col gap-3 p-3 sm:p-4">
             <div className="flex items-start gap-3">
@@ -73,6 +75,12 @@ export function MethodsEditor({
                 </label>
                 <p className="text-xs text-muted-foreground">{info.hint}</p>
                 {notes[r.method] && <div className="mt-1 text-xs">{notes[r.method]}</div>}
+                {locked && (
+                  <p id={`m-${r.method}-locked`} className="mt-1 flex items-start gap-1.5 text-xs text-warning">
+                    <Lock className="mt-px size-3.5 shrink-0" aria-hidden />
+                    <span>{locked}</span>
+                  </p>
+                )}
                 {!editableFees && (
                   <p className="mt-1 text-xs">
                     {methodFeeText(r, t)}
@@ -80,7 +88,13 @@ export function MethodsEditor({
                   </p>
                 )}
               </div>
-              <Switch id={`m-${r.method}`} checked={r.enabled} disabled={readOnly} onCheckedChange={(enabled) => set(i, { enabled })} />
+              <Switch
+                id={`m-${r.method}`}
+                checked={r.enabled}
+                disabled={readOnly || Boolean(locked)}
+                aria-describedby={locked ? `m-${r.method}-locked` : undefined}
+                onCheckedChange={(enabled) => set(i, { enabled })}
+              />
             </div>
             {editableFees && r.enabled && <FeeInputs row={r} label={info.label} onChange={(patch) => set(i, patch)} symbol={t.symbol} decimals={t.decimals} />}
           </li>

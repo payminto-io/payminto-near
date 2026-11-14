@@ -10,6 +10,7 @@ import {
   SCHEME,
   X402_VERSION,
   isAccountId,
+  isLivemode,
   isPublicKey,
   MAX_CLAIMS,
   receiptLeaf,
@@ -369,6 +370,8 @@ export function createApi(s: NodeServices): Hono<Vars> {
       publicUrl: config.publicUrl,
       settleIntervalSec: config.settleIntervalSec,
       gateway: s.gateway ? { enabled: true, checkoutBaseUrl: s.gateway.ctx.checkoutBaseUrl } : { enabled: false },
+      // One mode per server: live takes real money (a mainnet hub, or the any-chain checkout on mainnet), test takes test tokens.
+      mode: { livemode: s.gateway?.ctx.livemode ?? isLivemode(config.network), any_chain: s.gateway?.intents?.mode ?? "off" },
       settlement: { intervalSec: config.settleIntervalSec, minCalls: config.settleMinCalls, maxClaimsPerBatch: MAX_CLAIMS },
     }),
   );

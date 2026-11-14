@@ -9,7 +9,8 @@ import { toast } from "sonner";
 import { Check } from "lucide-react";
 import { useApi } from "@/lib/session";
 import { ok, useFeePlans, usePlatform } from "@/lib/operator-queries";
-import { useToken } from "@/lib/queries";
+import { useInfo, useToken } from "@/lib/queries";
+import { lockedForMode } from "@/lib/server-mode";
 import { describeFeePlan, normalizeBrandColor } from "@/lib/gateway";
 import { shortAddress } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,12 @@ function NewMerchantPagePage() {
   const [color, setColor] = useState("");
   const [proof, setProof] = useState<PayoutProof | null>(null);
   const [planId, setPlanId] = useState<string | null>(null);
-  const [methods, setMethods] = useState<MethodRow[]>(DEFAULT_METHODS);
+  const [chosenMethods, setMethods] = useState<MethodRow[]>(DEFAULT_METHODS);
+  const info = useInfo();
+  // On a live any-chain server the NEAR wallet and Budgets are locked off, as the server keeps them; Any chain is
+  // turned on later in Settings, once the business proves its NEAR mainnet account.
+  const methods = lockedForMode(chosenMethods, info.data);
+  const anyChainLive = info.data?.mode?.any_chain === "live";
   const [busy, setBusy] = useState(false);
   // Until the operator picks one, the platform's default plan is selected, the same plan the node would apply.
   const defaultPlanId = platform.data?.default_fee_plan_id ?? plans.data?.[0]?.id;
@@ -49,7 +55,7 @@ function NewMerchantPagePage() {
   const slugOk = /^[a-z0-9][a-z0-9-]{1,31}$/.test(finalSlug);
   const emailOk = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const colorOk = !color.trim() || normalizeBrandColor(color) !== null;
-  const canNext = [name.trim() && slugOk && emailOk && colorOk, proof !== null, plan !== null, methods.some((m) => m.enabled), true][step];
+  const canNext = [name.trim() && slugOk && emailOk && colorOk, proof !== null, plan !== null, anyChainLive || methods.some((m) => m.enabled), true][step];
 
   async function create() {
     if (!proof || !plan) return;
@@ -143,7 +149,16 @@ function NewMerchantPagePage() {
               <FeePreview amount={25_000_000n} plan={plan} />
             </div>
           )}
-          {step === 3 && <MethodsEditor rows={methods} onChange={setMethods} editableFees />}
+          {step === 3 && (
+            <div className="flex flex-col gap-3">
+              <MethodsEditor rows={methods} onChange={setMethods} editableFees />
+              {anyChainLive && (
+                <p className="text-sm text-muted-foreground">
+                  Any chain (NEAR Intents) is turned on in the business&apos;s Settings once it proves its NEAR mainnet account. Until then it takes no payments.
+                </p>
+              )}
+            </div>
+          )}
           {step === 4 && (
             <Fields>
               <Field label="Name">{name}</Field>
@@ -163,6 +178,7 @@ function NewMerchantPagePage() {
               <Field label="Pricing plan">{plan && `${plan.name}: ${describeFeePlan(plan, t)}`}</Field>
               <Field label="Methods">
                 <span className="flex flex-col gap-0.5">
+                  {anyChainLive && !methods.some((m) => m.enabled) && <span>Any chain (NEAR Intents), after the account is proved in Settings</span>}
                   {methods.filter((m) => m.enabled).map((m) => (
                     <span key={m.method}>
                       {METHOD_INFO[m.method].label} <span className="text-muted-foreground">· {methodFeeText(m, t)}{(m.fee_bps || BigInt(m.fee_fixed)) ? `, ${m.bearer} pays` : ""}</span>

@@ -17,12 +17,12 @@ import type { Hono } from "hono";
 import { createLogger as createRelayerLogger, loadConfig as loadRelayerConfig, startRelayer, type RunningRelayer } from "@payminto/relayer";
 import { FakeOneClick } from "@payminto/near-addons/intents/fake-server";
 import { createLocalAccounts, drainNear, type LocalAccounts } from "./accounts.ts";
-import { DEFAULT_MAINNET_RPC, intentsNodeEnv, payoutStatusText, readMainnetPayout, type MainnetPayout } from "./intents-live.ts";
+import { DEFAULT_MAINNET_RPC, intentsNodeEnv, payoutStatusText, readMainnetPayout, type MainnetPayout, type SimulatedIntents } from "./intents-live.ts";
 import { runActivity, type ActivityResult } from "./activity.ts";
 import { AgentDesk } from "./agents.ts";
 import { DASHBOARD_DIR, NETWORK, type LocalOptions, type Ports } from "./config.ts";
 import { DashboardProcess } from "./dashboard.ts";
-import { assertLocalDatabase, clearLock, dataPaths, DataError, reapStaleDashboard, runningStack, wipeData, writeLock, type DataPaths } from "./data.ts";
+import { assertLocalDatabase, clearLock, dataPaths, DataError, reapStaleDashboard, runningStack, startClean, writeLock, type DataPaths } from "./data.ts";
 import { choosePorts } from "./ports.ts";
 import { remoteApp } from "./remote.ts";
 import { registerServices, type RegisteredService } from "./services.ts";
@@ -126,11 +126,12 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     // The dashboard is reached as localhost; 127.0.0.1 is the same page for a person who types it.
     const dashboardOrigins = [urls.dashboard, `http://127.0.0.1:${ports.dashboard}`];
 
-    // A database from an earlier run describes a chain that is gone, so every start begins clean. See data.ts.
-    const wiped = wipeData(paths.dir);
+    // A database from an earlier run describes a chain that is gone, so every start begins clean, unless it still holds
+    // real money of a live run that is not final. See data.ts.
+    const wiped = startClean(paths);
     if (wiped.removed) say(`Removed the data of the previous run (${paths.dir}): its chain stopped with it, so its database describes Budgets and batches that no longer exist.`);
     mkdirSync(paths.logs, { recursive: true });
-    writeLock(paths, { pid: process.pid, startedAt: new Date().toISOString(), mode: opts.mode });
+    writeLock(paths, { pid: process.pid, startedAt: new Date().toISOString(), mode: opts.mode, intents: opts.intents.mode });
     cleanups.push(() => clearLock(paths));
 
     // ---- 1. The chain: sandbox node, mock USDC, the hub from the committed wasm, locked. The demo's hub factory.
@@ -211,41 +212,19 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     });
     // Built from nothing but this run's values: no variable of the caller's environment reaches the node, least of
     // all DB_PATH.
-    const config = loadConfig({
-      PORT: String(ports.node),
-      HOST: "127.0.0.1",
-      NETWORK,
-      HUB_ACCOUNT: hub.names.hub,
-      TOKEN_ACCOUNT: hub.names.token,
-      OPERATOR_ACCOUNT: hub.names.operator,
-      NODE_SIGNING_SEED: nodeSigningSeed,
-      ADMIN_TOKEN: randomBytes(32).toString("hex"),
-      DB_PATH: paths.db,
-      PUBLIC_URL: urls.node,
-      PUBLIC_CHECKOUT_URL: urls.dashboard,
-      PUBLIC_DASHBOARD_URL: urls.dashboard,
-      CORS_ORIGINS: dashboardOrigins.join(","),
-      GATEWAY_ENABLED: "true",
-      PLATFORM_FEE_ACCOUNT: accounts.by.platform.accountId,
-      // A person settles and pays out by hand in the walkthrough, so neither runs on a timer.
-      SETTLE_INTERVAL_SEC: "0",
-      PAYOUT_INTERVAL_SEC: "0",
-      FUNDS_REFRESH_SEC: "5",
-      GATEWAY_WATCH_INTERVAL_MS: "1000",
-      // Local logins only: the default cost makes every sign-in take about a second for no gain here.
-      // The payee check is on, as on any node. A sandbox has no indexer, so account ages are not checked.
-      PAYEE_CHECK_INDEXER: "off",
-      PASSWORD_HASH_COST: "14",
-      // Every browser reaches the node through the dashboard's /api path, so the node sees one client address. The
-      // default of 20 auth requests a minute per address is then shared by every tab, and a person clicking around
-      // hits it; on one machine there is nobody to keep out.
-      AUTH_RATE_LIMIT_PER_MIN: "600",
-      LOG_LEVEL: "info",
-      // The any-chain checkout. Simulated: the fake 1Click server, its test key, and this chain standing in for mainnet.
-      // Live: the real 1Click API and NEAR mainnet, for that rail only (see intents-live.ts).
-      ...intentsNodeEnv(opts.intents, oneclick ? { baseUrl: urls.oneclick, managerPublicKey: oneclick.managerPublicKey, rpcUrl, token: hub.names.token, solver: accounts.solver } : null),
-      ...hub.nodeEnv,
-    });
+    const config = loadConfig(
+      localNodeEnv({
+        opts,
+        ports,
+        urls,
+        dashboardOrigins,
+        hub: { names: hub.names, nodeEnv: hub.nodeEnv },
+        nodeSigningSeed,
+        dbPath: paths.db,
+        platformAccount: accounts.by.platform.accountId,
+        simulated: oneclick ? { baseUrl: urls.oneclick, managerPublicKey: oneclick.managerPublicKey, rpcUrl, token: hub.names.token, solver: accounts.solver } : null,
+      }),
+    );
     let node: ClearingNode;
     try {
       node = await startNode(config, { logger });
@@ -356,7 +335,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
     let activity: ActivityResult | null = null;
     if (!opts.empty) {
       say("5. Activity, through the real SDK and the same routes a person uses:");
-      activity = await runActivity({ urls, hub, accounts, setup, desk, services, signer, say });
+      activity = await runActivity({ urls, hub, accounts, setup, desk, services, signer, say, liveIntents: !!live });
     }
 
     // ---- 6. The dashboard.
@@ -367,7 +346,7 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
       const d = dashboard;
       cleanups.push(() => d.stop());
       process.on("exit", () => d.killSync());
-      writeLock(paths, { pid: process.pid, startedAt: new Date().toISOString(), mode: opts.mode, dashboardPid: d.pid, dashboardUrl: d.url });
+      writeLock(paths, { pid: process.pid, startedAt: new Date().toISOString(), mode: opts.mode, intents: opts.intents.mode, dashboardPid: d.pid, dashboardUrl: d.url });
       await d.ready();
       d.onExit((how) => crash("The dashboard dev server", `it stopped on its own (${how}). Its log is ${paths.dashboardLog}.`));
     }
@@ -414,3 +393,59 @@ export async function startStack(opts: LocalOptions, say: (line: string) => void
 }
 
 export { chainIdOf };
+
+/**
+ * The clearing node's environment for this run, built from nothing but this run's values: no variable of the caller's
+ * environment reaches the node, least of all DB_PATH. With `--intents live` the node applies the production checks
+ * (real money); this run passes them by setting what they ask for, and its dashboard on this machine (http://localhost)
+ * is the one local value they accept.
+ */
+export function localNodeEnv(o: {
+  opts: Pick<LocalOptions, "intents">;
+  ports: Pick<Ports, "node">;
+  urls: Pick<Urls, "node" | "dashboard">;
+  dashboardOrigins: string[];
+  hub: { names: { hub: string; token: string; operator: string }; nodeEnv: Record<string, string> };
+  nodeSigningSeed: string;
+  dbPath: string;
+  platformAccount: string;
+  simulated: SimulatedIntents | null;
+}): Record<string, string> {
+  return {
+    PORT: String(o.ports.node),
+    HOST: "127.0.0.1",
+    NETWORK,
+    HUB_ACCOUNT: o.hub.names.hub,
+    TOKEN_ACCOUNT: o.hub.names.token,
+    OPERATOR_ACCOUNT: o.hub.names.operator,
+    NODE_SIGNING_SEED: o.nodeSigningSeed,
+    ADMIN_TOKEN: randomBytes(32).toString("hex"),
+    DB_PATH: o.dbPath,
+    PUBLIC_URL: o.urls.node,
+    PUBLIC_CHECKOUT_URL: o.urls.dashboard,
+    PUBLIC_DASHBOARD_URL: o.urls.dashboard,
+    CORS_ORIGINS: o.dashboardOrigins.join(","),
+    GATEWAY_ENABLED: "true",
+    PLATFORM_FEE_ACCOUNT: o.platformAccount,
+    // A person settles and pays out by hand in the walkthrough, so neither runs on a timer.
+    SETTLE_INTERVAL_SEC: "0",
+    PAYOUT_INTERVAL_SEC: "0",
+    FUNDS_REFRESH_SEC: "5",
+    GATEWAY_WATCH_INTERVAL_MS: "1000",
+    // The payee check is on, as on any node. A sandbox has no indexer, so account ages are not checked.
+    PAYEE_CHECK_INDEXER: "off",
+    // Local logins only: the default cost makes every sign-in take about a second for no gain here. Live any-chain
+    // mode takes real money, so the node applies the production checks and this run uses the production cost.
+    PASSWORD_HASH_COST: o.opts.intents.mode === "live" ? "17" : "14",
+    // Every browser reaches the node through the dashboard's /api path, so the node sees one client address. The
+    // default of 20 auth requests a minute per address is then shared by every tab, and a person clicking around
+    // hits it; on one machine there is nobody to keep out.
+    AUTH_RATE_LIMIT_PER_MIN: "600",
+    LOG_LEVEL: "info",
+    // The any-chain checkout. Simulated: the fake 1Click server, its test key, and this chain standing in for mainnet.
+    // Live: the real 1Click API and NEAR mainnet, for that rail only (see intents-live.ts).
+    ...intentsNodeEnv(o.opts.intents, o.simulated),
+    ...o.hub.nodeEnv,
+  };
+}
+

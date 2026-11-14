@@ -57,6 +57,11 @@ const envSchema = z.object({
   PAYEE_CHECK_INDEXER_KEY: z.string().min(8).max(200).optional(),
   /** `quote_market_agent`: quotes from the NEAR AI Agent Market, checked against this wallet's limits. on (default) or off. */
   AGENT_MARKET: z.enum(["on", "off"]).default("on"),
+  /**
+   * `invoice_pay_options`, `invoice_deposit` and `invoice_status`: paying an invoice of NODE_URL from another chain, the
+   * deposit sent by the agent's own wallet. on (default) or off. The tools never sign or send.
+   */
+  ANY_CHAIN_INVOICES: z.enum(["on", "off"]).default("on"),
   /** Read-only NEAR mainnet RPC for the payee check of a market quote. Defaults to the public mainnet endpoints. */
   AGENT_MARKET_RPC_URL: z.url("must be an http(s) NEAR mainnet RPC URL").optional(),
   /** Durable receipt and signed-position store (SQLite). Processes sharing one agent key must share this file. */
@@ -97,6 +102,8 @@ export type McpConfig = {
   payeeCheck: { rpcUrl: string; indexer: "nearblocks" | "off"; indexerKey: string | null; codeStorePath: string } | null;
   /** The Agent Market quote tool, or null when AGENT_MARKET=off. `rpcUrl` is the mainnet RPC of its payee check. */
   market: { rpcUrl: string | null; payeeCheck: { indexer: "nearblocks" | "off"; indexerKey: string | null } | null } | null;
+  /** The any-chain invoice tools (ANY_CHAIN_INVOICES). */
+  anyChainInvoices: boolean;
   http: { port: number; host: string; token: HttpTokenSource };
 };
 
@@ -162,6 +169,7 @@ export function loadMcpConfig(env: Record<string, string | undefined> = process.
     payeeCheck,
     // The market's payee is a mainnet account, which NearBlocks indexes, whatever network the Budget is on.
     market: e.AGENT_MARKET === "off" ? null : { rpcUrl: e.AGENT_MARKET_RPC_URL ?? null, payeeCheck: payeeCheck ? { indexer: e.PAYEE_CHECK_INDEXER === "off" ? "off" : "nearblocks", indexerKey: e.PAYEE_CHECK_INDEXER_KEY ?? null } : null },
+    anyChainInvoices: e.ANY_CHAIN_INVOICES === "on",
     http: { port: e.MCP_HTTP_PORT, host: e.MCP_HTTP_HOST, token: httpTokenSource(e) },
   };
 }

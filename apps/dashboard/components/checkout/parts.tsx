@@ -353,12 +353,14 @@ export function BrandButton({ className, children, ...props }: React.ComponentPr
 }
 
 /** A labelled copy button ("Copy address") whose icon morphs into a check, with a "Copied" toast in the checkout. */
-export function CopyAction({ value, label, className, onCopied, toast = "Copied" }: { value: string; label: string; className?: string; onCopied?: () => void; toast?: string }) {
+/** A copy button; `short` is the visible text where space is tight ("Copy"), with `label` kept as its accessible name. */
+export function CopyAction({ value, label, short, className, onCopied, toast = "Copied" }: { value: string; label: string; short?: string; className?: string; onCopied?: () => void; toast?: string }) {
   const [done, setDone] = useState(false);
   const show = useToast();
   return (
     <button
       type="button"
+      aria-label={short ? label : undefined}
       onClick={() => {
         void navigator.clipboard?.writeText(value).then(() => {
           setDone(true);
@@ -374,7 +376,7 @@ export function CopyAction({ value, label, className, onCopied, toast = "Copied"
       )}
     >
       <CopyGlyph done={done} />
-      <span aria-live="polite">{done ? "Copied" : label}</span>
+      <span aria-live="polite">{done ? "Copied" : (short ?? label)}</span>
     </button>
   );
 }

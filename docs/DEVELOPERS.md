@@ -830,7 +830,7 @@ The permission is the business permission the route checks.
 | `GET /v1/payments`, `GET /v1/payments/:id` | `payments.read` | List (filters `status`, `method`, `link_id`, `email`, `q`, `refunded`) and detail with credits, refunds and timeline |
 | `POST /v1/payments/:id/cancel` | `payments.write` | Cancels an open payment |
 | `POST /v1/links`, `GET /v1/links`, `GET /v1/links/:id`, `PATCH /v1/links/:id` | `links.write` to change, `payments.read` to read | Payment links with a fixed amount, or a payer-chosen amount between `min_amount` and `max_amount` |
-| `POST /v1/refunds` | `refunds.request` | Creates a refund; with `refunds.issue` the answer carries the `transfer` to sign |
+| `POST /v1/refunds` | `refunds.request` | Creates a refund; with `refunds.issue` the answer carries the `transfer` to sign. A payment from another chain is refunded by hand: with `manual`, `refunds.issue` records it (see "Refunds of payments from another chain") |
 | `GET /v1/refunds`, `GET /v1/refunds/:id`, `PATCH /v1/refunds/:id` | `payments.read`, `refunds.request` | List, read, set the internal note |
 | `POST /v1/refunds/:id/approve` | `refunds.approve` | An Admin approves a requested refund |
 | `POST /v1/refunds/:id/submit` | `refunds.issue` | Body `{ "txHash" }`: the merchant's own refund transaction, which the node then checks |
@@ -840,7 +840,7 @@ The permission is the business permission the route checks.
 | `POST /v1/api-keys`, `GET /v1/api-keys`, `DELETE /v1/api-keys/:id` | `developers.manage`, people only | Business API keys; the secret is shown once |
 | Webhook endpoints | `developers.manage` | See "Webhooks" |
 | `GET /v1/screening/decisions`, `GET /v1/screening/deny-list`, `POST /v1/screening/deny-list`, `DELETE /v1/screening/deny-list/:address` | `screening.read`, `screening.manage` | Refused payment attempts, and the business's blocked accounts |
-| `GET /v1/merchants/:id/methods`, `PUT /v1/merchants/:id/methods` | `payments.read`, `business.update` | Payment methods; a business may only enable or disable them |
+| `GET /v1/merchants/:id/methods`, `PUT /v1/merchants/:id/methods` | `payments.read`, `business.update` | Payment methods; a business may only enable or disable them. Each carries `locked_reason`, see "Live any-chain mode" |
 | `POST /v1/merchants/:id/payout` | `payout.change` | Changes the payout account with a NEP-413 proof |
 
 `POST /v1/payments` with `{ "amount": "2500000", "description": "Pro plan", "reference": "inv-9" }` answers `201`:
@@ -918,6 +918,88 @@ A refund is the merchant's own transfer.
 
 The refund request bodies use camelCase (`paymentId`, `requestApproval`, `txHash`), unlike the snake_case objects.
 
+#### Refunds of payments from another chain
+
+A payment paid through the any-chain checkout (`method` `oneclick`) cannot be refunded with a NEAR transfer: the buyer has no NEAR account, only an address on the chain they paid from.
+The business sends the refund from its own wallet on that chain, then records it on the node.
+
+`POST /v1/refunds` for such a payment without `manual` answers `409 REFUND_MANUAL_REQUIRED`, and nothing is created.
+`details` says where to send it; `refund_to` is the buyer's full refund address, since this is an authenticated business call:
+
+```json
+{
+  "error": {
+    "code": "REFUND_MANUAL_REQUIRED",
+    "message": "This payment came from another chain through NEAR Intents. Send the refund from your own wallet on that chain, then record it here.",
+    "details": {
+      "chain": "base",
+      "chain_name": "Base",
+      "symbol": "USDC",
+      "refund_to": "0x2527d02599ba641c19fea793cd0f167589a0f10d",
+      "deposit_tx": { "hash": "0x9f3c...", "explorer_url": "https://basescan.org/tx/0x9f3c..." },
+      "refundable": "5000000"
+    }
+  }
+}
+```
+
+`symbol` is the token the buyer paid with, `deposit_tx` is the buyer's deposit (null when 1Click reported none), and `refundable` is in USDC base units.
+Once the refund is sent, the same route records it:
+
+```json
+{
+  "paymentId": "pay_...",
+  "amount": "2000000",
+  "reason": "returned item",
+  "note": "sent from our Base wallet",
+  "manual": { "chain": "base", "tx_hash": "0xabab...abab" }
+}
+```
+
+It needs `refunds.issue` (otherwise `403 FORBIDDEN` with `details.permission`), and refuses `to` and `requestApproval`.
+`chain` must be the payment's origin chain (`400 MANUAL_REFUND_CHAIN_MISMATCH`), and `tx_hash` a hash of that chain: `0x` and 64 hex characters on Base, Ethereum, Arbitrum and Polygon, a base58 signature of 64 to 88 characters on Solana (`400 INVALID_TX_HASH`).
+The amount must be within what is refundable (`400 REFUND_EXCEEDS_PAID`), one transaction records one refund (`409 TX_ALREADY_USED`), and a payment paid on NEAR is refused (`409 MANUAL_REFUND_NOT_ALLOWED`).
+The node moves nothing and cannot read the origin chain, so the refund is `succeeded` at once: the payment's `amount_refunded` and `refund_status` move, and `refund.succeeded` goes out, as for a checked refund.
+The answer, and every refund object, carries `manual` (null for a NEAR refund), and `transfer` is null:
+
+```json
+{
+  "id": "re_...",
+  "payment_id": "pay_...",
+  "amount": "2000000",
+  "to": "base:0x2527d02599ba641c19fea793cd0f167589a0f10d",
+  "status": "succeeded",
+  "method": "manual",
+  "verification": "manual",
+  "tx_hash": null,
+  "manual": {
+    "chain": "base",
+    "chain_name": "Base",
+    "tx_hash": "0xabab...abab",
+    "explorer_url": "https://basescan.org/tx/0xabab...abab",
+    "recorded_by": "usr_..."
+  },
+  "transfer": null
+}
+```
+
+`to` is the buyer's refund address prefixed by its chain, like the payment's `payer`, and `recorded_by` is the user, the API key or `recovery_key` that recorded it.
+The reconciliation report lists the manual refund under its payment with the origin-chain transaction and explorer link.
+
+#### Live any-chain mode
+
+With `INTENTS_CHECKOUT=live` the hub still runs on a test network, so a NEAR wallet or voucher payment would be test money next to real money on one invoice.
+The node therefore offers only `oneclick` in live mode, for every business:
+
+- `GET /v1/checkout/:id` lists `methods: ["oneclick"]` at most, and `wallet` is always null: the node signs no wallet checkout terms.
+- `GET /v1/links/public/:slug` lists only the `oneclick` method.
+- `POST /v1/checkout/:id/method`, `POST /v1/checkout/:id/wallet`, `POST /v1/payments` or a link payment with `method` `wallet` or `voucher`, and a voucher payment answer `409 METHOD_NOT_OFFERED` with the reason below; an agent asking `/v1/pay/...` is offered no voucher requirement.
+- In `GET /v1/merchants/:id/methods`, `PUT /v1/merchants/:id/methods` and the profile's `methods`, `wallet` and `voucher` are `enabled: false` with `locked_reason: "Off in live mode: the hub runs on a test network, and this server takes only real money from other chains."`; every other method has `locked_reason: null`.
+- Turning a locked method on answers `409 METHOD_NOT_OFFERED` with that reason.
+  Sending it back off changes nothing, and the stored setting returns when the node runs another mode.
+
+Simulated mode is unchanged.
+
 ### Gateway (platform)
 
 | Method and path | Permission | Does |
@@ -937,9 +1019,9 @@ A payout proof is `{ payout, timestamp, public_key, signature }`: a NEP-413 `sig
 |---|---|
 | `GET /v1/checkout/:id` | The public view of a payment, with the wallet transaction to send |
 | `GET /v1/checkout/:id/quote?method=` | The amount due for a method |
-| `POST /v1/checkout/:id/method` | Re-quotes an open payment for `wallet` |
-| `POST /v1/checkout/:id/wallet` | The payer's wallet sent the transaction; the node asks the hub now; body `{ "tx_hash"? }` |
-| `POST /v1/checkout/:id/email` | Stores the payer's email on the payment |
+| `POST /v1/checkout/:id/method` | Re-quotes an open payment for `wallet`; `409 INTENTS_IN_FLIGHT` while a deposit from another chain is on its way for the payment, `409 METHOD_NOT_OFFERED` in live any-chain mode |
+| `POST /v1/checkout/:id/wallet` | The payer's wallet sent the transaction; the node asks the hub now; body `{ "tx_hash"? }`; the same two refusals |
+| `POST /v1/checkout/:id/email` | Stores the payer's email on the payment, while it can be paid or once it is paid; never replaces one (`409 EMAIL_ALREADY_SET`). See "Receipt email" |
 | `GET /v1/checkout/:id/order` | The canonical order JSON that `order_hash` hashes |
 | `GET /v1/checkout/:id/proof` | The evidence that the payment was paid, read from the chain now |
 | `GET /v1/checkout/:id/events` | Server-sent `status` events for the checkout page |
@@ -977,6 +1059,12 @@ The `wallet` object of `GET /v1/checkout/:id`:
   }
 }
 ```
+
+#### Receipt email
+
+When a payment becomes paid and has a customer email, or when the buyer saves an email on a payment that is already paid, the node queues one receipt through its mailer: subject `Receipt from <business name>`, plain text with the amount and token, how it was paid (for a payment from another chain, `From USDC on Base through NEAR Intents`), when (UTC), the receipt link (the payment's `checkout_url`) and the business's support email when set.
+It is sent at most once per payment: `payments.receipt_sent_at` is set in the transaction that queues it, so a restart or a second save never sends it twice.
+Without SMTP it is kept in the email outbox (Platform, Email outbox) and logged as `[email] to=... kind=receipt link=...`.
 
 The hub records the payment under `terms.payment_id`, and that record is the proof.
 A credit in `GET /v1/checkout/:id/proof` for a wallet payment:
@@ -1051,7 +1139,7 @@ Public checkout routes (no auth):
 | Method and path | Does |
 |---|---|
 | `GET /v1/checkout/:id/intents/options` | `IntentsOptions`: each offered origin with an indicative price from a signed dry quote, or greyed with a reason; cached 30 seconds |
-| `POST /v1/checkout/:id/intents/quotes` | Body `{ "origin_asset", "refund_to" }`; `201` with a new `IntentsQuote`, or `200` with the active one for the same origin and refund address when 10 minutes or more are left; `Idempotency-Key` honored; 10 per client address per minute |
+| `POST /v1/checkout/:id/intents/quotes` | Body `{ "origin_asset", "refund_to"? }`; without `refund_to` a returned deposit goes to the business's NEAR account through NEAR Intents (`refund_type: "INTENTS"`), with it to the buyer's address on the origin chain (`ORIGIN_CHAIN`); `201` with a new `IntentsQuote`, or `200` with the active one for the same origin and refund when 10 minutes or more are left; up to 8 active per payment (one per offered origin); `Idempotency-Key` honored; 10 per client address per minute |
 | `GET /v1/checkout/:id/intents/quotes/:qid` | One `IntentsQuote` |
 | `POST /v1/checkout/:id/intents/quotes/:qid/deposit` | Body `{ "tx_hash" }` (the buyer's transaction on the origin chain); forwards it to 1Click to speed detection and checks now; answers the `IntentsQuote` |
 | `POST /v1/checkout/:id/intents/quotes/:qid/simulate` | Simulated mode only, `404` in live mode: body `{ "amount"? }` in the origin token's base units (default `send_exactly`); the fake server receives that deposit; answers the `IntentsQuote` |
@@ -1156,9 +1244,43 @@ Show `deadline` (when the deposit address goes inactive), never the payment's `e
 `swap_cost` is in the origin token for a stablecoin and in USD (`unit: "USD"`, `amount` in micro-dollars) for ETH.
 `price_buffer` goes back to the refund address when the price holds.
 Every fee number comes from the signed quote; none is a constant.
-On the public routes `refund_to` is masked; the merchant sees it in full.
+On the public routes `refund_to` is masked (a buyer's address); the merchant sees it in full, and a business account (`refund_type: "INTENTS"`) is never masked.
+`send_by` is when the buyer must send by: the deadline this node asked 1Click for, the earlier of the payment's expiry and the quote's 30-minute lifetime.
+`deadline` is 1Click's own, which can be later (when its refunds begin); a checkout shows `send_by`.
 `steps[].state` is `done`, `current`, `pending` or `failed`.
 `explorer_url` on a transaction is null when there is no explorer (simulated mode, and 1Click sends none).
+
+`origin` also carries `contract_address` (the ERC-20 contract or SPL mint, null for a native coin) and `chain_id` (the EIP-155 chain id on an EVM chain, null elsewhere).
+Both are optional in the type, because a node older than the fields leaves them out.
+
+Payment URIs: `depositPaymentUri(origin, depositAddress, amountAtomic)` from `@payminto/protocol` (`packages/protocol/src/payment-uri.ts`) turns a quote into the URI a mobile wallet scans, so the QR code fills in the token, the network, the address and the amount.
+
+```ts
+import { depositPaymentUri } from "@payminto/protocol";
+
+const o = quote.origin;
+const uri = depositPaymentUri(
+  { chain: o.chain, chainId: o.chain_id ?? null, contractAddress: o.contract_address ?? null, decimals: o.decimals, symbol: o.symbol },
+  quote.deposit_address,
+  quote.send_exactly.amount,
+);
+```
+
+| Origin | URI | Standard |
+|---|---|---|
+| ERC-20 on an EVM chain | `ethereum:<contract>@<chain id>/transfer?address=<deposit address>&uint256=<base units>` | [EIP-681](https://eips.ethereum.org/EIPS/eip-681) |
+| Native ETH on an EVM chain | `ethereum:<deposit address>@<chain id>?value=<wei>` | EIP-681 |
+| A token on Solana (`chain` `sol`) | `solana:<deposit address>?amount=<decimal amount>&spl-token=<mint>` | [Solana Pay](https://docs.solanapay.com/spec) transfer request |
+
+USDC on Base for the quote above is `ethereum:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913@8453/transfer?address=0x87151c5ac911a4459762ce215649313cd369dc05&uint256=4509585`.
+The chain id is always written, so a wallet switches to that network instead of sending on the one it is on.
+The Solana amount is in token units without trailing zeros (`4.5`), as Solana Pay asks; the EVM amounts are base units.
+The function answers null for any other chain, for an address that is not a hex address (EVM) or a base58 key (Solana), for an amount that is not a positive integer, and for missing data, for example a token row without its contract or a chain without its id.
+Show the address and the amount alone when it is null; never build a URI by hand.
+
+"Receive as": a business chooses which tokens it receives any-chain payments in, USDC on NEAR, Base, Arbitrum, Ethereum, Polygon or Optimism, and which one is its default.
+A delivery to NEAR is checked over NEAR RPC as above.
+A delivery off NEAR is checked over that chain's JSON-RPC, the public endpoint unless `INTENTS_RPC_<CHAIN>` (`INTENTS_RPC_BASE`, `INTENTS_RPC_ARB`, `INTENTS_RPC_ETH`, `INTENTS_RPC_POL`, `INTENTS_RPC_OP`) names another.
 
 States of a quote (`status`):
 
@@ -1269,7 +1391,9 @@ Webhooks: `payment.processing`, `payment.paid`, `payment.overpaid` and `payment.
 Subscribe to them like any other event.
 
 Reconciliation: an any-chain payment is one row with `method` `oneclick`, `payer` the buyer's refund address prefixed by its chain (`base:0x...`), `currency` `USDC (NEAR mainnet)`, and four columns at the end of the CSV: `settlement_network`, `origin_asset`, `origin_amount` and `deposit_address`.
-Its `transactions` have a `leg`: `origin_deposit` (the buyer's deposit, in the origin token's units) and `near_delivery` (the credit, in USDC).
+A deposit that never reached the business, returned by 1Click (a short deposit) or failed, is listed too: in JSON under its payment's row as `deposits` (`quote_id`, `status` `returned` or `failed`, `origin_asset`, `chain`, `chain_name`, `symbol`, `deposit_address`, `refund_to`, `deposited`, `returned`, `refund_fee` in the origin token's units with `base_units`, `refund_reason`, `origin_txs`, `other_txs`), and in the CSV as its own line under the payment line, with `status` `deposit_returned` or `deposit_failed`, the deposit in `origin_amount`, what came back and the refund fee 1Click kept in `description`, and empty money columns.
+These lines add nothing to the totals: no money reached the business.
+Its `transactions` have a `leg`: `origin_deposit` (the buyer's deposit, in the origin token's units), and `near_delivery` or, for a business that receives on another chain, `destination_delivery` (the credit, in USDC).
 The buyer bears the swap cost, so `fee_total` is 0 and `net_amount` equals the amount.
 
 `packages/near-addons/README.md` section 1 has the 1Click side: the quote checks, the fake server and the `quote-in` command.
@@ -1602,6 +1726,29 @@ await owner.submit({ terms, policy, label: "research agent" }); // after both ar
 `GatewayClient` wraps the gateway routes of the node on NEAR: payments, links, refunds, webhooks, the merchant profile, screening, the reconciliation report and the public directory with a business API key, and merchants, fee plans and the platform with the operator's token.
 Its types are the NEAR shapes in `@payminto/protocol`: accounts are NEAR account ids, and the payment methods are `wallet` and `voucher`.
 `signPayoutProof(signer, merchantIdOrNew, scope)` builds the NEP-413 payout proof, with `scope` from `client.payoutScope()`.
+
+The public checkout calls need no key and never send one, so a buyer's program builds the client without `apiKey`; any call that needs a key then throws before it sends anything.
+Paying a payment from another chain:
+
+```ts
+import { GatewayClient } from "@payminto/sdk";
+import { depositPaymentUri } from "@payminto/protocol";
+
+const client = new GatewayClient({ nodeUrl: "http://localhost:8787" });
+const { options } = await client.checkout.anyChainOptions(paymentId);
+const row = options.find((r) => r.available && r.origin.chain === "base" && r.origin.symbol === "USDC")!;
+const quote = await client.checkout.createAnyChainQuote(paymentId, { originAsset: row.origin.asset, refundTo: myBaseAddress, idempotencyKey: crypto.randomUUID() });
+// Send exactly quote.send_exactly.amount of USDC on Base to quote.deposit_address before quote.deadline, from your own wallet.
+const again = await client.checkout.anyChainQuote(paymentId, quote.id);
+```
+
+| Method | Route | Returns |
+|---|---|---|
+| `checkout.anyChainOptions(paymentId)` | `GET /v1/checkout/:id/intents/options` | `IntentsOptions` |
+| `checkout.createAnyChainQuote(paymentId, { originAsset, refundTo, idempotencyKey? })` | `POST /v1/checkout/:id/intents/quotes` with `Idempotency-Key` when given | `IntentsQuote` |
+| `checkout.anyChainQuote(paymentId, quoteId)` | `GET /v1/checkout/:id/intents/quotes/:qid` | `IntentsQuote` |
+
+`checkout.retrieve(paymentId)` carries `intents` (`IntentsCheckout`, with `active_quote`), and every error is a `NodeApiError` with the node's code, for example `INTENTS_UNAVAILABLE` or `INVALID_REFUND_ADDRESS`, and its plain message in `reason`.
 The merchant tools in `packages/sdk/src/merchant-tools.ts`, which the merchant MCP server serves, act through this client.
 `packages/sdk/README.md` has the example.
 
@@ -1619,8 +1766,13 @@ The merchant tools in `packages/sdk/src/merchant-tools.ts`, which the merchant M
 | `prove_receipt` | no | Proves a call against the root the hub stores |
 | `check_payee` | no | The wallet's own verdict about a NEAR account before paying it: allow, warn or block, with the reasons |
 | `quote_market_agent` | no | Asks an agent on the NEAR AI Agent Market for its price and checks it against the wallet's limits and the payee check. It quotes and decides only: nothing here pays the market |
+| `invoice_pay_options { invoice }` | no | The tokens that can pay a live invoice of this server from another chain, with estimates, or greyed with the reason. `invoice` is a payment id, or a checkout or payment link URL of this server; a fixed-amount link creates a new invoice to pay |
+| `invoice_deposit { payment_id, origin, refund_to? }` | no | A deposit address for one origin (`base:USDC`): send exactly, token, network, deposit address, deadline, the payment URI and a plain warning |
+| `invoice_status { payment_id, quote_id? }` | no | `paid`, `waiting`, `returned`, `failed` or `expired`, with the deposit and the delivery transaction |
 
 No tool signs a NEAR transaction, and no tool approves a payee.
+The invoice tools sign and send nothing either: the agent sends the deposit from its own wallet on the origin chain, and their descriptions tell the model never to change the amount, the token, the network or the address.
+They call only the public checkout routes of `NODE_URL`, without a key, and refuse a URL of any other host.
 
 The wallet checks every payee by default, through the SDK's `beforeSign` hook.
 Used as a library (`AgentWallet` in `apps/mcp/src/wallet.ts`), a wallet built without a `payeeCheck` still checks payees, read-only, against the public RPC of its node's network, with NearBlocks on testnet and no indexer elsewhere.
@@ -1636,6 +1788,7 @@ The server (`main.ts`) opts out only when `PAYEE_CHECK=off` or `CHAIN_READER=off
 | Paying under a Budget with an empty payee list | `ALLOW_ANY_PAYEE` | `0`: the wallet refuses to start with such a Budget |
 | The wallet's own payee check before signing | `PAYEE_CHECK`, `PAYEE_CHECK_INDEXER`, `PAYEE_CHECK_INDEXER_KEY` | On while there is a chain reader; account ages from NearBlocks on `near:testnet`, off on `near:sandbox` |
 | The Agent Market quote tool | `AGENT_MARKET`, `AGENT_MARKET_RPC_URL` | `on`; the public NEAR mainnet endpoints for the payee check of a quote |
+| The any-chain invoice tools | `ANY_CHAIN_INVOICES` | `on` |
 | The HTTP listener | `MCP_HTTP_PORT`, `MCP_HTTP_HOST` | `3334`, `127.0.0.1` |
 | The bearer token for HTTP | `MCP_HTTP_TOKEN`, or generated into `MCP_HTTP_TOKEN_FILE` | `$PAYMINTO_DATA_DIR/mcp/http-token` |
 

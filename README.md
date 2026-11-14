@@ -88,12 +88,15 @@ Every refusal, with the test that proves it, is in [docs/REFUSALS.md](docs/REFUS
 
 <p align="center"><img src="docs/img/any-chain-checkout.svg" alt="Any-chain checkout: the buyer picks a token and chain; the node asks NEAR Intents for a signed quote that delivers exactly the invoice, checks it and shows a deposit address; the buyer sends from their own wallet; NEAR Intents delivers USDC to the merchant's own NEAR account; the node reads that transfer on NEAR before marking the payment paid." width="900"></p>
 
-A buyer opens the merchant's payment link and chooses "NEAR wallet" or "Any chain".
-With "Any chain" they pick USDC on Base, Ethereum, Arbitrum, Solana or Polygon, USDT on Ethereum, or ETH on Base or Ethereum, give a refund address, and get a deposit address with a QR code, the exact amount, a countdown and every fee from the signed quote.
-The quote asks for the exact invoice as output, so the merchant always receives the full amount and the buyer sees the swap cost before sending.
+A buyer opens the merchant's payment link and lands on one screen: "Pay with" USDC, USDT or ETH, on Base, Ethereum, Arbitrum, Solana or Polygon, with the payment address and its QR code already there.
+There is nothing to fill in: the buyer scans and sends, or presses "Pay with your wallet" and approves one transfer in a browser wallet; NEAR Intents converts it to USDC in the background.
+The quote asks for the exact invoice as output, so the merchant always receives the full amount, and every fee from the signed quote is one tap away under "Details".
 The node marks the payment paid only after it reads the USDC transfer to the merchant's account on NEAR itself, then sends a signed webhook.
-A deposit that is too small comes back to the refund address, and the checkout says so in plain words.
+A deposit that cannot complete (too little, or too late) goes back to the merchant's own NEAR Intents balance, and the merchant returns it; an API or agent caller can give its own refund address instead.
 A merchant turns it on in Settings with one NEAR account, proven by a signed message; a two-line script adds a pay button to any website.
+For a native coin or Solana the QR code is a payment request (EIP-681 or Solana Pay) that fills in the network and amount; for an ERC-20 token it holds the address only, because a wallet that reads only an EIP-681 request's first address would send the money to the token contract.
+In "Receive as" a business picks which USDC it receives, on NEAR, Base, Arbitrum, Ethereum, Polygon or Optimism, and its default.
+An AI agent pays the same way from its own wallet with the MCP tools `invoice_pay_options`, `invoice_deposit` and `invoice_status` ([docs/AGENTS.md](docs/AGENTS.md)).
 
 <p align="center"><img src="apps/dashboard/docs/screenshots/anychain-choose-1280-light.png" alt="The checkout's Any chain tab: one list of tokens and chains with estimated amounts." width="560"> <img src="apps/dashboard/docs/screenshots/anychain-deposit-375-light.png" alt="The deposit screen on a phone: send exactly this amount on Base, the QR code, the countdown, the steps and the fees." width="220"></p>
 

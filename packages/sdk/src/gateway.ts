@@ -12,6 +12,9 @@ import {
   type Credit,
   type FeeBearer,
   type FeePlan,
+  type IntentsCheckout,
+  type IntentsOptions,
+  type IntentsQuote,
   type Keypair,
   type LineItem,
   type Merchant,
@@ -329,8 +332,11 @@ export async function constructEvent(
 export type GatewayClientOptions = {
   /** Base URL of the Payminto node. */
   nodeUrl: string;
-  /** A merchant secret key (`sk_test_...`, `sk_live_...`), or the operator's admin token. */
-  apiKey: string;
+  /**
+   * A merchant secret key (`sk_test_...`, `sk_live_...`), or the operator's admin token. Leave it out for a client that
+   * only makes the public calls a buyer makes (`checkout`, `directory`, `payoutScope`); any other call then throws.
+   */
+  apiKey?: string;
   /** Sent as `Merchant-Id`: the merchant the admin token acts for (needed once the node has more than one). */
   merchantId?: string;
   fetch?: typeof fetch;
@@ -350,12 +356,12 @@ function wire(v: unknown): unknown {
 export class GatewayClient {
   readonly nodeUrl: string;
   readonly merchantId: string | undefined;
-  readonly #apiKey: string;
+  readonly #apiKey: string | undefined;
   readonly #fetch: typeof fetch;
 
   constructor(o: GatewayClientOptions) {
     if (typeof o.nodeUrl !== "string" || !/^https?:\/\/[^/]/i.test(o.nodeUrl)) throw new TypeError("GatewayClient requires nodeUrl: the http(s) URL of the node");
-    if (!o.apiKey) throw new TypeError("GatewayClient requires apiKey: a merchant secret key or the admin token");
+    if (o.apiKey !== undefined && (typeof o.apiKey !== "string" || !o.apiKey)) throw new TypeError("GatewayClient apiKey must be a merchant secret key or the admin token; leave it out for the public checkout calls only");
     this.nodeUrl = o.nodeUrl.replace(/\/+$/, "");
     this.merchantId = o.merchantId;
     this.#apiKey = o.apiKey;
@@ -364,7 +370,7 @@ export class GatewayClient {
 
   /** Merchant-Id for a per-merchant route: only the admin token sends it (a merchant key is scoped already). */
   #adminFor(id: string): string | undefined {
-    return this.#apiKey.startsWith("sk_") ? undefined : id;
+    return this.#apiKey?.startsWith("sk_") ? undefined : id;
   }
 
   /** The same credentials acting for another merchant (admin token only). */
@@ -378,6 +384,7 @@ export class GatewayClient {
       if (v === undefined || v === null) continue;
       url.searchParams.set(k, Array.isArray(v) ? v.join(",") : String(v));
     }
+    if (o.auth !== false && !this.#apiKey) throw new TypeError(`GatewayClient has no apiKey: ${method} ${path} needs a merchant secret key or the admin token`);
     const headers: Record<string, string> = { accept: "application/json" };
     if (o.auth !== false) headers.authorization = `Bearer ${this.#apiKey}`;
     const actingFor = o.merchantId ?? this.merchantId;
@@ -522,10 +529,34 @@ export class GatewayClient {
     return { network: info.network.id, hub: info.hub };
   }
 
-  /** The public side of one payment: what the hosted checkout shows, and its proof once it is paid. Needs no key. */
+  /**
+   * The public side of one payment: what the hosted checkout shows, paying it from another chain, and its proof once it
+   * is paid. Needs no key, and never sends one.
+   */
   readonly checkout = {
-    retrieve: (paymentId: string) => this.request<CheckoutView>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}`, { auth: false }),
+    /** `intents` is null when the node runs with INTENTS_CHECKOUT=off; `active_quote` is the newest unexpired deposit address. */
+    retrieve: (paymentId: string) => this.request<CheckoutView & { intents?: IntentsCheckout | null }>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}`, { auth: false }),
     /** Chain evidence for a paid payment: the hub's record of a wallet payment, or the settled batch of a voucher. */
     proof: (paymentId: string) => this.request<PaymentProof>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}/proof`, { auth: false }),
+    /**
+     * Any-chain checkout (NEAR Intents): every origin token a buyer can pay this payment with, each with an indicative
+     * amount from a signed dry quote, or greyed with a plain `reason`. Cached 30 seconds on the node.
+     */
+    anyChainOptions: (paymentId: string) => this.request<IntentsOptions>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}/intents/options`, { auth: false }),
+    /**
+     * A deposit address for one origin: the buyer sends exactly `send_exactly` of the origin token on its chain to
+     * `deposit_address` before `send_by`, from its own wallet. `refundTo` is the buyer's address on the origin chain,
+     * where a short or late deposit goes back; without it, a returned deposit goes to the business's NEAR Intents
+     * balance (`refund_type: "INTENTS"`) and the business sends it back. The node answers the active quote again (200) for the same origin and
+     * refund address while 10 minutes or more are left, and replays the first answer for the same `idempotencyKey`.
+     */
+    createAnyChainQuote: (paymentId: string, p: { originAsset: string; refundTo?: string; idempotencyKey?: string }) =>
+      this.request<IntentsQuote>("POST", `/v1/checkout/${encodeURIComponent(paymentId)}/intents/quotes`, {
+        auth: false,
+        body: { origin_asset: p.originAsset, ...(p.refundTo ? { refund_to: p.refundTo } : {}) },
+        idempotencyKey: p.idempotencyKey,
+      }),
+    /** One deposit address of this payment, with its live status, steps and delivery transaction. */
+    anyChainQuote: (paymentId: string, quoteId: string) => this.request<IntentsQuote>("GET", `/v1/checkout/${encodeURIComponent(paymentId)}/intents/quotes/${encodeURIComponent(quoteId)}`, { auth: false }),
   };
 }

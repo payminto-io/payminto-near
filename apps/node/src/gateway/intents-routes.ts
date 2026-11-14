@@ -5,25 +5,33 @@ import { auditActor, type Access } from "../auth/actor.ts";
 import type { AuthService } from "../auth/service.ts";
 import { ApiError } from "../errors.ts";
 import { TokenBuckets } from "../ratelimit.ts";
-import { body, rawBody, zAccount, zPublicKey } from "./http.ts";
+import { body, parse, rawBody, zAccount, zPublicKey } from "./http.ts";
 import type { Gateway } from "./index.ts";
 import { ORIGIN_TX_HASH, type IntentsService } from "./intents.ts";
 import type { PaymentRow } from "./model.ts";
 
-const quoteSchema = z.object({ origin_asset: z.string().min(1).max(200), refund_to: z.string().trim().min(1).max(128) });
+const quoteSchema = z.object({ origin_asset: z.string().min(1).max(200), refund_to: z.string().trim().min(1).max(128).optional() });
 const depositSchema = z.object({ tx_hash: z.string().regex(ORIGIN_TX_HASH, "must be a transaction hash on the origin chain") });
 const simulateSchema = z.object({ amount: z.string().regex(/^[1-9][0-9]{0,40}$/, "must be a positive integer of the origin token's base units").optional() });
 const payoutSchema = z.object({
   account: zAccount,
   proof: z.object({ timestamp: z.number().int().positive(), public_key: zPublicKey, signature: z.string().min(1).max(200) }),
 });
+/** "Receive as" USDC on an EVM chain: the address and an EIP-191 (`personal_sign`) proof by it. */
+const evmPayoutSchema = z.object({
+  destination_chain: z.string().min(1).max(20),
+  address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, "must be a 0x address"),
+  proof: z.object({ type: z.literal("eip191"), timestamp: z.number().int().positive(), signature: z.string().regex(/^0x[0-9a-fA-F]{128,130}$/, "must be a 0x signature") }),
+});
+const defaultOriginSchema = z.object({ default_origin: z.string().min(1).max(200).nullable() });
 
 /** Wet quotes create deposit addresses on the platform's 1Click quota: ten per client address per minute. */
 export const QUOTES_PER_IP_PER_MINUTE = 10;
 
 /**
- * The any-chain checkout routes (docs/DEVELOPERS.md, "Any-chain checkout"): five public checkout routes, two merchant
- * routes for the NEAR account the USDC lands in, and the platform status. With INTENTS_CHECKOUT=off every one of them
+ * The any-chain checkout routes (docs/DEVELOPERS.md, "Any-chain checkout"): five public checkout routes, three merchant
+ * routes for where the USDC lands (a NEAR account, or an address on an EVM chain) and the token the checkout pre-selects,
+ * and the platform status. With INTENTS_CHECKOUT=off every one of them
  * answers 404 INTENTS_CHECKOUT_OFF, except the platform status, which says the mode.
  */
 export function mountIntents(app: Hono<any>, g: Gateway, d: { access: Access; auth: AuthService; clientIp: (c: Context) => string }): void {
@@ -102,17 +110,43 @@ export function mountIntents(app: Hono<any>, g: Gateway, d: { access: Access; au
     return c.json(await s.payoutView(merchant));
   });
 
-  // Like a payout change: the business's payout.change permission, a verified email, a fresh password check, and a
-  // NEP-413 signature by a full-access key of the account on the chain the USDC lands on.
+  // Like a payout change: the business's payout.change permission, a verified email and a fresh password check. The body
+  // is either a NEAR account with a NEP-413 signature by a full-access key of it, or an EVM chain and address with an
+  // EIP-191 signature by the address.
   app.put("/v1/merchant/intents-payout", async (c) => {
     const s = svc();
     const { merchant, actor } = a.business(c, "payout.change");
     a.verified(actor);
     a.stepUp(actor);
-    const b = await body(c, payoutSchema);
-    const before = merchant.intents_payout ?? null;
+    const raw = await c.req.text();
+    let parsed: unknown;
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new ApiError(400, "INVALID_JSON", "request body is not valid JSON");
+    }
+    const before = s.destinationOf(merchant);
+    const from = { chain: before.dest.blockchain, address: before.recipient };
+    if (parsed && typeof parsed === "object" && "destination_chain" in parsed) {
+      const b = parse(parsed, evmPayoutSchema, "request body failed validation");
+      const out = await s.setEvmPayout(merchant, b.destination_chain, b.address, b.proof);
+      d.auth.audit.write(auditActor(actor), "intents_payout.changed", { merchantId: merchant.id, target: merchant.id, meta: { from: from.address, from_chain: from.chain, to: out.destination.address, destination_chain: out.destination.chain, mode: s.mode } });
+      return c.json(out);
+    }
+    const b = parse(parsed, payoutSchema, "request body failed validation");
     const out = await s.setPayout(merchant, b.account, b.proof);
-    d.auth.audit.write(auditActor(actor), "intents_payout.changed", { merchantId: merchant.id, target: merchant.id, meta: { from: before, to: b.account, usdc_registered: out.checks.usdc_registered, mode: s.mode } });
+    d.auth.audit.write(auditActor(actor), "intents_payout.changed", { merchantId: merchant.id, target: merchant.id, meta: { from: from.address, from_chain: from.chain, to: b.account, destination_chain: "near", usdc_registered: out.checks.usdc_registered, mode: s.mode } });
+    return c.json(out);
+  });
+
+  // The token the hosted checkout pre-selects: a business setting, not a payout change.
+  app.patch("/v1/merchant/intents-payout", async (c) => {
+    const s = svc();
+    const { merchant, actor } = a.business(c, "business.update");
+    const b = await body(c, defaultOriginSchema);
+    const before = s.defaultOrigin(merchant);
+    const out = await s.setDefaultOrigin(merchant, b.default_origin);
+    if (before !== out.default_origin) d.auth.audit.write(auditActor(actor), "intents_default_origin.changed", { merchantId: merchant.id, target: merchant.id, meta: { from: before, to: out.default_origin, mode: s.mode } });
     return c.json(out);
   });
 

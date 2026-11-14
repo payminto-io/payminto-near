@@ -5,3 +5,4 @@ export * from "./client.ts";
 export * from "./signature.ts";
 export * from "./plan.ts";
 export * from "./checkout.ts";
+export * from "./destination.ts";

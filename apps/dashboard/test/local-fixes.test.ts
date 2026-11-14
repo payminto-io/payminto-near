@@ -16,7 +16,7 @@ describe("custody wording names the network the server runs on", () => {
 
   it("labels test money by network", () => {
     expect(testMoneyLabel(false, "near:sandbox")).toBe("Local sandbox");
-    expect(testMoneyLabel(true, "near:sandbox")).toBe("Local sandbox");
+    expect(testMoneyLabel(true, "near:sandbox")).toBeNull();
     expect(testMoneyLabel(false, "near:testnet")).toBe("Testnet");
     expect(testMoneyLabel(true, "near:mainnet")).toBeNull();
   });
