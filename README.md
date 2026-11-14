@@ -2,6 +2,9 @@
 
 **Self-hosted, non-custodial payments on NEAR for people and AI agents: any chain in, USDC on NEAR out, proven on mainnet.**
 
+**Watch the demo (2:10):** [docs/media/payminto-demo.mp4](docs/media/payminto-demo.mp4), recorded on NEAR mainnet: sign the payout account, create a link, pay from Base with MetaMask, USDC in the merchant's NEAR account in 36 seconds.
+**Agents (0:59):** [docs/media/payminto-agents.mp4](docs/media/payminto-agents.mp4): Budgets, per-call vouchers, refusals with their rule, and the MCP invoice tools.
+
 **A real payment on NEAR mainnet, 14 November 2026.**
 A buyer paid a 1.50 USDC payment link with 0.000854 ETH on Base from MetaMask; NEAR Intents converted it and delivered 1.50 USDC to the merchant's own NEAR account, `sagajet.near`, 36 seconds later.
 The node read that delivery on NEAR itself before it marked the payment paid.
@@ -58,6 +61,19 @@ The first start downloads the near-sandbox binary once (about 30 MB) and takes a
 When it prints `Ready`, open the dashboard at http://localhost:3210 and sign in with a login from `apps/local/data/logins.txt`.
 The terminal prints a guide of eleven steps: fund a Budget, make agent calls from the agent page, approve a new payee, settle, prove a call, pay a checkout link, pay a link from another chain (simulated), pay out and revoke.
 Press Ctrl-C to stop everything.
+
+## Set it up with any coding agent
+
+Point Codex, Cursor, Claude Code or any other coding agent at this repository: [AGENTS.md](AGENTS.md) tells it how to set up, prove it works (`pnpm local --check` prints `24 of 24 checks passed`), create a payment link through the API, and pay as an agent through the MCP server.
+CI runs the same commands on a clean `ubuntu-24.04` machine on every push, so a cloud agent needs only Node.js 22.18 and pnpm 9.
+
+Create a payment link with the business API key from `apps/local/data/logins.txt` (amounts are USDC base units, so `1500000` is 1.50 USDC):
+
+```bash
+curl -s -X POST http://127.0.0.1:4210/v1/links -H "Authorization: Bearer $PAYMINTO_KEY" -H "content-type: application/json" -d '{"title":"Bag of coffee beans","amount":"1500000"}'
+```
+
+The answer's `url` opens the one-screen checkout.
 
 ## More to try
 
@@ -143,7 +159,7 @@ The trust model and known limits are in [docs/SECURITY.md](docs/SECURITY.md).
 
 | Where | State |
 |---|---|
-| Simulated hub (in memory) | `pnpm demo`, `pnpm swarm`, and 2,314 TypeScript tests in 15 packages pass |
+| Simulated hub (in memory) | `pnpm demo`, `pnpm swarm`, and about 2,600 TypeScript tests in 15 packages pass |
 | Local NEAR node (near-sandbox 2.14.0) | `pnpm local`, `pnpm local --check`, and the sandbox demo and swarm pass, with every on-chain step a real transaction against the locked hub |
 | NEAR testnet | Not deployed yet; the deploy script supports it and has a dry run ([docs/WALKTHROUGH.md](docs/WALKTHROUGH.md#deploy-your-own-hub-on-testnet)) |
 | NEAR mainnet | The hub and the clearing node do not run on mainnet. The any-chain rail alone has a live mode (`pnpm local --intents live`) on the real 1Click API. Real payments ran on it on 14 November 2026: ETH on Base delivered as 1.50 USDC to `sagajet.near` on NEAR mainnet, confirmed by the node reading the delivery on NEAR ([records](docs/live-run), [checklist](docs/LIVE_RUN.md)). The first run found that live 1Click statuses omit a field the node required; fixed with a test, and the second run confirmed end to end |
@@ -197,6 +213,11 @@ The design and its decisions are in [docs/superpowers/specs/2026-11-10-near-clea
 | AI-generated code | The code, the tests and the documentation were written with AI coding assistance (Claude Code), directed by the author, who is responsible for what is submitted |
 
 </details>
+
+## Demo
+
+[The demo video (2:10)](docs/media/payminto-demo.mp4) shows the whole flow on NEAR mainnet, and [the agents video (0:59)](docs/media/payminto-agents.mp4) shows Budgets, refusals and the MCP tools.
+The real payment's transactions: [Base deposit](https://basescan.org/tx/0x3c39f333c89996fed6b8b02bfb560ea1805224aa8d7db45301c7238e1c95b7ba) and [USDC delivered on NEAR](https://nearblocks.io/txns/32n6tk6ALiKyvpsVrtyJ837RjtsSpZF4ZkcGrYqtWmN9).
 
 ## License
 
