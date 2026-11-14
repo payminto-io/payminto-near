@@ -2,7 +2,7 @@
 
 **Self-hosted, non-custodial payments on NEAR for people and AI agents: any chain in, USDC on NEAR out, proven on mainnet.**
 
-**Watch the demo (2:10):** [docs/media/payminto-demo.mp4](docs/media/payminto-demo.mp4), recorded on NEAR mainnet: sign the payout account, create a link, pay from Base with MetaMask, USDC in the merchant's NEAR account in 36 seconds.
+**Watch the demo (2:19):** [docs/media/payminto-demo.mp4](docs/media/payminto-demo.mp4), recorded on NEAR mainnet: sign the payout account, create a link, pay from Base with MetaMask, USDC in the merchant's NEAR account in 36 seconds.
 **Agents (0:59):** [docs/media/payminto-agents.mp4](docs/media/payminto-agents.mp4): Budgets, per-call vouchers, refusals with their rule, and the MCP invoice tools.
 
 **A real payment on NEAR mainnet, 14 November 2026.**
@@ -31,6 +31,20 @@ Built for the NEAR HACKATHON (1 to 14 November 2026).
 Tracks: agents, swarms, security, real world, business.
 
 <p align="center"><img src="docs/img/payment-flow.svg" alt="How one paid call works: the owner opens a Budget with USDC escrow on the NEAR hub; each call is paid off chain with a signed voucher that the clearing node checks; many calls settle in one netted transaction, and anyone can prove a single call against the Merkle root." width="900"></p>
+
+## Host it yourself
+
+Payminto is yours to run: there is no Payminto account to open, nobody to approve you, and nobody who can pause or close your gateway.
+
+| | |
+|---|---|
+| Your server | One command, `pnpm local`, starts the clearing node, the dashboard and the relayer; the first start prints `Ready` in about 2 minutes. On a server, `docker compose up -d --build` runs the node and the dashboard against NEAR testnet ([docs/SELF_HOST.md](docs/SELF_HOST.md)). |
+| Your money | A buyer's payment arrives as USDC in your own NEAR account; Payminto never holds it. Agent escrow sits in the locked hub contract, and no operator can redirect a payout. |
+| Your keys | Secrets stay in git-ignored `.env` files on your machine, and the node's NEAR key can call only `settle_batch` and `payout`. |
+| No fee from us | Payminto takes no fee; you pay for your own hosting and the network fees. If you host other businesses, you set their pricing plans. |
+| Your agent can install it | Tell any coding agent: "Set up Payminto from github.com/payminto-io/payminto-near and prove it works." [AGENTS.md](AGENTS.md) takes it to `24 of 24 checks passed`. |
+
+You remain responsible for the compliance rules where you operate.
 
 ## Quick start
 
@@ -216,7 +230,7 @@ The design and its decisions are in [docs/superpowers/specs/2026-11-10-near-clea
 
 ## Demo
 
-[The demo video (2:10)](docs/media/payminto-demo.mp4) shows the whole flow on NEAR mainnet, and [the agents video (0:59)](docs/media/payminto-agents.mp4) shows Budgets, refusals and the MCP tools.
+[The demo video (2:19)](docs/media/payminto-demo.mp4) shows the whole flow on NEAR mainnet, and [the agents video (0:59)](docs/media/payminto-agents.mp4) shows Budgets, refusals and the MCP tools.
 The real payment's transactions: [Base deposit](https://basescan.org/tx/0x3c39f333c89996fed6b8b02bfb560ea1805224aa8d7db45301c7238e1c95b7ba) and [USDC delivered on NEAR](https://nearblocks.io/txns/32n6tk6ALiKyvpsVrtyJ837RjtsSpZF4ZkcGrYqtWmN9).
 
 ## License
