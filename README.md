@@ -1,13 +1,18 @@
 # Payminto
 
-**Self-hosted, non-custodial payments on NEAR for people and AI agents: any chain in, USDC on NEAR out, proven on mainnet.**
+**Get paid from any chain, by people and by AI agents. Self-hosted, non-custodial, on NEAR.**
 
-**Watch the demo (2:19):** [docs/media/payminto-demo.mp4](docs/media/payminto-demo.mp4), recorded on NEAR mainnet: sign the payout account, create a link, pay from Base with MetaMask, USDC in the merchant's NEAR account in 36 seconds.
-**Agents (0:59):** [docs/media/payminto-agents.mp4](docs/media/payminto-agents.mp4): Budgets, per-call vouchers, refusals with their rule, and the MCP invoice tools.
+**[Watch the demo (2:19)](docs/media/payminto-demo.mp4)** · [Agents in 59 seconds](docs/media/payminto-agents.mp4) · [Try it in 2 minutes](#try-it-in-2-minutes) · [For the judges](#for-the-judges)
 
-**A real payment on NEAR mainnet, 14 November 2026.**
-A buyer paid a 1.50 USDC payment link with 0.000854 ETH on Base from MetaMask; NEAR Intents converted it and delivered 1.50 USDC to the merchant's own NEAR account, `sagajet.near`, 36 seconds later.
-The node read that delivery on NEAR itself before it marked the payment paid.
+## What it does
+
+- **Businesses get paid from any chain.** Share a payment link. The buyer sees one screen and one QR, and pays from Base, Ethereum, Arbitrum, Solana or Polygon. NEAR Intents converts it in the background and the exact amount lands as USDC in the business's own NEAR account. No custody, no sign-up, no fee from us.
+- **AI agents pay safely.** An owner gives an agent a Budget on NEAR: a spending cap, approved payees, an expiry and escrowed USDC. The agent pays per API call with a signed voucher (no transaction per call), or pays any invoice from another chain through MCP tools. Every refusal names the rule it hit.
+- **Everything is provable.** Many calls settle in one NEAR transaction, and any single call can be proven against a Merkle root on chain, with no node and no keys.
+
+## Proven on NEAR mainnet
+
+On 14 November 2026 a buyer paid a 1.50 USDC link with 0.000854 ETH on Base from MetaMask. NEAR Intents delivered 1.50 USDC to the merchant's own NEAR account, `sagajet.near`, **36 seconds later**, and the node read that delivery on NEAR before it marked the payment paid.
 
 | | Transaction |
 |---|---|
@@ -17,24 +22,30 @@ The node read that delivery on NEAR itself before it marked the payment paid.
 
 <p align="center"><img src="apps/dashboard/docs/screenshots/anychain-live-paid-dark.jpg" alt="The live receipt: Payment complete, 1.50 USDC paid to Northwind Coffee, paid from Base through NEAR Intents, 0.000854 ETH sent on Base, 1.50 USDC received on NEAR at sagajet.near, with the Base deposit and NEAR delivery transactions." width="640"></p>
 
-Status: the any-chain checkout rail is live on NEAR mainnet. The agent hub contract is unaudited and runs on a local NEAR node; `pnpm local` runs everything in Test mode.
+**What is live, plainly:** the any-chain checkout runs on NEAR mainnet. The agent hub contract is unaudited and runs on a local NEAR node; `pnpm local` runs the whole product in Test mode, with no real money.
 
-An owner gives an AI agent a Budget on a NEAR contract: a spending cap, the payees it may pay, an expiry and escrowed USDC.
-The agent pays per HTTP call with a signed voucher, so a call clears in milliseconds with no transaction.
-Payminto nets what owners owe each other and settles only the difference on NEAR, in one transaction for many calls.
-Every single call can still be proven against a Merkle root stored on chain.
-Agents pay invoices from any chain through MCP tools (`invoice_pay_options`, `invoice_deposit`, `invoice_status`); every refusal names the Budget rule it hit.
+## Try it in 2 minutes
 
-The same gateway takes payments from people: a merchant shares a payment link, and the buyer pays from any chain on one screen through NEAR Intents, while the merchant receives USDC in its own NEAR account.
+You need Node.js 22.18+ and pnpm 9, on macOS or Linux.
 
-Built for the NEAR HACKATHON (1 to 14 November 2026).
+```bash
+git clone https://github.com/payminto-io/payminto-near.git && cd payminto-near && ./scripts/setup.sh
+```
 
-### For the judges, in one minute
+```bash
+pnpm local
+```
+
+Open http://localhost:3210 and sign in with a login from `apps/local/data/logins.txt`; the terminal prints an eleven-step guide.
+`pnpm local --check` runs a scripted pass instead and prints `24 of 24 checks passed`.
+Using a coding agent? Point it at [AGENTS.md](AGENTS.md). Details are in [Quick start](#quick-start).
+
+## For the judges
 
 | Question | Answer, with evidence |
 |---|---|
 | Does it run, and match this README? | `./scripts/setup.sh && pnpm local --check` prints `24 of 24 checks passed`; [AGENTS.md](AGENTS.md) is the script a coding agent follows, and CI runs the same commands on a clean machine on every push. |
-| Is it real? | One real payment on NEAR mainnet, in the table above: Base to USDC in the merchant's NEAR account in 36 seconds. |
+| Is it real? | One real payment on NEAR mainnet ([above](#proven-on-near-mainnet)): Base to USDC in the merchant's NEAR account in 36 seconds. |
 | Why not a card? | A card cannot charge 0.002 USDC per API call. A Budget can: capped, refusable, provable per call, with one NEAR transaction for many calls. We claim no market volume. |
 | Who answers for an agent's spending? | The owner sets the cap, payees and expiry on chain; every refusal names its rule; the owner can revoke with no NEAR for gas; a seller can settle on its own if the node disappears. |
 | Why NEAR? | `ed25519_verify` in the contract, function-call keys, named accounts, NEP-141 USDC, and NEAR Intents for the any-chain checkout ([Why NEAR](#why-near)). |
