@@ -2,7 +2,9 @@
 
 **Get paid from any chain, by people and by AI agents. Self-hosted, non-custodial, on NEAR.**
 
-**[Watch the demo (2:19)](docs/media/payminto-demo.mp4)** · [Agents in 59 seconds](docs/media/payminto-agents.mp4) · [Try it in 2 minutes](#try-it-in-2-minutes) · [For the judges](#for-the-judges)
+<p align="center"><a href="https://www.youtube.com/watch?v=oc0Pq-yRn-E"><img src="https://img.youtube.com/vi/oc0Pq-yRn-E/maxresdefault.jpg" alt="Watch the Payminto demo on YouTube: a live NEAR mainnet payment, Base to NEAR in 36 seconds, and AI agents paying with Budgets and MCP tools" width="720"></a></p>
+
+**[Watch the demo on YouTube (2:19)](https://www.youtube.com/watch?v=oc0Pq-yRn-E)** · [Agents in 59 seconds](docs/media/payminto-agents.mp4) · [Try it in 2 minutes](#try-it-in-2-minutes) · [For the judges](#for-the-judges)
 
 ## What it does
 
@@ -260,7 +262,7 @@ The design and its decisions are in [docs/superpowers/specs/2026-11-10-near-clea
 
 ## Demo
 
-[The demo video (2:19)](docs/media/payminto-demo.mp4) shows the whole flow on NEAR mainnet, and [the agents video (0:59)](docs/media/payminto-agents.mp4) shows Budgets, refusals and the MCP tools.
+[The demo video on YouTube (2:19)](https://www.youtube.com/watch?v=oc0Pq-yRn-E) (also [in the repo](docs/media/payminto-demo.mp4)) shows the whole flow on NEAR mainnet, and [the agents video (0:59)](docs/media/payminto-agents.mp4) shows Budgets, refusals and the MCP tools.
 The real payment's transactions: [Base deposit](https://basescan.org/tx/0x3c39f333c89996fed6b8b02bfb560ea1805224aa8d7db45301c7238e1c95b7ba) and [USDC delivered on NEAR](https://nearblocks.io/txns/32n6tk6ALiKyvpsVrtyJ837RjtsSpZF4ZkcGrYqtWmN9).
 
 ## License
